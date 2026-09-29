@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { onRequest } from '../api/asset-manifest';
+import { onRequest } from '../../functions/api/asset-manifest';
 
 function context(body: string | null, method = 'GET') {
   const get = vi.fn(async () => body === null ? null : { body: new Response(body).body });

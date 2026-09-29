@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { onRequest } from '../api/health';
+import { onRequest } from '../../functions/api/health';
 
 it.each([[undefined, 'unknown'], ['abc123', 'abc123']])('reports commit %s', async (sha, expected) => {
   const response = onRequest({ env: { CF_PAGES_COMMIT_SHA: sha } });

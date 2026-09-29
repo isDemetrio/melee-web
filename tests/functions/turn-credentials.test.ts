@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { onRequest } from '../api/turn-credentials';
+import { onRequest } from '../../functions/api/turn-credentials';
 
 const secret = 'test-only-upstream-token';
 const env = { TURN_KEY_ID: 'test-key', TURN_KEY_API_TOKEN: secret };
