@@ -63,7 +63,6 @@ jobs:
         shell: bash
         run: |
           bash scripts/apply_patches.sh
-          bash scripts/apply_patches.sh
           emcmake cmake -S wasm/probe -B wasm-probe/out/wasm -DCMAKE_BUILD_TYPE=Release
           cmake --build wasm-probe/out/wasm --parallel 2
       - name: Run upstream tests under Node
@@ -100,10 +99,10 @@ jobs:
             > wasm-probe/fma-divergence.txt || status=$?
           cat wasm-probe/fma-divergence.txt
           {
-            echo 'FMA divergence classification (native x86 intrinsics vs WASM `fma()`), exit '"$status"':'
-            echo '```'
+            echo "FMA divergence classification (native x86 intrinsics vs WASM fma()), exit ${status}:"
+            echo '~~~'
             cat wasm-probe/fma-divergence.txt
-            echo '```'
+            echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
           python3 - <<'PY'
           import pathlib, re
