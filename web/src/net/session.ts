@@ -89,7 +89,11 @@ export class MatchSession {
 
     this.unsubscribers.push(
       signaling.onMessage((from, message) => {
-        void this.handleSignal(from, message);
+        // handleSignal is async (it awaits SDP operations). An unawaited rejection here
+        // would surface as an unhandled error rather than a session failure.
+        void this.handleSignal(from, message).catch((cause: unknown) => {
+          this.fail(cause instanceof Error ? cause : new Error('signalling failed'));
+        });
       }),
       signaling.onPresence((peers) => this.handlePresence(peers)),
     );
@@ -134,7 +138,9 @@ export class MatchSession {
     if (this.options.role === 'host' && this.currentState === 'waiting-for-peer') {
       this.remoteId = first;
       this.clearPeerTimer();
-      void this.negotiateAsHost();
+      void this.negotiateAsHost().catch((cause: unknown) => {
+        this.fail(cause instanceof Error ? cause : new Error('negotiation failed'));
+      });
     }
     if (this.options.role === 'guest' && this.remoteId === null) {
       // Remember who is here so a candidate arriving before the offer has a destination.
@@ -248,8 +254,15 @@ export class MatchSession {
   }
 
   private sendToPeer(message: SignalMessage): void {
-    if (!this.remoteId) return;
-    this.options.signaling.send(this.remoteId, message);
+    if (!this.remoteId || this.currentState === 'closed') return;
+    try {
+      this.options.signaling.send(this.remoteId, message);
+    } catch (cause: unknown) {
+      // A signalling send can fail because the room was left underneath us. That is not
+      // an unhandled rejection: while the session is live, losing the message means
+      // negotiation cannot complete, so it is reported as a failure.
+      this.fail(cause instanceof Error ? cause : new Error('signalling send failed'));
+    }
   }
 
   private markReady(transport: WebRtcTransport): void {

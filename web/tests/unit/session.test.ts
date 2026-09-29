@@ -149,6 +149,36 @@ describe('match session negotiation', () => {
     await expect(ready).resolves.toBeDefined();
   });
 
+  it('turns a signalling failure into a session failure, not an unhandled rejection', async () => {
+    // The room can disappear underneath a live session (the other player leaves, the
+    // signalling service drops the channel). Losing an offer or answer means negotiation
+    // cannot finish, so the session must fail loudly instead of leaving a rejected promise
+    // nobody awaits. CI treats an unhandled rejection as a failure, which is how this was
+    // found in the first place.
+    const hub = new InMemorySignalingHub();
+    const linked = makeLinkedFactory();
+    const hostChannel = hub.create({ selfId: 'host', nickname: 'Host' });
+    const guestChannel = hub.create({ selfId: 'guest', nickname: 'Guest' });
+    guestChannel.send = () => {
+      throw new Error('room gone');
+    };
+
+    const guest = new MatchSession({
+      role: 'guest',
+      selfId: 'guest',
+      nickname: 'Guest',
+      code: 'ABCD',
+      signaling: guestChannel,
+      createPeerConnection: linked.factory,
+      peerTimeoutMs: 2000,
+    });
+
+    await guest.start();
+    hostChannel.send('guest', { kind: 'offer', sdp: 'late offer' });
+
+    await vi.waitFor(() => expect(guest.state).toBe('failed'));
+  });
+
   it('tells the other player when one side leaves', async () => {
     const { host, guest, linked } = buildRoom();
     await host.start();
