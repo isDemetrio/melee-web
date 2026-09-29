@@ -54,7 +54,8 @@ describe('match session negotiation', () => {
     const [hostPc, guestPc] = linked.pair();
 
     expect(hostPc.localDescription?.type).toBe('offer');
-    expect(guestPc.localDescription?.type).toBe('answer');
+    // The guest answers asynchronously, after the offer reaches it through signalling.
+    await vi.waitFor(() => expect(guestPc.localDescription?.type).toBe('answer'));
 
     hostPc.establish();
 
