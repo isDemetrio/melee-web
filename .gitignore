@@ -1,0 +1,52 @@
+# --- Game data: NEVER commit (Nintendo copyright, private repo or not) ---
+*.iso
+*.gcm
+*.rvz
+*.wbfs
+*.dol
+*.gci
+private/
+assets-extracted/
+port/generated/
+upstream/melee-unlocked/port/generated/
+Sys/
+
+# --- Build output ---
+build*/
+dist/
+out/
+*.wasm
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+
+# --- JS/TS ---
+node_modules/
+web/node_modules/
+web/dist/
+.pnpm-store/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- Local secrets ---
+.env
+.env.*
+!.env.example
+*.pem

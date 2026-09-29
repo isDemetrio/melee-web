@@ -1,0 +1,3 @@
+[submodule "upstream/melee-unlocked"]
+	path = upstream/melee-unlocked
+	url = https://github.com/Hero88go/melee-unlocked
