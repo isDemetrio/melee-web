@@ -66,7 +66,13 @@ jobs:
           emcmake cmake -S wasm/probe -B wasm-probe/out/wasm -DCMAKE_BUILD_TYPE=Release
           cmake --build wasm-probe/out/wasm --parallel 2
       - name: Run upstream tests under Node
-        run: ctest --test-dir wasm-probe/out/wasm --output-on-failure
+        run: |
+          # The emcc output is CommonJS, but Node walks up from this directory and finds the
+          # repository package.json with "type": "module", so it parses these generated files
+          # as ES modules and dies on `require is not defined`. Pin the interpretation for the
+          # generated directory only, rather than dropping "type": "module" from the root.
+          printf '{"type":"commonjs"}\n' > wasm-probe/out/wasm/package.json
+          ctest --test-dir wasm-probe/out/wasm --output-on-failure
       - name: Measure WASM and publish benchmark summary
         shell: bash
         run: |

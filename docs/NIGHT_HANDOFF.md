@@ -78,19 +78,33 @@ is not automatically safe. Investigate before deciding: is it IEEE-754's permitt
 for the sign of an exact zero from an FMA, or a real defect in the WASM implementation? The
 answer changes what the project can promise about cross-platform determinism.
 
-### A second, separate problem in this job
+**Answered on the first overnight run, and it is not latitude — it is a bug in musl.**
+For `fnmsub a=1 c=1 b=0` the exact result is −2⁻²¹⁴⁸, which is *not* zero and must round to
+−0 carrying the sign of the exact result. In emsdk 4.0.23, `fma.c` does `return x*y + z`
+whenever `z` is zero (read in the source of the 4.0.23 tag), so it computes −0 and then
+−0 + +0 = **+0**. That is the musl bug reported on 2025-03-11 (and CPython issue #131032),
+already fixed in musl git and Emscripten main by returning `x*y` instead.
+
+So the divergence is an upstream defect with a known upstream fix, not a property of the
+platform. The local remedy is a guard in our shim, to be written and tested before the table
+is treated as final.
+
+### The "patch failed" lines were a false alarm — corrected
+
+An earlier note here claimed the patch was being applied twice and that the WASM build might
+be running without it. **That was wrong, and the first overnight run disproved it.**
 
 ```
 error: patch failed: port/runtime/ppc/ppc.h:7
 error: patch failed: port/runtime/gx/gx_texture.h:1
 ```
 
-The patch applies cleanly against the pinned upstream when checked by hand
-(`git apply --check` → OK), so the workflow is almost certainly applying it twice — once for
-the native baseline, once for the WASM build — and the second attempt fails. If that is
-what is happening, the WASM build may be running *without* the portable-FMA patch, which
-would make the divergence table above measure the wrong thing. Fix this before drawing any
-conclusion from the table.
+The second call is a documented idempotency check, and the `Already applied` line that
+follows it proves the patch *is* in place. The divergence table above is therefore measuring
+a patched build and can be trusted. The script was changed to state explicitly what it did
+instead of printing those misleading errors, and it now refuses a clean upstream tree.
+
+Do not chase this again.
 
 ## What is verified versus what is only written
 
@@ -119,3 +133,26 @@ anything that implies otherwise, in code, docs or comments.
 
 See `PROGRESS.md`. Priority: asset pipeline and manifest, input/PAD layer, OPFS asset cache,
 touch controls, then docs.
+
+## Regression found after the first overnight run — read before touching the probe
+
+The first overnight run moved the Functions tests and tooling to the repository root and gave
+that root a `package.json` with `"type": "module"`. That fixed Pages Functions, and broke the
+WASM probe job in a way its own report did not mention: it claimed the job was red "only for
+the strict gate", but the job actually dies earlier, in *Run upstream tests under Node*:
+
+```
+ReferenceError: require is not defined in ES module scope
+This file is being treated as an ES module because it has a '.js' file extension and
+'/home/runner/work/melee-web/melee-web/package.json' contains "type": "module".
+0% tests passed, 4 tests failed out of 4
+```
+
+All four upstream tests fail, and the FMA gate step never runs. Node walks up from
+`wasm-probe/out/wasm/` to the root `package.json` and parses emcc's CommonJS output as ES
+modules. The fix is applied in the workflow: write `{"type":"commonjs"}` into the generated
+`wasm-probe/out/wasm/` directory, which pins the interpretation locally and keeps
+`"type": "module"` available at the root.
+
+The lesson worth keeping: a green-looking explanation from an agent is not evidence. Check
+*which step* failed, not just that the job is red.
