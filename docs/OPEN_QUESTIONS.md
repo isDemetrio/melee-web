@@ -63,3 +63,23 @@ Phase 4. No action needed now.
 is a submodule), and `scripts/check_no_game_data.py` rejects those paths. Noting it because
 it is relevant to how much the upstream can be relied on as a clean base, and it is not the
 agent's call whether to raise it upstream.
+
+## Q7 — Policy for NaN bit differences in FMA (decide after the next probe run)
+
+The WASM probe measured that native x86 FMA and the WASM `std::fma` path are not
+bit-identical over its 8,000,000-result corpus (`wasm/README.md`, "Finding"). The
+classified rerun will say whether the differences are arithmetic (a blocking bug,
+no decision needed: it must be fixed) or confined to NaN results. Only in the
+second case is there a choice:
+
+1. **Keep bit-exact** and make the runtime canonicalize NaN results of the FP
+   helpers on every platform. Costs a compare per FP op on the hot path and makes
+   the port deliberately differ from Jit64 NaN bits.
+2. **Accept NaN-payload differences** (enable `--allow-nan-payload-differences`
+   in CI), only after the running build shows the game never feeds NaN into these
+   operations. A NaN *sign* difference would still fail; it needs option 1.
+3. **Defer** until the WASM-x86 vs WASM-arm64 comparison exists, since browsers,
+   not native Dolphin, are the netcode peers.
+
+- **Blocked until answered**: the default of the probe gate stays strict; nothing
+  else is blocked before Phase 3.

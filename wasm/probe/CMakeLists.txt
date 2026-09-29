@@ -30,4 +30,6 @@ foreach(test port_load_test ram_watch_test ax_ucode_test texture_snapshot_test)
   add_test(NAME ${test} COMMAND "${NODE_EXECUTABLE}" "$<TARGET_FILE:${test}>")
 endforeach()
 add_executable(fma_vectors fma_vectors.cpp)
+# --dump writes 64 MB of raw result bits to the host file system for the native compare.
+target_link_options(fma_vectors PRIVATE -sNODERAWFS=1)
 add_executable(bench bench.cpp)

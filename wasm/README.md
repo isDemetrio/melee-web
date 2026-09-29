@@ -38,6 +38,9 @@ remaining runtime is outside this probe.
 CTest runs all four upstream executables under Node. Any nonzero exit fails CI.
 `fma_vectors` independently checks its SHA-256 implementation against empty,
 `abc` and one-million-`a` known answers, then prints one lowercase digest.
+With `--dump FILE` it also writes every result's raw bits (8 bytes, little-endian,
+in hashing order: 64,000,000 bytes). The WASM build links `-sNODERAWFS=1` so
+that file lands on the runner's disk, not in Emscripten's in-memory FS.
 
 The corpus is exactly 1,000,000 `(a,c,b)` triples, in the upstream argument order.
 SplitMix64 starts at `0x4d454c4545574153` and advances three times per triple.
@@ -57,11 +60,89 @@ negation is applied before the one rounded operation, preserving the intrinsic
 operation's zero behavior rather than negating an already-rounded result.
 NaN propagation can still differ; that is evidence the gate must expose.
 
-Hash inequality fails the job. Equal hashes establish parity only for this corpus,
-compiler/engine and default rounding environment (native FTZ/DAZ off), not a proof
-of netcode determinism on every browser or nondefault FPSCR mode. The two digest
-files remain available as artifacts even on mismatch. Do not weaken the gate to
-make it green.
+The gate is `fma_vectors --compare native.bin wasm.bin`, run by the native
+binary after both dumps exist. It regenerates the corpus with integer code only,
+re-hashes both dumps (the workflow checks these equal the digests each side
+printed), and classifies every differing result **from the two result bit
+patterns**, never from the input class alone. Two independent axes:
+
+- *input class* of the operands actually fed (single paths see `f25(c)`),
+  highest precedence first: `nan-in`, `inf-in`, `subnormal-in`, `ordinary`
+  (every operand normal or ±0);
+- *divergence kind*, first matching rule wins: `nan-vs-number` (NaN-ness
+  differs), `nan-sign` (both NaN, sign bit differs), `nan-payload` (both NaN,
+  same sign, payload or quiet bit differs), `zero-sign` (+0 vs −0), `subnormal`
+  (any operand or either result subnormal), `value` (everything else).
+
+It prints both SHA-256 digests, results/divergent per input class, a kind ×
+input-class count matrix, and the first differing `(a, c, b)` with both result
+patterns for each kind and for the first gate violation. Exit status: 0 pass,
+1 gate failure, 2 malformed/truncated dump or internal inconsistency (equal
+hashes must mean zero divergences and vice versa).
+
+The asserted property is "no divergent result outside the permitted class", not
+"hashes equal" and never a mismatch count. By default the permitted class is
+empty, so a plain run is bit-exact; that is what CI runs. With
+`--allow-nan-payload-differences` the permitted class is exactly `nan-payload`
+on non-`ordinary` inputs. Every other cell (any `ordinary` divergence, whatever
+its kind; any sign difference including a NaN's; any NaN-ness difference; any
+subnormal or value difference) still fails, so a new divergence in any other
+class breaks the gate even with the switch on. The switch exists for a later,
+deliberate operator decision (see `docs/OPEN_QUESTIONS.md` Q7), not for CI.
+
+A pass establishes parity only for this corpus, compiler/engine and default
+rounding environment (native FTZ/DAZ off), not a proof of netcode determinism on
+every browser or nondefault FPSCR mode. The digests and the classification
+report remain available as artifacts even on failure (the 64 MB dumps are not
+uploaded; they are reproducible from the pinned sources). Do not weaken the gate
+to make it green.
+
+## Finding: native and WASM FMA results are not bit-identical (2026-09-29)
+
+**Measured.** The first CI run of the hash-only probe failed its gate: the SHA-256
+over all 8,000,000 results differed between the native build (unpatched x86
+`_mm_f*_sd` intrinsics, `g++ -O2 -mfma`) and the WASM build (patched `std::fma`,
+emsdk 4.0.23, Node 22). That is the whole measurement so far: one bit of
+information, "not identical". The run URL and the two digests were not recorded
+in this repository when the classifier was written; the hashing order is unchanged,
+so the next run's per-side digests are directly comparable with that run's log.
+
+**Not yet measured:** which results differ, how many, and in which class. The
+classifier above exists to produce exactly that; no count in this file comes from
+a run until the table from CI is pasted into `docs/PROGRESS.md`.
+
+**What it means for determinism.** The netcode peers are browsers only (Slippi
+Dolphin matchmaking is out of scope for v1.0, `docs/SPEC_PIANO.md`), so the native
+x86 build is the *fidelity reference*, not a peer. Two outcomes matter:
+
+- Any divergence in `ordinary`, `zero-sign`, `subnormal`, `value` or
+  `nan-vs-number` is a real arithmetic bug in the patch or in Emscripten's `fma`
+  and blocks the online phase outright.
+- If every divergence is confined to NaN results (`nan-payload`, and possibly
+  `nan-sign`), then the game's arithmetic is unaffected **if the game never feeds
+  NaN into these operations** or lets a NaN reach state that is compared or
+  checksummed. **That condition is NOT verified.** It needs the running build (the
+  DOL, `docs/OPEN_QUESTIONS.md` Q1). Note too that `nan-sign` is not covered by
+  `--allow-nan-payload-differences`: a sign difference is gated regardless.
+
+Expectation, to be confirmed or refuted by the table (not a measurement): x86
+FMA returns the first NaN operand quieted, without applying the instruction's
+negation, and its invalid-operation default NaN is negative (`0xfff8…`).
+Emscripten's `fma` has no hardware FMA to lower to and routes non-finite operands
+through ordinary WASM arithmetic, whose NaN sign and payload the WASM spec leaves
+nondeterministic, after the patch has already negated the operand. If so, the
+divergences would be `nan-sign`/`nan-payload` on `nan-in`/`inf-in` inputs.
+
+**Next measurements, in order.**
+
+1. Rerun this workflow and record the classification table verbatim.
+2. Run the same WASM binary on an arm64 runner and compare WASM-x86 against
+   WASM-arm64 dumps. That, not native-vs-WASM, is the browser-to-browser netcode
+   question; ARM's default NaN is positive, so NaN sign is a candidate there too.
+3. With the running build: count NaN operands and NaN results of every
+   `fmadd`/`fmsub`/`fnmadd`/`fnmsub` (and the rest of the FP helpers) over real
+   gameplay and replays. Zero NaNs is what would make any NaN-only divergence
+   harmless; one NaN reaching the per-frame checksum makes it a desync.
 
 `wasm-probe/bench.json` contains native and WASM ns/op with toolchain/runner metadata;
 it is uploaded in the `wasm-probe` artifact before the job ends, including on a
@@ -94,15 +175,17 @@ for source in fma_vectors bench; do
     -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
     "wasm/probe/$source.cpp" -o "wasm-probe/out/native/$source"
 done
-wasm-probe/out/native/fma_vectors > wasm-probe/native.sha256
+wasm-probe/out/native/fma_vectors --dump wasm-probe/native.bin > wasm-probe/native.sha256
 wasm-probe/out/native/bench > wasm-probe/native-bench.json
 bash scripts/apply_patches.sh
 bash scripts/apply_patches.sh
 emcmake cmake -S wasm/probe -B wasm-probe/out/wasm -DCMAKE_BUILD_TYPE=Release
 cmake --build wasm-probe/out/wasm --parallel 2
 ctest --test-dir wasm-probe/out/wasm --output-on-failure
-node wasm-probe/out/wasm/fma_vectors.js > wasm-probe/wasm.sha256
+node wasm-probe/out/wasm/fma_vectors.js --dump wasm-probe/wasm.bin > wasm-probe/wasm.sha256
 node wasm-probe/out/wasm/bench.js > wasm-probe/wasm-bench.json
+wasm-probe/out/native/fma_vectors --compare wasm-probe/native.bin wasm-probe/wasm.bin \
+  > wasm-probe/fma-divergence.txt
 ```
 
 CMake supplies `-O3 -fwasm-exceptions -ffp-contract=off -fno-fast-math` and

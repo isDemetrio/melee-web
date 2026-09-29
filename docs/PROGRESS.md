@@ -47,8 +47,17 @@ that requires the DOL has been attempted. Everything built so far is verified by
 
 ## Measured numbers
 
-Nothing measured yet that matters. The first real numbers come from the WASM probe job
-(compile success, `fma()` determinism, ns/op) and from Phase 0 on devices.
+- **FMA native vs WASM: NOT bit-identical** (WASM probe, first run, 2026-09-29). The
+  SHA-256 over 1,000,000 triples × 8 paths = 8,000,000 results differed between the
+  native x86-intrinsic build and the patched `std::fma` WASM build (emsdk 4.0.23,
+  Node 22). That is the only measured fact: the run URL and digests were not copied
+  here, and how many results differ, and in which class, is **unknown**. The probe
+  now classifies every divergence (`wasm/README.md`, "Finding"); CI stays strict.
+  Paste the next run's classification table here verbatim, with its run URL.
+- Whether the game ever feeds NaN into these operations: **not measured**; needs
+  the running build (Q1). Only this decides whether a NaN-only divergence is harmless.
+- Compile success of the four upstream tests and native/WASM ns/op: see that run's
+  log and `wasm-probe/bench.json` artifact; not yet recorded here.
 
 ## Open blockers
 

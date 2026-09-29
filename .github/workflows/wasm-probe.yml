@@ -57,7 +57,7 @@ jobs:
               -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
               "wasm/probe/$source.cpp" -o "wasm-probe/out/native/$source"
           done
-          wasm-probe/out/native/fma_vectors > wasm-probe/native.sha256
+          wasm-probe/out/native/fma_vectors --dump wasm-probe/native.bin > wasm-probe/native.sha256
           wasm-probe/out/native/bench > wasm-probe/native-bench.json
       - name: Patch and build WASM
         shell: bash
@@ -71,7 +71,7 @@ jobs:
       - name: Measure WASM and publish benchmark summary
         shell: bash
         run: |
-          node wasm-probe/out/wasm/fma_vectors.js > wasm-probe/wasm.sha256
+          node wasm-probe/out/wasm/fma_vectors.js --dump wasm-probe/wasm.bin > wasm-probe/wasm.sha256
           node wasm-probe/out/wasm/bench.js > wasm-probe/wasm-bench.json
           python3 - <<'PY'
           import json, os, pathlib, platform, subprocess
@@ -90,21 +90,33 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write('Benchmark (no performance threshold):\n```json\n' + output + '```\n')
           PY
-      - name: Require bit-identical FMA hashes
+      - name: Classify FMA divergences and gate
         shell: bash
         run: |
+          # No --allow-nan-payload-differences: CI enforces bit-exactness, and the
+          # classification table is what makes a failure actionable.
+          status=0
+          wasm-probe/out/native/fma_vectors --compare wasm-probe/native.bin wasm-probe/wasm.bin \
+            > wasm-probe/fma-divergence.txt || status=$?
+          cat wasm-probe/fma-divergence.txt
+          {
+            echo 'FMA divergence classification (native x86 intrinsics vs WASM `fma()`), exit '"$status"':'
+            echo '```'
+            cat wasm-probe/fma-divergence.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           python3 - <<'PY'
-          import os, pathlib, re
+          import pathlib, re
           root = pathlib.Path('wasm-probe')
-          native = (root / 'native.sha256').read_text().strip()
-          wasm = (root / 'wasm.sha256').read_text().strip()
-          print('native:', native, '\nwasm:  ', wasm)
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
-              out.write(f'FMA SHA-256 native: `{native}`\n\nWASM: `{wasm}`\n')
-          assert re.fullmatch('[0-9a-f]{64}', native), 'Malformed native hash'
-          assert re.fullmatch('[0-9a-f]{64}', wasm), 'Malformed WASM hash'
-          assert native == wasm, 'FMA bit mismatch: determinism gate failed (NaNs are not normalized)'
+          report = (root / 'fma-divergence.txt').read_text()
+          for side in ('native', 'wasm'):
+              printed = (root / f'{side}.sha256').read_text().strip()
+              assert re.fullmatch('[0-9a-f]{64}', printed), f'Malformed {side} hash'
+              dumped = re.search(rf'^sha256 {side} ([0-9a-f]{{64}})$', report, re.M)
+              assert dumped, f'Compare did not hash the {side} dump'
+              assert dumped[1] == printed, f'{side} dump differs from what {side} hashed'
           PY
+          exit "$status"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -113,4 +125,5 @@ jobs:
             wasm-probe/bench.json
             wasm-probe/*-bench.json
             wasm-probe/*.sha256
+            wasm-probe/fma-divergence.txt
           if-no-files-found: warn
