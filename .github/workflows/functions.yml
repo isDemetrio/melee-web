@@ -1,0 +1,40 @@
+name: Pages Functions
+on:
+  pull_request:
+    paths: ['functions/**', 'wrangler.toml', '.github/workflows/functions.yml']
+  push:
+    paths: ['functions/**', 'wrangler.toml', '.github/workflows/functions.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  functions:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test tooling
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+      - name: Preserve lockfile for operator review and commit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functions-package-lock
+          path: functions/package-lock.json
+          if-no-files-found: ignore
+      # Compilation checks routing without deploying; actual Access/R2/TURN wiring needs a preview.
+      - name: Check Pages bundle
+        working-directory: .
+        run: npx --yes --package=wrangler@4 wrangler pages functions build --outdir=/tmp/melee-pages-functions

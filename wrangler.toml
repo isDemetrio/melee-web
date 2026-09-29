@@ -1,0 +1,9 @@
+name = "melee-web"
+pages_build_output_dir = "web/dist"
+compatibility_date = "2026-09-01"
+
+# Provision this private bucket and verify the binding in a Pages preview before production.
+# https://developers.cloudflare.com/pages/functions/wrangler-configuration/
+[[r2_buckets]]
+binding = "ASSETS_R2"
+bucket_name = "melee-web-assets"

@@ -1,0 +1,145 @@
+name: CI
+
+# Everything in this repository is verified here, never on the operator's machine.
+# The operator's VPS has no compiler, no Node toolchain and 3.7 GB of RAM; running a
+# build there takes the machine down. See docs/AGENT_RULES.md rule 2 and 3.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Repo hygiene and workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Assert the upstream pin has not drifted
+        run: |
+          set -euo pipefail
+          expected=$(grep -oE '\`[0-9a-f]{40}\`' docs/UPSTREAM_PIN.md | tr -d '`' | head -1)
+          actual=$(git -C upstream/melee-unlocked rev-parse HEAD)
+          echo "expected: $expected"
+          echo "actual:   $actual"
+          test "$expected" = "$actual"
+
+      - name: Reject game data in the git index
+        run: python scripts/check_no_game_data.py --all
+
+      - name: Unit tests for the hygiene gate
+        run: python -m unittest discover -s scripts/tests -v
+
+      - name: Validate workflow files
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+  web:
+    name: Web shell (typecheck, unit tests, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install
+        id: install
+        working-directory: web
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::no lockfile yet, installing without one; commit the artifact below"
+            npm install --no-audit --no-fund
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Typecheck
+        working-directory: web
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        working-directory: web
+        run: npx vitest run --reporter=verbose
+
+      - name: Build
+        working-directory: web
+        run: npx vite build
+
+      - name: Report and bound the shell size
+        working-directory: web
+        run: |
+          set -euo pipefail
+          du -sh ../dist
+          size=$(du -sk ../dist | cut -f1)
+          echo "dist size: ${size} KB"
+          if [ "$size" -gt 1024 ]; then
+            echo "::error::the shell alone must stay under 1 MB (got ${size} KB)"
+            exit 1
+          fi
+
+      - name: Upload the lockfile for the operator to commit
+        if: steps.install.outputs.generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lock
+          path: web/package-lock.json
+          if-no-files-found: warn
+
+  e2e:
+    name: Browser tests (Chromium)
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install
+        working-directory: web
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the shell the browser tests run against
+        working-directory: web
+        run: npx vite build
+
+      - name: Run browser tests
+        working-directory: web
+        run: npx playwright test
+
+      - name: Upload the report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          if-no-files-found: ignore

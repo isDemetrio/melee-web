@@ -1,0 +1,116 @@
+name: WASM toolchain probe
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'wasm/**'
+      - 'patches/**'
+      - 'EMSDK_VERSION'
+      - 'scripts/apply_patches.sh'
+      - '.github/workflows/wasm-probe.yml'
+      - 'docs/UPSTREAM_PIN.md'
+      - 'upstream/melee-unlocked'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Runner and pin
+        id: pin
+        shell: bash
+        run: |
+          nproc
+          free -m
+          df -h
+          python3 - <<'PY'
+          import pathlib, re, subprocess, os
+          text = pathlib.Path('docs/UPSTREAM_PIN.md').read_text()
+          match = re.search(r'\| Pinned commit \| `([0-9a-f]{40})` \|', text)
+          assert match, 'Missing authoritative upstream pin'
+          head = subprocess.check_output(['git', '-C', 'upstream/melee-unlocked', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == match[1], (head, match[1])
+          version = pathlib.Path('EMSDK_VERSION').read_text()
+          assert re.fullmatch(r'\d+\.\d+\.\d+\n', version), 'Expected one pinned release line'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('emsdk=' + version)
+          PY
+          python3 scripts/check_no_game_data.py --all
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ steps.pin.outputs.emsdk }}
+      - name: Native baseline from unpatched upstream
+        shell: bash
+        run: |
+          mkdir -p wasm-probe/out/native
+          git -C upstream/melee-unlocked diff --exit-code
+          for source in fma_vectors bench; do
+            g++ -std=c++17 -O2 -mfma -ffp-contract=off -fno-fast-math \
+              -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
+              "wasm/probe/$source.cpp" -o "wasm-probe/out/native/$source"
+          done
+          wasm-probe/out/native/fma_vectors > wasm-probe/native.sha256
+          wasm-probe/out/native/bench > wasm-probe/native-bench.json
+      - name: Patch and build WASM
+        shell: bash
+        run: |
+          bash scripts/apply_patches.sh
+          bash scripts/apply_patches.sh
+          emcmake cmake -S wasm/probe -B wasm-probe/out/wasm -DCMAKE_BUILD_TYPE=Release
+          cmake --build wasm-probe/out/wasm --parallel 2
+      - name: Run upstream tests under Node
+        run: ctest --test-dir wasm-probe/out/wasm --output-on-failure
+      - name: Measure WASM and publish benchmark summary
+        shell: bash
+        run: |
+          node wasm-probe/out/wasm/fma_vectors.js > wasm-probe/wasm.sha256
+          node wasm-probe/out/wasm/bench.js > wasm-probe/wasm-bench.json
+          python3 - <<'PY'
+          import json, os, pathlib, platform, subprocess
+          root = pathlib.Path('wasm-probe')
+          result = {
+              'emsdk': pathlib.Path('EMSDK_VERSION').read_text().strip(),
+              'upstream': subprocess.check_output(['git', '-C', 'upstream/melee-unlocked', 'rev-parse', 'HEAD'], text=True).strip(),
+              'runner': platform.platform(),
+              'node': subprocess.check_output(['node', '--version'], text=True).strip(),
+              'native': json.loads((root / 'native-bench.json').read_text()),
+              'wasm': json.loads((root / 'wasm-bench.json').read_text()),
+          }
+          output = json.dumps(result, indent=2) + '\n'
+          (root / 'bench.json').write_text(output)
+          print(output)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('Benchmark (no performance threshold):\n```json\n' + output + '```\n')
+          PY
+      - name: Require bit-identical FMA hashes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          root = pathlib.Path('wasm-probe')
+          native = (root / 'native.sha256').read_text().strip()
+          wasm = (root / 'wasm.sha256').read_text().strip()
+          print('native:', native, '\nwasm:  ', wasm)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(f'FMA SHA-256 native: `{native}`\n\nWASM: `{wasm}`\n')
+          assert re.fullmatch('[0-9a-f]{64}', native), 'Malformed native hash'
+          assert re.fullmatch('[0-9a-f]{64}', wasm), 'Malformed WASM hash'
+          assert native == wasm, 'FMA bit mismatch: determinism gate failed (NaNs are not normalized)'
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wasm-probe
+          path: |
+            wasm-probe/bench.json
+            wasm-probe/*-bench.json
+            wasm-probe/*.sha256
+          if-no-files-found: warn
