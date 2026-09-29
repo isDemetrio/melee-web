@@ -1,0 +1,49 @@
+--- a/port/runtime/ppc/ppc.h
++++ b/port/runtime/ppc/ppc.h
+@@ -7,8 +7,12 @@
+ #include <atomic>
+ #include <cstdint>
+ #include <cstring>
++#if defined(__EMSCRIPTEN__) || !defined(_MSC_VER)
++#include "wasm/compat/intrin.h"
++#else
+ #include <immintrin.h>
+ #include <intrin.h>
++#endif
+ 
+ namespace ppc {
+ 
+@@ -275,6 +279,15 @@
+   i = (i & 0xFFFFFFFFF8000000ull) + (i & 0x8000000ull);
+   std::memcpy(&d, &i, 8); return d;
+ }
++#if defined(__EMSCRIPTEN__) || !defined(_MSC_VER)
++// Match the intrinsic sign conventions in pinned port/runtime/ppc/ppc.h:278-290.
++// One fma call provides one rounding; negate operands, not the rounded result.
++// NaN payload/sign parity is measured by the probe, not assumed here.
++inline double fmadd(double a, double c, double b) { return std::fma(a, c, b); }
++inline double fmsub(double a, double c, double b) { return std::fma(a, c, -b); }
++inline double fnmadd(double a, double c, double b) { return std::fma(-a, c, -b); }
++inline double fnmsub(double a, double c, double b) { return std::fma(-a, c, b); }
++#else
+ // Hardware FMA, exactly as Jit64 emits VFMADD/VFMSUB/VFNMADD/VFNMSUB (scalar double).
+ inline double fmadd(double a, double c, double b) {
+   return _mm_cvtsd_f64(_mm_fmadd_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
+@@ -288,6 +301,7 @@
+ inline double fnmsub(double a, double c, double b) {  // PPC fnmsub = -(a*c - b) = VFNMADD
+   return _mm_cvtsd_f64(_mm_fnmadd_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
+ }
++#endif
+ double fres(double v);
+ double frsqrte(double v);
+ inline uint64_t fctiw(double b, bool truncate) {
+--- a/port/runtime/gx/gx_texture.h
++++ b/port/runtime/gx/gx_texture.h
+@@ -1,6 +1,7 @@
+ // GameCube texture decoding to RGBA8.
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #pragma once
++#include <stddef.h>  // size_t in hash_bytes; do not rely on MSVC transitive includes.
+ #include <cstdint>
+ #include <vector>
+ 
