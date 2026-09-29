@@ -1,11 +1,5 @@
-interface Env {
-  ACCESS_AUD?: string;
-  ACCESS_TEAM_DOMAIN?: string;
-  ACCESS_DEV_BYPASS?: string;
-  CF_PAGES_BRANCH?: string;
-}
+import type { AppContext, AppEnv } from './types';
 
-type Context = Pick<EventContext<Env, string, unknown>, 'request' | 'env' | 'next'>;
 type FetchJwks = (url: string) => Promise<Response>;
 const SKEW_SECONDS = 30;
 
@@ -21,7 +15,7 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function verify(token: string, env: Env, fetchJwks: FetchJwks): Promise<void> {
+async function verify(token: string, env: AppEnv, fetchJwks: FetchJwks): Promise<void> {
   // Restrict the trust anchor to a configured Access team, never a URL supplied by the JWT.
   if (!env.ACCESS_AUD || !/^([a-z0-9-]+)\.cloudflareaccess\.com$/.test(env.ACCESS_TEAM_DOMAIN ?? '')) {
     throw new Error('Missing trust configuration');
@@ -57,7 +51,7 @@ async function verify(token: string, env: Env, fetchJwks: FetchJwks): Promise<vo
 }
 
 export function createMiddleware(fetchJwks: FetchJwks) {
-  return async ({ request, env, next }: Context): Promise<Response> => {
+  return async ({ request, env, next }: AppContext): Promise<Response> => {
     // Missing deployment metadata fails closed. Production branch must remain main in Pages.
     // Access coverage of custom domains/previews and actual bindings require deployment verification.
     if (env.ACCESS_DEV_BYPASS === '1' && env.CF_PAGES_BRANCH && env.CF_PAGES_BRANCH !== 'main') {
@@ -75,4 +69,4 @@ export function createMiddleware(fetchJwks: FetchJwks) {
   };
 }
 
-export const onRequest = createMiddleware(url => fetch(url, { redirect: 'error' })) satisfies PagesFunction<Env>;
+export const onRequest = createMiddleware(url => fetch(url, { redirect: 'error' }));

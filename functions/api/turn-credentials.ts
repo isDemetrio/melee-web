@@ -1,14 +1,10 @@
-interface Env {
-  TURN_KEY_ID?: string;
-  TURN_KEY_API_TOKEN?: string;
-  TURN_TTL_SECONDS?: string;
-}
+import type { AppContext } from '../types';
 
 const STUN = 'stun:stun.cloudflare.com:3478';
 // https://developers.cloudflare.com/realtime/turn/generate-credentials/
 const TURN_ENDPOINT = 'https://rtc.live.cloudflare.com/v1/turn/keys/';
 
-export const onRequest = (async ({ request, env }: Pick<EventContext<Env, string, unknown>, 'request' | 'env'>) => {
+export const onRequest = async ({ request, env }: Pick<AppContext, 'request' | 'env'>): Promise<Response> => {
   const headers = { 'Cache-Control': 'no-store' };
   if (request.method !== 'POST') {
     return Response.json({ error: 'Method not allowed' }, { status: 405, headers: { ...headers, Allow: 'POST' } });
@@ -46,4 +42,4 @@ export const onRequest = (async ({ request, env }: Pick<EventContext<Env, string
   } catch {
     return Response.json({ error: 'TURN upstream failure' }, { status: 502, headers });
   }
-}) satisfies PagesFunction<Env>;
+};

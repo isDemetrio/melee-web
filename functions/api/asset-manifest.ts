@@ -1,8 +1,12 @@
-interface Env { ASSETS_R2: R2Bucket }
+import type { AppContext } from '../types';
 
-export const onRequest = (async ({ request, env }: Pick<EventContext<Env, string, unknown>, 'request' | 'env'>) => {
+export const onRequest = async ({ request, env }: Pick<AppContext, 'request' | 'env'>): Promise<Response> => {
   if (request.method !== 'GET') {
     return Response.json({ error: 'Method not allowed' }, { status: 405, headers: { Allow: 'GET', 'Cache-Control': 'no-store' } });
+  }
+  // A deployment without the R2 binding is a configuration fault, not a missing manifest.
+  if (!env.ASSETS_R2) {
+    return Response.json({ error: 'Asset storage unavailable' }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
   }
   // Unconditional R2 get returns a body or null; stream it without buffering game metadata.
   // https://developers.cloudflare.com/r2/api/workers/workers-api-reference/
@@ -14,4 +18,4 @@ export const onRequest = (async ({ request, env }: Pick<EventContext<Env, string
     'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300',
     'Cross-Origin-Resource-Policy': 'same-origin',
   } });
-}) satisfies PagesFunction<Env>;
+};
