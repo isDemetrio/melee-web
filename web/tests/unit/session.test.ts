@@ -174,6 +174,7 @@ describe('match session negotiation', () => {
     });
 
     await guest.start();
+    await hostChannel.join('ABCD');
     hostChannel.send('guest', { kind: 'offer', sdp: 'late offer' });
 
     await vi.waitFor(() => expect(guest.state).toBe('failed'));
