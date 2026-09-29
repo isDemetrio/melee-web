@@ -17,7 +17,7 @@ export function lobbyScreen(context: AppContext): HTMLElement {
 
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
   const params = new URLSearchParams(globalThis.location?.search ?? '');
-  const wiring = wireSignaling(params, env, globalThis.localStorage, context.settings.nickname);
+  const wiring = wireSignaling(params, env, globalThis, context.settings.nickname);
 
   if (wiring.signaling === null) {
     screen.append(

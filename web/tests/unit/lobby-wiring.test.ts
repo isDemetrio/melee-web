@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { selectBackend, selfIdFromStorage } from '../../src/net/backend.js';
+import { PEER_ID_KEY, selectBackend, selfIdForThisTab, selfIdFromStorage } from '../../src/net/backend.js';
 import { supabaseConfigFromEnv } from '../../src/net/supabase-signaling.js';
-import { fetchIceServers } from '../../src/net/lobby-wiring.js';
+import { fetchIceServers, wireSignaling } from '../../src/net/lobby-wiring.js';
 import { memoryStorage } from '../../src/ui/settings.js';
 
 describe('signalling backend selection', () => {
@@ -41,6 +41,47 @@ describe('peer identity', () => {
     const first = selfIdFromStorage(storage);
     expect(first).toMatch(/^[0-9a-f]{16}$/);
     expect(selfIdFromStorage(storage)).toBe(first);
+  });
+
+  it('is per tab, not per origin, even though the tabs share localStorage', () => {
+    // This is the bug the two-tab browser test caught: every tab of an origin shares
+    // localStorage, so an id taken from there is the same in both tabs, and
+    // BroadcastSignalingChannel ignores messages whose sender is itself. Two tabs then
+    // sit in the same room and never negotiate.
+    const shared = memoryStorage();
+    const tabA = selfIdForThisTab({ localStorage: shared, sessionStorage: memoryStorage() });
+    const tabB = selfIdForThisTab({ localStorage: shared, sessionStorage: memoryStorage() });
+
+    expect(tabA).toMatch(/^[0-9a-f]{16}$/);
+    expect(tabA).not.toBe(tabB);
+    expect(shared.getItem(PEER_ID_KEY)).toBeNull();
+  });
+
+  it('survives a reload of the same tab', () => {
+    const session = memoryStorage();
+    const scope = { localStorage: memoryStorage(), sessionStorage: session };
+    const first = selfIdForThisTab(scope);
+    expect(selfIdForThisTab(scope)).toBe(first);
+    expect(session.getItem(PEER_ID_KEY)).toBe(first);
+  });
+
+  it('still produces an identity when storage is unavailable', () => {
+    const blocked = {
+      get sessionStorage(): null {
+        throw new Error('blocked by the browser');
+      },
+    };
+    expect(selfIdForThisTab(blocked)).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('is what the lobby wiring actually uses', () => {
+    const shared = memoryStorage();
+    const wire = (): string =>
+      wireSignaling(new URLSearchParams('signal=broadcast'), {}, { localStorage: shared, sessionStorage: memoryStorage() }, 'nick')
+        .selfId;
+
+    expect(wire()).not.toBe(wire());
+    expect(shared.getItem(PEER_ID_KEY)).toBeNull();
   });
 });
 

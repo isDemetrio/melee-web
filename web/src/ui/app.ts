@@ -16,6 +16,8 @@ export class Shell {
   private readonly logLines: string[] = [];
   private readonly logElement: HTMLElement;
   private current: ScreenName = 'boot';
+  private audioStatusText = 'audio: not started';
+  private audioStatusElement: HTMLElement | null = null;
 
   constructor(private readonly context: AppContext) {
     this.root = document.getElementById('app') as HTMLElement;
@@ -29,6 +31,16 @@ export class Shell {
     this.render();
   }
 
+  /**
+   * The audio status lives in the header, not on a screen: the unlock happens in the same
+   * gesture that navigates away from the boot screen, so a status rendered there would be
+   * destroyed before anyone could read it.
+   */
+  setAudioStatus(text: string): void {
+    this.audioStatusText = text;
+    if (this.audioStatusElement) this.audioStatusElement.textContent = text;
+  }
+
   log(line: string): void {
     const stamp = new Date().toISOString().slice(11, 19);
     this.logLines.push(`${stamp}  ${line}`);
@@ -40,6 +52,13 @@ export class Shell {
   private render(): void {
     this.root.replaceChildren();
 
+    const audioStatus = h('span', {
+      class: 'status',
+      id: 'audio-status',
+      text: this.audioStatusText,
+    });
+    this.audioStatusElement = audioStatus;
+
     this.root.append(
       h('header', { class: 'panel row row--between', style: 'margin:16px 28px 0' }, [
         h('h1', { text: 'Melee — private build' }),
@@ -49,6 +68,7 @@ export class Shell {
           h('button', { text: 'Settings', onClick: () => this.navigate('settings') }),
           h('button', { text: 'Game', onClick: () => this.navigate('game') }),
         ]),
+        audioStatus,
       ]),
     );
 
@@ -123,14 +143,15 @@ function bootScreen(context: AppContext): HTMLElement {
     }
   }
 
-  const audioStatus = h('span', { class: 'status', id: 'audio-status', text: 'audio: not started' });
   const play = h('button', {
     class: 'primary',
     id: 'play-button',
     text: 'Gioca',
     onClick: () => {
       void context.audio.unlock().then((status) => {
-        audioStatus.textContent = `audio: ${status.state} @ ${status.sampleRate ?? '?'} Hz, worklet ${status.workletLoaded ? 'on' : 'off'}`;
+        context.setAudioStatus(
+          `audio: ${status.state} @ ${status.sampleRate ?? '?'} Hz, worklet ${status.workletLoaded ? 'on' : 'off'}`,
+        );
         context.log(`audio unlocked: ${status.state}, worklet ${status.workletLoaded}`);
         context.navigate('lobby');
       });
@@ -141,9 +162,11 @@ function bootScreen(context: AppContext): HTMLElement {
     h('div', { class: 'panel' }, [
       h('h2', { text: 'Start' }),
       h('p', {
-        text: 'The button below unlocks audio (browsers only allow that after a gesture) and takes you to the lobby.',
+        text:
+          'The button below unlocks audio (browsers only allow that after a gesture) and takes you to the lobby. ' +
+          'The result is reported in the header, where it stays visible on every screen.',
       }),
-      h('div', { class: 'row', style: 'margin-top:12px' }, [play, audioStatus]),
+      h('div', { class: 'row', style: 'margin-top:12px' }, [play]),
     ]),
   );
 

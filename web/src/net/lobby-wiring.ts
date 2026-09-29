@@ -1,7 +1,12 @@
 import type { SignalingChannel } from './signaling.js';
 import { BroadcastSignalingChannel } from './broadcast-signaling.js';
 import { SupabaseSignalingChannel, supabaseConfigFromEnv } from './supabase-signaling.js';
-import { selectBackend, selfIdFromStorage, type SignalingSelection } from './backend.js';
+import {
+  selectBackend,
+  selfIdForThisTab,
+  type PeerIdScope,
+  type SignalingSelection,
+} from './backend.js';
 import { STUN_ONLY } from './transport.js';
 
 /**
@@ -21,12 +26,14 @@ export interface LobbyWiring {
 export function wireSignaling(
   params: URLSearchParams,
   env: Record<string, string | undefined>,
-  storage: Storage,
+  scope: PeerIdScope,
   nickname: string,
 ): LobbyWiring {
   const config = supabaseConfigFromEnv(env);
   const selection = selectBackend(params, config !== null);
-  const selfId = selfIdFromStorage(storage);
+  // Per-tab identity: see selfIdForThisTab. A shared id makes two tabs invisible to
+  // each other, which is the one thing the broadcast backend must not do.
+  const selfId = selfIdForThisTab(scope);
   const options = { selfId, nickname };
 
   if (selection.backend === 'broadcast') {

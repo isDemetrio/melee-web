@@ -42,6 +42,7 @@ async function main(): Promise<void> {
       return capabilitiesError;
     },
     audio,
+    setAudioStatus: (text) => shell.setAudioStatus(text),
     navigate: (screen) => shell.navigate(screen),
     log: (line) => shell.log(line),
     userAgent: navigator.userAgent,

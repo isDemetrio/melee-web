@@ -13,6 +13,12 @@ export interface AppContext {
   readonly capabilities: CapabilityReport | null;
   readonly capabilitiesError: string | null;
   readonly audio: AudioBootstrap;
+  /**
+   * Update the persistent audio status line. It belongs to the shell rather than to the
+   * boot screen: unlocking audio navigates to the lobby, and a status line that the user
+   * never gets to read is not a status line.
+   */
+  setAudioStatus(text: string): void;
   navigate(screen: ScreenName): void;
   /** Append a line to the on-screen diagnostic log. */
   log(line: string): void;
