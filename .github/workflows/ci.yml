@@ -92,12 +92,9 @@ jobs:
         run: |
           set -euo pipefail
           du -sh ../dist
-          size=$(du -sk ../dist | cut -f1)
-          echo "dist size: ${size} KB"
-          if [ "$size" -gt 1024 ]; then
-            echo "::error::the shell alone must stay under 1 MB (got ${size} KB)"
-            exit 1
-          fi
+          # Only the first-load shell is budgeted: sourcemaps and lazily-imported chunks
+          # (the Supabase client) are not part of the first paint.
+          node scripts/check-bundle-size.mjs --dir ../dist --budget-kb 1024
 
       - name: Upload the lockfile for the operator to commit
         if: steps.install.outputs.generated == 'true'
