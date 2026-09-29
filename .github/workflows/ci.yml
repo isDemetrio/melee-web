@@ -33,7 +33,7 @@ jobs:
       - name: Assert the upstream pin has not drifted
         run: |
           set -euo pipefail
-          expected=$(grep -oE '\`[0-9a-f]{40}\`' docs/UPSTREAM_PIN.md | tr -d '`' | head -1)
+          expected=$(grep -oE '[0-9a-f]{40}' docs/UPSTREAM_PIN.md | head -1)
           actual=$(git -C upstream/melee-unlocked rev-parse HEAD)
           echo "expected: $expected"
           echo "actual:   $actual"

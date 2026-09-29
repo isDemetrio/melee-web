@@ -43,8 +43,9 @@ describe('match session negotiation', () => {
     const { host, guest, linked } = buildRoom();
 
     await host.start();
-    await guest.start();
     expect(host.state).toBe('waiting-for-peer');
+
+    await guest.start();
 
     await vi.waitFor(() => expect(linked.pair()[0].channels).toHaveLength(2));
 
@@ -107,7 +108,7 @@ describe('match session negotiation', () => {
 
     expect(guestPc.remoteDescription?.type).toBe('offer');
     expect(guestPc.addedCandidates).toHaveLength(1);
-    expect(guestPc.addedCandidates[0]?.candidate).toBe('candidate-host');
+    expect(guestPc.addedCandidates[0]?.candidate).toMatch(/^candidate-pc\d+$/);
   });
 
   it('fails with a clear error when nobody joins the room in time', async () => {

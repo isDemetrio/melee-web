@@ -61,6 +61,10 @@ export class FakePeerConnection implements PeerConnectionLike {
   onconnectionstatechange: ((event: unknown) => void) | null = null;
   ondatachannel: ((event: { channel: DataChannelLike }) => void) | null = null;
 
+  /** Unique per instance so candidate strings are deterministic within a test run. */
+  private static sequence = 0;
+  readonly id = `pc${(FakePeerConnection.sequence += 1)}`;
+
   readonly channels: FakeDataChannel[] = [];
   readonly remoteCandidates: IceCandidateLike[] = [];
   readonly addedCandidates: IceCandidateLike[] = [];
@@ -113,21 +117,20 @@ export class FakePeerConnection implements PeerConnectionLike {
     for (const channel of this.channels) channel.close();
   }
 
-  id = 'peer';
-
   /** Link two fakes so they behave as the two ends of one connection. */
   static link(a: FakePeerConnection, b: FakePeerConnection): void {
     a.other = b;
     b.other = a;
-    a.id = 'host';
-    b.id = 'guest';
   }
 
   /** Open every channel created by the host, on both ends. */
   establish(): void {
     for (const channel of this.channels) {
       const mirror = new FakeDataChannel(channel.label, this.other);
-      // The guest side owns the mirror and must be able to send back to the original.
+      // Both ends must be able to find their counterpart: the host maps a label to the
+      // mirror it just created, the guest maps the same label back to the original.
+      // Registering only one direction silently swallows every packet sent by the other.
+      this.mirrored.set(channel.label, mirror);
       this.other?.receiveChannel(mirror, channel);
       channel.open();
       mirror.open();
