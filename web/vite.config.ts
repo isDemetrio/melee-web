@@ -1,0 +1,42 @@
+import { defineConfig } from 'vite';
+
+/**
+ * The shell is served from Cloudflare Pages in production. Two things matter here:
+ *
+ * 1. COOP/COEP headers are required for SharedArrayBuffer, which the threaded WASM
+ *    core needs. Production sets them in `_headers` at the repo root; the dev server
+ *    and `vite preview` set them here so a local run behaves like production.
+ * 2. `worker.format = 'es'` because the simulation worker is an ES module worker.
+ */
+const isolationHeaders = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+};
+
+export default defineConfig({
+  root: '.',
+  publicDir: 'public',
+  build: {
+    target: 'es2022',
+    outDir: '../dist',
+    emptyOutDir: true,
+    sourcemap: true,
+  },
+  worker: {
+    format: 'es',
+  },
+  server: {
+    port: 5173,
+    headers: isolationHeaders,
+  },
+  preview: {
+    port: 4173,
+    headers: isolationHeaders,
+  },
+  test: {
+    include: ['tests/unit/**/*.test.ts'],
+    environment: 'node',
+    globals: true,
+  },
+} as never);

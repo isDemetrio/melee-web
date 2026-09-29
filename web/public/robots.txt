@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /
+
+# The site is private and gated by Cloudflare Access. This file exists so that the
+# unlikely event of a policy mistake does not also mean being indexed.
