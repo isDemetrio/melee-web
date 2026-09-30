@@ -94,6 +94,16 @@ int main(int argc, char** argv) {
       throw std::runtime_error("OSLoadContext reached top level before frame limit");
     }
     if (host::retrace_count() != o.frames) throw std::runtime_error("guest stopped before requested checkpoints");
+    // The trace cannot say whether a match started: it records hashes, not meaning. Read the
+    // scene the way an @scene script does (GameRouting::curr_mode / curr_state_id and the
+    // VsSceneController frame count) and report it, so "2400 checkpoints" is never mistaken
+    // for "2400 frames of a match" without evidence.
+    {
+      uint32_t major = 0, minor = 0, match_frame = 0;
+      host::current_scene(&major, &minor, &match_frame);
+      std::printf("final scene: mode=%u state=%u match_frame=%u (retraces=%u)\n",
+                  major, minor, match_frame, host::retrace_count());
+    }
     host::log_flush();
     return 0;
   } catch (const std::exception& e) {
