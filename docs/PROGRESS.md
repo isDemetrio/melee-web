@@ -253,3 +253,64 @@ retraces are in-match, which is the number that matters for the rollback budget.
 **Consequences.** P0-08's first half is done and its numbers exist. The native-vs-WASM
 comparison (P0-09) still needs a WASM core, which does not exist yet (P0-04…P0-07), and the
 cross-platform criterion still needs D1 if it is ever to run in CI rather than here.
+
+## P0-09 — the WASM core against the native reference, 2026-09-30
+
+**The criterion passes, with no tolerance needed.** Commit `f0d76a2816eceefb7ec98b5b4a78a55edfa537c0`;
+the native executable and the WASM module were built by CI **from that one commit**
+(`phase0-native-headless` run 36722713202, `phase0-build` run 36722718249), carried to this VPS
+as private opt-in artifacts, and run against the operator's own disc, verified first
+(1,459,978,240 bytes, SHA-1 `d4e70c064cc714ba8400a849cf299dbd1aa326fc`).
+
+**Every one of the five traces is byte-identical, SHA-1
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571`:**
+
+| run | what it is | wall clock | trace SHA-1 |
+| --- | --- | --- | --- |
+| `native-1` | native, 2400 retraces | 54 s | `c79c53b9…` |
+| `native-2` | native again, fresh card | 54 s | `c79c53b9…` |
+| `wasm-node-1` | **WASM under Node** | **81 s** | `c79c53b9…` |
+| `wasm-node-2` | WASM again, fresh card | 81 s | `c79c53b9…` |
+| `reference-2026-09-30` | the 10:29 binary, *before* patches 0003–0007 | 54 s | `c79c53b9…` |
+
+`scripts/phase0/compare_checkpoints.py` on each pair:
+
+- **A** native-1 vs native-2 → `identical: 2400 retraces`, exit 0
+- **C** wasm-node-1 vs wasm-node-2 → `identical: 2400 retraces`, exit 0
+- **E** **native-1 vs wasm-node-1 → `identical: 2400 retraces`, exit 0** ← the P0-09 criterion
+- **F** the 10:29 reference vs native-1 → `identical: 2400 retraces`, exit 0
+
+All five runs end at `final scene: mode=2 state=2 match_frame=762 (retraces=2400)`, i.e. a real
+Vs. match, started around retrace 1638. All five report `FPSCR requests: RN=0 NI=0`: **Melee
+never asks for non-default rounding or for NI in this run**, which is the empirical answer to
+the question patch 0004 was written to ask, and it means the absent x86 MXCSR emulation is not
+exercised by this trace.
+
+**F is a finding in its own right.** The 10:29 binary was built before patches 0003–0007 and
+before the shared SHA-1 code; it produces the same trace anyway. So those portability changes
+are state-neutral, and the WASM/native agreement cannot be an artefact of the two builds sharing
+a recent change.
+
+**Timing (proxy numbers, and they must be read as such).** These are `--fast` simulation times
+from `--sim-times`, which exclude the per-retrace state hashing, measured **under Node on a
+2-vCPU VPS with a `-O1` build** — not a phone, and not the shipping optimisation level:
+
+- in-match (762 frames), native: mean 15.20 ms, p95 17.78, p99 20.86, max 38.64
+- in-match (762 frames), WASM: mean 27.34 ms, p95 34.82, p99 43.36, max 77.29
+- all 2400 retraces, native: mean 9.54 ms, p95 17.56, p99 32.41, max 50.02 (retrace 1 is boot)
+
+Against the 16.67 ms budget of 60 Hz, **p95 is already over it for both builds on this machine**.
+That is not a verdict on the device question — it is `-O1` on two shared vCPUs — but it does mean
+the first honest device measurement (P0-10/P0-11) has a real chance of failing, and the levers
+(optimisation level, wasm-opt, the actual phone) are untested.
+
+**What is deliberately missing from this result.** Comparison **B** (native threaded vs native
+single-threaded) and **D** (single-threaded native vs WASM) did not run: the native workflow
+builds only the threaded variant, so no single-thread native binary exists to compare. The WASM
+module is single-threaded, so E compares a threaded native against a single-threaded WASM and
+they agree — which is stronger than D would have been, but B remains unmeasured and P0-08's own
+verification list asks for it.
+
+**Deviation, recorded on purpose.** P0-09's task entry expects this in a CI job. It ran here
+instead, because CI has no disc image (D1 unanswered). The comparison logic is the same code
+either way; what differs is who owns the disc.

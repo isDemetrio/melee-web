@@ -256,6 +256,13 @@ as the WASM target so that a checkpoint difference points at the platform, not t
 
 ### P0-09 — WASM checkpoints against native, under Node (M, **needs the ISO**)
 
+**DONE 2026-09-30, and it passed: 2400/2400 identical, no tolerance.** Commit
+`f0d76a2816eceefb7ec98b5b4a78a55edfa537c0`; five traces (native ×2, WASM ×2, plus the pre-patch
+reference) all SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`. It ran on the operator's VPS
+rather than in CI because CI has no disc image (D1). Comparisons **B** and **D** did not run —
+the native workflow builds only the threaded variant. Numbers, caveats and the timing proxy:
+`docs/PROGRESS.md`, section "P0-09 — the WASM core against the native reference".
+
 - Files: `phase0-build.yml` (job `wasm-checkpoints`, same ISO gate); reuses P0-03 and P0-08.
 - Verification: `node melee_core_node.js` with P0-08's arguments; `compare_checkpoints.py`
   against the native trace, **2400/2400 identical**, no tolerance. Also record `--sim-times`
