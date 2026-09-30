@@ -494,3 +494,48 @@ surprise in the wrong job.
 Chromium against a synthetic disc with ranged responses, and the deploy step skips itself
 without credentials. Step 3 of §6 — a native trace at the commit the served core was built from
 — still needs a dispatch plus the ISO, and step 6 onwards need O1 (the Cloudflare decision).
+
+## The native reference at the served core's commit — 2026-09-30, evening (§6 step 3)
+
+`docs/PHASE0_DEPLOY_PLAN.md` §6 step 3: the core served to a device must be compared against a
+native reference built from the **same commit**. The spike core in
+`/home/hermes/incoming/phase0/spike-dist` announces itself in `core.json` as
+`{"commit":"4fba3a080af6f205cc6107ada7baefeb0315cae0","opt":"-Oz"}` (run `36753728272`), while the
+only native trace this project had came from `f0d76a28` (run `36722713202`). Comparing across
+those two commits would mix two variables, which `docs/PHASE0_DEVICE_PLAN.md` §5 ("Il commit del
+riferimento") forbids.
+
+**How it was done.** Tag `phase0-native-ref-4fba3a0` at `4fba3a080af6f205cc6107ada7baefeb0315cae0`
+(kept in the repository: it makes "which commit the reference came from" self-documenting instead
+of a claim in a document), then `phase0-native-headless.yml` dispatched at that tag with
+`upload_binary=true` — run **`36761760073`**, **success**, artifact `melee-core-headless`
+8,308,846 bytes, expires 2026-10-03 — downloaded to
+`/home/hermes/incoming/phase0/reference-4fba3a0/`, outside the checkout, and run here twice
+against the operator's own disc, verified first (1,459,978,240 bytes, SHA-1
+`d4e70c064cc714ba8400a849cf299dbd1aa326fc`), with `parity_vs_onett.txt` passed explicitly
+(`scripts/phase0/run_checkpoints.sh` still defaults to `vs_match.txt`, the script P0-08 measured
+as wrong for this build).
+
+| Run | Wall clock | Trace SHA-1 | Final scene |
+| --- | --- | --- | --- |
+| `run-1` | 55 s | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762 (retraces=2400)` |
+| `run-2` | 54 s | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | same |
+
+`scripts/phase0/compare_checkpoints.py run-1 run-2` → `identical: 2400 retraces`, exit 0. Both
+runs report `FPSCR requests: RN=0 NI=0`.
+
+**The finding: the reference is the one we already had.** The trace at `4fba3a0` is byte-identical
+to the `f0d76a28` trace, so everything committed between those two commits — the `-Oz` switch and
+the `-g0` debug level in `wasm/core/CMakeLists.txt`, the `core.json` fix in `phase0-build.yml`,
+`serve_spike.py`, documentation — moved nothing observable in the native build. The device parity
+check therefore has a real reference at the served core's commit rather than an inference from a
+neighbouring one, and the number to expect from the browser is `c79c53b9…`.
+
+**Timing, context only** (`--sim-times`, this 2-vCPU VPS, `nice`d, `--fast`, nearest-rank):
+in-match 762 rows mean **14.92 ms**, p95 18.34, p99 19.50, max 23.31; all 2400 rows mean 9.61,
+p95 18.98, p99 31.94, max 46.79 (retrace 1 is boot). This is the native side of the proxy pair,
+not a device number, and it does not enter the verdict.
+
+**Next:** PR 4 of the deploy plan (the page that populates OPFS from `/phase0/disc`) and PR 5
+(the `deploy_spike` step). Both are `[subito]`. The device runs (M1/M2 via road D) need the
+operator and no Cloudflare credentials.
