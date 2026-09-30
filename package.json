@@ -1,0 +1,17 @@
+{
+  "name": "melee-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Private Melee in the browser: Pages Functions and their tests. The web shell is its own package under web/.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p functions/tsconfig.json && tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250927.0",
+    "@types/node": "^22.0.0",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

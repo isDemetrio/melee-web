@@ -1,0 +1,131 @@
+name: Phase 0 — DOL pipeline and recompiler
+
+# Phase 0 starts from the disc image, and the disc image is the operator's own. This job
+# proves the whole chain in CI, on every run, instead of trusting that it worked once:
+#
+#   private DOL repo -> SHA-1 check -> port patch series -> recompiler -> generated C++
+#
+# It asserts the numbers the recompiler produced on the operator's VPS (144 translation
+# units, 20,076 functions, guest image digest 7883e197ff19) so a silent change in the
+# upstream pin, the patch series or the recompiler itself cannot pass unnoticed.
+#
+# The DOL and the generated tree are never written into the repository: the checkout goes
+# to $RUNNER_TEMP, and the hygiene gate runs afterwards to prove it.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'patches/**'
+      - 'scripts/apply_patches.sh'
+      - 'scripts/check_no_game_data.py'
+      - 'upstream/melee-unlocked'
+      - 'docs/UPSTREAM_PIN.md'
+      - '.github/workflows/phase0-recompile.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recompile:
+    name: Recompiler on the real DOL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DOL_REPO: isDemetrio/melee-orig-dol
+      DOL_SHA1: 08e0bf20134dfcb260699671004527b2d6bb1a45
+      DOL_SIZE: '4425184'
+      EXPECTED_TUS: '144'
+      EXPECTED_FUNCTIONS: '20076'
+      EXPECTED_IMAGE: 7883e197ff19
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Assert the upstream pin has not drifted
+        run: |
+          set -euo pipefail
+          expected=$(grep -oE '[0-9a-f]{40}' docs/UPSTREAM_PIN.md | head -1)
+          actual=$(git -C upstream/melee-unlocked rev-parse HEAD)
+          test "$expected" = "$actual" || { echo "pin drift: $expected vs $actual" >&2; exit 1; }
+
+      - name: Fetch main.dol from the private repository
+        env:
+          GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo 'DOL_REPO_TOKEN is not set: the DOL cannot be fetched, so nothing below is measured.' >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/dol"
+          # Raw media type: the API hands back the file's bytes, so no base64 round trip and
+          # no token in a clone URL.
+          gh api "repos/$DOL_REPO/contents/main.dol" -H 'Accept: application/vnd.github.raw' \
+            > "$RUNNER_TEMP/dol/main.dol"
+
+      - name: Verify the DOL before it is used
+        run: |
+          set -euo pipefail
+          size=$(stat -c%s "$RUNNER_TEMP/dol/main.dol")
+          digest=$(sha1sum "$RUNNER_TEMP/dol/main.dol" | cut -d' ' -f1)
+          echo "size:   $size (expected $DOL_SIZE)"
+          echo "sha1:   $digest"
+          test "$size" = "$DOL_SIZE" || { echo 'wrong size: not the v1.02 DOL' >&2; exit 1; }
+          test "$digest" = "$DOL_SHA1" || { echo 'wrong DOL: refusing to recompile it' >&2; exit 1; }
+
+      - name: Apply the port patch series
+        run: scripts/apply_patches.sh
+
+      - name: Run the recompiler
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/generated"
+          mkdir -p "$out"
+          python3 upstream/melee-unlocked/port/recomp/recomp.py \
+            --dol "$RUNNER_TEMP/dol/main.dol" --out "$out" | tee "$RUNNER_TEMP/recomp.log"
+          # The generated tree must not be inside the repository, whatever --out said.
+          case "$(realpath "$out")" in
+            "$(realpath "$GITHUB_WORKSPACE")"/*) echo 'generated tree inside the checkout' >&2; exit 1 ;;
+          esac
+          test -f "$out/guest_sources.cmake"
+
+      - name: Assert the measured output, not a plausible one
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/generated"
+          tus=$(find "$out" -maxdepth 1 -name 'guest_*.cpp' ! -name 'guest_table.cpp' | wc -l)
+          funcs=$(grep -h -c '^void f_' "$out"/guest_*.cpp | awk '{s+=$1} END {print s}')
+          image=$(grep -oE 'image [0-9a-f]{12}' "$RUNNER_TEMP/recomp.log" | awk '{print $2}')
+          echo "translation units: $tus"
+          echo "functions:         $funcs"
+          echo "guest image:       $image"
+          test "$tus" = "$EXPECTED_TUS" || { echo "TU count changed: $tus" >&2; exit 1; }
+          test "$funcs" = "$EXPECTED_FUNCTIONS" || { echo "function count changed: $funcs" >&2; exit 1; }
+          test "$image" = "$EXPECTED_IMAGE" || { echo "guest image digest changed: $image" >&2; exit 1; }
+          {
+            echo "translation_units=$tus"
+            echo "functions=$funcs"
+            echo "guest_image=$image"
+            echo "dol_sha1=$DOL_SHA1"
+            echo "upstream_pin=$(git -C upstream/melee-unlocked rev-parse HEAD)"
+            echo "runner=$(uname -srm)"
+          } > "$RUNNER_TEMP/phase0-stats.txt"
+
+      - name: Hygiene still holds after the run
+        run: |
+          set -euo pipefail
+          git status --porcelain
+          python3 scripts/check_no_game_data.py --all
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase0-stats
+          path: ${{ runner.temp }}/phase0-stats.txt
+          if-no-files-found: error

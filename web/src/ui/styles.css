@@ -1,0 +1,248 @@
+/* Shell styles. No framework, no CSS build step: the whole shell must stay under 1 MB. */
+
+:root {
+  --bg: #0d0d11;
+  --panel: #16161d;
+  --panel-2: #1e1e28;
+  --text: #e8e8ef;
+  --muted: #9a9aab;
+  --accent: #ff5c39;
+  --accent-2: #4cc9f0;
+  --danger: #ff4d6d;
+  --ok: #4ade80;
+  --radius: 10px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+#app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.screen {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px;
+  max-width: 780px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.screen[data-active='true'] {
+  display: flex;
+}
+
+h1 {
+  font-size: 26px;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+
+p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid #26262f;
+  border-radius: var(--radius);
+  padding: 18px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row--between {
+  justify-content: space-between;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid #32323e;
+  border-radius: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #14100e;
+  font-weight: 600;
+}
+
+input {
+  font: inherit;
+  color: var(--text);
+  background: #101017;
+  border: 1px solid #32323e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 30px;
+  letter-spacing: 0.3em;
+  color: var(--accent-2);
+}
+
+.checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.checks li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.checks .mark {
+  width: 1.2em;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.bad {
+  color: var(--danger);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+#game-canvas {
+  width: 100%;
+  aspect-ratio: 73 / 60;
+  background: #000;
+  border-radius: var(--radius);
+  display: block;
+  touch-action: none;
+}
+
+/* Touch overlay: pointer events only, no synthetic click delay (spec §4.2). */
+#touch-overlay {
+  position: fixed;
+  inset: auto 0 0 0;
+  height: 45%;
+  pointer-events: none;
+  display: none;
+}
+
+#touch-overlay[data-enabled='true'] {
+  display: block;
+}
+
+.stick-zone,
+.c-stick-zone,
+.button-zone {
+  position: absolute;
+  bottom: 0;
+  height: 100%;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+/* Control stick, C-stick and buttons, left to right. The zone *is* the control: deflection is
+   measured in finger travel from where the finger landed (web/src/input/touch.ts), so there is
+   no stick to aim at. */
+.stick-zone {
+  left: 0;
+  width: 40%;
+}
+
+.c-stick-zone {
+  left: 40%;
+  width: 18%;
+}
+
+.button-zone {
+  right: 0;
+  width: 42%;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  align-content: center;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.touch-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.status {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.log {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+}

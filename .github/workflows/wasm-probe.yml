@@ -1,0 +1,174 @@
+name: WASM toolchain probe
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'wasm/**'
+      - 'patches/**'
+      - 'EMSDK_VERSION'
+      - 'scripts/apply_patches.sh'
+      - '.github/workflows/wasm-probe.yml'
+      - 'docs/UPSTREAM_PIN.md'
+      - 'upstream/melee-unlocked'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Runner and pin
+        id: pin
+        shell: bash
+        run: |
+          nproc
+          free -m
+          df -h
+          python3 - <<'PY'
+          import pathlib, re, subprocess, os
+          text = pathlib.Path('docs/UPSTREAM_PIN.md').read_text()
+          match = re.search(r'\| Pinned commit \| `([0-9a-f]{40})` \|', text)
+          assert match, 'Missing authoritative upstream pin'
+          head = subprocess.check_output(['git', '-C', 'upstream/melee-unlocked', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == match[1], (head, match[1])
+          version = pathlib.Path('EMSDK_VERSION').read_text()
+          assert re.fullmatch(r'\d+\.\d+\.\d+\n', version), 'Expected one pinned release line'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('emsdk=' + version)
+          PY
+          python3 scripts/check_no_game_data.py --all
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ steps.pin.outputs.emsdk }}
+      - name: Native baseline from unpatched upstream
+        shell: bash
+        run: |
+          mkdir -p wasm-probe/out/native
+          git -C upstream/melee-unlocked diff --exit-code
+          for source in fma_vectors bench; do
+            g++ -std=c++17 -O2 -mfma -ffp-contract=off -fno-fast-math \
+              -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
+              "wasm/probe/$source.cpp" -o "wasm-probe/out/native/$source"
+          done
+          wasm-probe/out/native/fma_vectors --dump wasm-probe/native.bin > wasm-probe/native.sha256
+          wasm-probe/out/native/bench > wasm-probe/native-bench.json
+      - name: Patch and build WASM
+        shell: bash
+        run: |
+          bash scripts/apply_patches.sh
+          emcmake cmake -S wasm/probe -B wasm-probe/out/wasm -DCMAKE_BUILD_TYPE=Release
+          cmake --build wasm-probe/out/wasm --parallel 2
+      - name: Run upstream tests under Node
+        run: |
+          # The emcc output is CommonJS, but Node walks up from this directory and finds the
+          # repository package.json with "type": "module", so it parses these generated files
+          # as ES modules and dies on `require is not defined`. Pin the interpretation for the
+          # generated directory only, rather than dropping "type": "module" from the root.
+          printf '{"type":"commonjs"}\n' > wasm-probe/out/wasm/package.json
+          ctest --test-dir wasm-probe/out/wasm --output-on-failure
+      - name: Measure WASM and publish benchmark summary
+        shell: bash
+        run: |
+          node wasm-probe/out/wasm/fma_vectors.js --dump wasm-probe/wasm.bin > wasm-probe/wasm.sha256
+          node wasm-probe/out/wasm/bench.js > wasm-probe/wasm-bench.json
+          python3 - <<'PY'
+          import json, os, pathlib, platform, subprocess
+          root = pathlib.Path('wasm-probe')
+          result = {
+              'emsdk': pathlib.Path('EMSDK_VERSION').read_text().strip(),
+              'upstream': subprocess.check_output(['git', '-C', 'upstream/melee-unlocked', 'rev-parse', 'HEAD'], text=True).strip(),
+              'runner': platform.platform(),
+              'node': subprocess.check_output(['node', '--version'], text=True).strip(),
+              'native': json.loads((root / 'native-bench.json').read_text()),
+              'wasm': json.loads((root / 'wasm-bench.json').read_text()),
+          }
+          output = json.dumps(result, indent=2) + '\n'
+          (root / 'bench.json').write_text(output)
+          print(output)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('Benchmark (no performance threshold):\n```json\n' + output + '```\n')
+          PY
+      - name: Classify FMA divergences and gate
+        shell: bash
+        run: |
+          # No --allow-nan-payload-differences: CI enforces bit-exactness, and the
+          # classification table is what makes a failure actionable.
+          status=0
+          wasm-probe/out/native/fma_vectors --compare wasm-probe/native.bin wasm-probe/wasm.bin \
+            > wasm-probe/fma-divergence.txt || status=$?
+          cat wasm-probe/fma-divergence.txt
+          {
+            echo "FMA divergence classification (native x86 intrinsics vs WASM fma()), exit ${status}:"
+            echo '~~~'
+            cat wasm-probe/fma-divergence.txt
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import pathlib, re
+          root = pathlib.Path('wasm-probe')
+          report = (root / 'fma-divergence.txt').read_text()
+          for side in ('native', 'wasm'):
+              printed = (root / f'{side}.sha256').read_text().strip()
+              assert re.fullmatch('[0-9a-f]{64}', printed), f'Malformed {side} hash'
+              dumped = re.search(rf'^sha256 {side} ([0-9a-f]{{64}})$', report, re.M)
+              assert dumped, f'Compare did not hash the {side} dump'
+              assert dumped[1] == printed, f'{side} dump differs from what {side} hashed'
+          PY
+          # The gate is strict, so this step already fails on any divergence at all. This
+          # second assertion says *which* classes are allowed to be the reason: the four
+          # arithmetic classes must be exactly zero against the native reference, whatever
+          # the NaN bit patterns do. It is what proves the shim guard (wasm/compat/fma.h)
+          # works, and it fails with a precise message if a new arithmetic divergence
+          # appears instead of only moving the exit status.
+          python3 - <<'PY'
+          import os, pathlib
+          # Parse the main table explicitly -- its header, then its rows up to the blank
+          # line -- instead of scanning the whole report with a regex: the report now also
+          # prints per-path tables whose rows begin with the same kind names.
+          lines = pathlib.Path('wasm-probe/fma-divergence.txt').read_text().splitlines()
+          head = next(i for i, line in enumerate(lines)
+                      if line.startswith('divergence') and 'gate' in line)
+          kinds = ('nan-vs-number', 'nan-sign', 'nan-payload', 'zero-sign', 'subnormal', 'value')
+          totals = {}
+          for line in lines[head + 1:]:
+              if not line.strip():
+                  break
+              cells = line.split()
+              assert len(cells) >= 3, f'malformed classification row: {line!r}'
+              assert cells[0] in kinds, f'unexpected row in the classification table: {line!r}'
+              totals[cells[0]] = int(cells[2])
+          missing = [kind for kind in kinds if kind not in totals]
+          assert not missing, f'classification table is missing rows: {missing}'
+          arithmetic = {k: totals[k] for k in ('nan-vs-number', 'zero-sign', 'subnormal', 'value')}
+          print('arithmetic parity (native reference): ' + ', '.join(f'{k}={v}' for k, v in arithmetic.items()))
+          assert not any(arithmetic.values()), f'arithmetic divergence vs native: {arithmetic}'
+          residual = {k: totals[k] for k in ('nan-sign', 'nan-payload') if totals[k]}
+          if residual:
+              print(f'residual divergence, NaN bit patterns only: {residual}')
+              print('PARKED: docs/OPEN_QUESTIONS.md Q7 decides whether NaN bits must match the reference.')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('Arithmetic parity vs the native reference: 0 divergences in '
+                        'nan-vs-number, zero-sign, subnormal, value.\n')
+              if residual:
+                  out.write(f'Residual divergence is confined to NaN bit patterns ({residual}). '
+                            'That is what keeps this job red; it is parked as '
+                            'docs/OPEN_QUESTIONS.md Q7 and is not a toolchain defect.\n')
+          PY
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wasm-probe
+          path: |
+            wasm-probe/bench.json
+            wasm-probe/*-bench.json
+            wasm-probe/*.sha256
+            wasm-probe/fma-divergence.txt
+          if-no-files-found: warn

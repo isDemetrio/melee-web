@@ -1,0 +1,56 @@
+name: Pages Functions
+on:
+  pull_request:
+    paths:
+      - 'functions/**'
+      - 'tests/functions/**'
+      - 'vitest.config.ts'
+      - 'tsconfig.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'wrangler.toml'
+      - '.github/workflows/functions.yml'
+  push:
+    paths:
+      - 'functions/**'
+      - 'tests/functions/**'
+      - 'vitest.config.ts'
+      - 'tsconfig.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'wrangler.toml'
+      - '.github/workflows/functions.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The tooling is installed at the repository root, never inside functions/: every
+      # file below that directory is treated as a route by `wrangler pages functions
+      # build`, including the .d.ts files of node_modules. See vitest.config.ts.
+      - name: Install test tooling
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            echo "::notice::no lockfile yet, installing without one; commit the artifact below"
+            npm install --no-audit --no-fund
+          fi
+      - run: npm run typecheck
+      - run: npm test
+      - name: Preserve lockfile for operator review and commit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functions-package-lock
+          path: package-lock.json
+          if-no-files-found: ignore
+      # Compilation checks routing without deploying; actual Access/R2/TURN wiring needs a preview.
+      - name: Check Pages bundle
+        run: npx --yes --package=wrangler@4 wrangler pages functions build --outdir=/tmp/melee-pages-functions

@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Glob/regex rules that assign every extracted file to exactly one group.",
+    "First match wins; a file that matches nothing gets `default`.",
+    "Groups follow docs/SPEC_PIANO.md: boot, menu, character:<name>, stage:<name>,",
+    "music, movies, other. A rule may use a named-group regex instead of a glob,",
+    "and its group string may substitute the capture, e.g. \"character:{name}\".",
+    "UNVERIFIED AGAINST THE REAL DISC: these paths are the ones the plan expects,",
+    "but no ISO exists yet, so whether they classify the real filesystem correctly",
+    "is unknown (docs/PLAN_BREAKDOWN.md T8, docs/OPEN_QUESTIONS.md Q1). The manifest",
+    "generator fails loudly on a group string outside the grammar, and the test suite",
+    "only asserts these rules against synthetic names."
+  ],
+  "default": "other",
+  "rules": [
+    { "glob": "files/opening.bnr", "group": "movies" },
+    { "glob": "files/*.thp", "group": "movies" },
+    { "glob": "files/**/*.thp", "group": "movies" },
+    { "glob": "files/audio/**", "group": "music" },
+    { "glob": "files/**/*.hps", "group": "music" },
+    { "glob": "files/**/*.ssm", "group": "music" },
+    { "regex": "files/Pl(?P<name>[A-Za-z]{2})\\.(dat|rat)$", "group": "character:{name}" },
+    { "regex": "files/Gr(?P<name>[A-Za-z0-9]{2})\\.(dat|rat)$", "group": "stage:{name}" },
+    { "glob": "files/Gm*.dat", "group": "menu" },
+    { "glob": "files/Mn*.dat", "group": "menu" },
+    { "glob": "files/*.dat", "group": "boot" }
+  ]
+}
