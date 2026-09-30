@@ -1,4 +1,4 @@
-# Linux headless reference — unverified offline implementation
+# Linux headless reference — offline implementation, now verified to boot and play a match
 
 This is an **honest partial port, not yet an end-to-end proof**. No compilation or
 execution was performed on the VPS. The new Actions workflow must establish that
@@ -107,5 +107,24 @@ HLE implementations cover every HLE-list name present in the pinned symbol map,
 whitespace and staged game-data hygiene checked. FIFO tests cover fragmented
 commands, BP masks, draw/XF payload framing, and display-list interrupts; **these
 are scheduled for CI, not run here**. Submodule contents and `docs/PHASE0_TASKS.md`
-were not edited. Build, boot, 2400 checkpoints, scripted match entry, and Windows
-parity remain unverified.
+were not edited.
+
+## Status after verification (2026-09-30, by the operator's agent)
+
+This section is not part of the original implementation report; it records what
+happened once CI and a machine with a disc image ran it, because the paragraph above
+was written before either existed.
+
+- **Compiles**: CI builds `melee_core_headless` — 158 ninja targets, `native_fifo`
+  1/1 passed, ~6m18s on a 2-core runner. One fix was needed and is in the tree:
+  `ppc::init_dispatch()` is declared in `ppc_runtime.cpp` and forward-declared in
+  `port/app/main.cpp`, not in `ppc.h`, so the entry point declares it itself.
+- **Boots and plays a match**: 2400 retraces in 50–54s on a 2-vCPU VPS, exit 0,
+  every `cpu` and `ram` hash distinct, two independent runs bit-identical.
+- **Scripted match entry works, but not with the script this report assumed.**
+  `vs_match.txt` ends at `mode=1 state=0 match_frame=0` — a menu, no match.
+  `port/scripts/parity_vs_onett.txt` ends at `mode=2 state=2 match_frame=762`.
+- **Still unverified**: Windows parity, and any comparison against a WASM build —
+  no WASM core exists yet.
+
+Full numbers: `docs/PROGRESS.md`, section "The first native run".
