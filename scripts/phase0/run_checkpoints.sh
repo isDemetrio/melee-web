@@ -44,13 +44,18 @@ mkdir -p "$out/card"
 
 start=$(date +%s)
 set +e
-nice -n 10 "$exe" \
+# A hard ceiling: a boot that deadlocks on a DVD worker would otherwise sit there for ever.
+# 2400 frames with --fast should take minutes; the ceiling is deliberately generous.
+timeout "${RUN_TIMEOUT:-1800}" nice -n 10 "$exe" \
   --iso "$iso" --headless --fast --frames "$frames" --time-base 1 --volume 0 \
   --script "$script" --card-dir "$out/card" \
   --state-trace "$out/trace.csv" > "$out/stdout.log" 2>&1
 status=$?
 set -e
 end=$(date +%s)
+if [ "$status" = 124 ]; then
+  echo "TIMED OUT after ${RUN_TIMEOUT:-1800}s (status 124): the run did not finish" >&2
+fi
 
 rows=$(wc -l < "$out/trace.csv" 2>/dev/null || echo 0)
 echo "exit status: $status"
