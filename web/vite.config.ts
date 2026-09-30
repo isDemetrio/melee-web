@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 /**
@@ -18,6 +19,10 @@ export default defineConfig({
   root: '.',
   publicDir: 'public',
   build: {
+    rollupOptions: { input: {
+      main: fileURLToPath(new URL('./index.html', import.meta.url)),
+      spike: fileURLToPath(new URL('./spike.html', import.meta.url)),
+    } },
     target: 'es2022',
     outDir: '../dist',
     emptyOutDir: true,

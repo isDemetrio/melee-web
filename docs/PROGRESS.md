@@ -314,3 +314,58 @@ verification list asks for it.
 **Deviation, recorded on purpose.** P0-09's task entry expects this in a CI job. It ran here
 instead, because CI has no disc image (D1 unanswered). The comparison logic is the same code
 either way; what differs is who owns the disc.
+
+
+## P0-10 / S6 — browser Worker harness, 2026-09-30
+
+Implementation: `web/spike.html`, one module Worker per run, ES-module web factory,
+WORKERFS disc mount, raw CSV/result JSON download, checkpoint comparison and nearest-rank
+simulation statistics. The shell build includes the page but no core; only the WASM
+workflow assembles `/spike-core/` and tests it in Chromium with a synthetic 0x440-byte
+header. No game data is included in the test. Python remains the authoritative comparator.
+
+P0-10 deviation: WORKERFS reads the selected File synchronously on demand instead of
+MEMFS-preloading the 1,459,978,240-byte ISO. No ISO upload or whole-disc memory copy.
+The service worker bypasses `/spike-core/`; controlled spike pages refuse a run.
+
+Plan/repository discrepancy: S2 landed `upload_module` and `melee-core-wasm-node`, not
+`upload_wasm` or a combined artifact. S6 preserves that Node-only interface and adds
+`upload_spike` (default false, dispatch only, three-day private artifact). No S1/S2 runtime
+or script changes, upstream edits or new port patches. Real-disc browser parity, device
+performance and go/no-go remain unmeasured; S7 and Q8 require the operator's desktop/ISO
+and confirmation of the web artifact exception. CI evidence will be recorded below.
+
+### S6 measured verification
+
+Implementation commit `d3cbbc672e0cd0d49e26e66c81ff17e35a8345cf`, PR #12:
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36729092794` (WASM core) | **success** | job 33m20s; offline compile/link 846 s, release guest 969 s; reported build wall 1905 s |
+| `36729092730` (PR CI) | **success** | 217 unit tests across 17 files; 10 shell Chromium tests, 8.4 s test time |
+| `36729059364` (push CI) | **success** | web job 38 s, browser job 1m51s |
+| `36729092834` (WASM probe) | **success** | job 1m37s |
+
+WASM run log: Node module **87,118,511 bytes**, web module **87,118,045 bytes**;
+both `within_pages_limit: false` (limit 26,214,400 bytes), both
+`forbidden_libm_imports: []`. Highest compiler peak RSS **7,425,808 KiB**.
+Spike page build step 22 s; Chromium setup/test step approximately 36 s;
+**one synthetic-disc test passed in 3.6 s**. Its assertions verify the module loads in a
+Worker, WORKERFS reads the selected File, `callMain` returns exit 1 with
+`FATAL: cannot read full Melee DOL`, the page is cross-origin isolated and the result
+JSON download becomes visible. Neither WORKERFS export nor ExitStatus fallback was needed.
+Local checks: **66 Python tests passed**, staged and `--all` game-data gates passed.
+
+**Demonstrated:** the CI-built spike page serves and executes the web core in Chromium
+with a synthetic disc. **Not demonstrated:** real-disc browser boot, 2400-checkpoint browser
+parity, phone/desktop simulation timings, or the go/no-go. No spike artifact was uploaded;
+Cloudflare deployment was skipped for missing credentials. S7 remains operator-dependent
+(Q8); the 87 MB core cannot go on Pages. No build or browser ran on the VPS.
+
+Integration note: main advanced to `d0ef872` (PR #11) during S6. Its P0-09 report,
+Node-capable checkpoint runner with `--sim-times`, and narrowed workflow script paths
+are preserved. Only the report append conflicted. The runner still defaults to
+`vs_match.txt`; S6 explicitly uses `parity_vs_onett.txt`, without editing the runner.
+The synthetic-disc failure is now at `native/headless_host.cpp:199` (plan: line 196).
+All measured runs above precede this documentation/base integration; subsequent PR checks
+must pass before merge. No compiled source changed during integration.

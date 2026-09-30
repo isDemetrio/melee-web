@@ -127,3 +127,15 @@ The original options, kept for the record:
    closed rather than deferred.
 4. **Defer** until the WASM-x86 vs WASM-arm64 comparison exists, since browsers,
    not native Dolphin, are the netcode peers.
+
+## Q8 — S7 browser device and private spike artifact
+
+S6 adds an off-by-default `upload_spike` dispatch input to `phase0-build.yml`, separate
+from the existing Node-only `upload_module`. Before S7, the operator must confirm that
+D3's private artifact exception extends to the web core plus page (three-day retention),
+and provide a desktop with Node >=18, gh and a local copy of the ISO/reference trace.
+The ISO is currently verified only on the VPS; Chromium is forbidden there. No web-core
+artifact upload or real-disc browser run has been performed by S6. No public deployment:
+the ~87 MB WASM exceeds Pages' 25 MiB per-file limit. S7's planned `upload_wasm=true`
+command must use `upload_spike=true` in this repository. Rebuild the native reference at
+the spike's commit before claiming same-commit browser parity.
