@@ -88,7 +88,10 @@ jobs:
           # dispatches at different levels would produce two indistinguishable downloads. The
           # default keeps the documented name (docs/PHASE0_TASKS.md D3); other levels get a suffix.
           suffix=""
-          if [ "$MELEE_OPT" != "-Oz" ]; then suffix="-$MELEE_OPT"; fi
+          # The level already starts with a dash: stripping it keeps the artifact name
+          # melee-core-wasm-node-O1 rather than ...-node--O1, which is what the first dispatch
+          # produced.
+          if [ "$MELEE_OPT" != "-Oz" ]; then suffix="-${MELEE_OPT#-}"; fi
           {
             echo "NODE_ARTIFACT=melee-core-wasm-node$suffix"
             echo "SPIKE_ARTIFACT=melee-spike-dist$suffix"

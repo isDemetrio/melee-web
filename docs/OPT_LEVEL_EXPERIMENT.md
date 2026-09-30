@@ -82,5 +82,54 @@ livello.
 
 ## Esito
 
-*(da compilare con i numeri appena la run esiste: livello, byte del modulo web e Node, `within_pages_limit`,
-SHA-1 della traccia, esito di `compare_checkpoints.py`, e la data.)*
+**La prima misura: `-O1` è 5,2 volte più grande e non entra nel limite di Pages.**
+
+Dispatch `phase0-build.yml` da `main` (`f008e27`) con `opt_level=-O1`, `upload_module=true`,
+`upload_spike=true`: run **36779031737**, success, 2026-09-30 21:22 → 22:00 UTC. Il riepilogo della
+run stampa `opt_level=-O1`, e `core.json` dell'artefatto dice `{"commit":"f008e27881e67b5233d8384c60934713b9e92eca","opt":"-O1"}`
+— il campo riporta il livello con cui CMake ha configurato, non quello che il workflow intendeva.
+
+| modulo | byte | limite Pages | `within_pages_limit` |
+| --- | --- | --- | --- |
+| `melee_core_node.wasm` a `-O1` | 85.658.487 | 26.214.400 | **false** |
+| `melee_core_web.wasm` a `-O1` | 85.658.030 | 26.214.400 | **false** |
+| `melee_core_node.wasm` a `-Oz` (run 36776512026) | 16.323.657 | 26.214.400 | true |
+| `melee_core_web.wasm` a `-Oz` (run 36776512026) | 16.323.255 | 26.214.400 | true |
+
+Dove finiscono quei byte, letto aprendo il modulo e non dedotto: la sezione `code` è **84.881.224
+byte, il 99,1%** del file. Non è la sezione dei nomi, non è debug information: è codice che `-Oz`
+elimina. Quindi l'idea "compila a `-O1` e poi strippa i simboli" non ha nulla da strippare.
+
+**Criterio A2: cade.** Per la strada Cloudflare il livello di ottimizzazione è chiuso: `-Oz` resta il
+core spedito, e non per preferenza ma perché a `-O1` il modulo non si può pubblicare. La leva resta
+aperta solo dove il limite di 25 MiB non esiste (il tunnel della misura sul telefono, strada D), e
+lì ha senso misurarla solo se serve a capire quanto costa `-Oz` in velocità — non a cambiare il core
+del prodotto.
+
+La conseguenza utile non è "quindi niente": è che la strada per recuperare velocità senza perdere
+dimensione è **un livello per file** — le unità calde (interprete PPC, simulazione) a `-O2`/`-O3` e
+tutto il resto a `-Oz`. Costerebbe pochi byte e va misurata con questo stesso metodo (parità 2400
+checkpoint, byte, `within_pages_limit`). Non è stato fatto stanotte.
+
+### Parità e tempi del modulo `-O1`
+
+Il modulo Node scaricato dall'artefatto è stato corso due volte sulla VPS contro il disco
+dell'operatore, con lo stesso script e gli stessi 2400 frame (`scripts/phase0/run_checkpoints.sh`), e
+confrontato con il riferimento nativo `reference-4fba3a0/run-1/trace.csv`.
+
+| corsa | esito | traccia SHA-1 | confronto | media in-match | p95 | p99 | max | orologio |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 0 | `c79c53b9…` | `identical: 2400 retraces` | 28.46 | 35.60 | 51.72 | 84.66 | 90 s |
+| 2 | 0 | `c79c53b9…` | `identical: 2400 retraces` | 25.31 | 32.51 | 39.30 | 61.75 | 81 s |
+
+Entrambe finiscono a `mode=2 state=2 match_frame=762`. **`-O1` è bit-identico al nativo**, come lo era
+storicamente, e sulla VPS è circa il **7% più veloce** di `-Oz` (media delle medie 26,9 ms contro
+28,9 ms delle tre corse `-Oz` dello stesso giorno). Il numero vale per Node su 2 vCPU condivise: è un
+proxy, non una misura sul telefono.
+
+**Ma la parità non riabilita `-O1`.** Il criterio che è caduto è la dimensione, non la correttezza:
+un modulo corretto che non si può pubblicare resta un modulo che non si può pubblicare. La leva
+serve quindi solo a sapere quanto costa `-Oz` in velocità, e a giustificare la strada successiva —
+un livello per file.
+
+
