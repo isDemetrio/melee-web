@@ -16,11 +16,20 @@ target_include_directories(core_options INTERFACE ${MELEE_CORE_INCLUDES})
 # to the native reference on all 2400 checkpoints, so any -Oz module that reproduces the same
 # trace is bit-exact too, whatever it optimised away. -ffp-contract=off and -fno-fast-math are
 # not negotiable at any level: they are what keeps the arithmetic reproducible.
-target_compile_options(core_options INTERFACE -Oz -g0 -ffp-contract=off -fno-fast-math)
+#
+# The level itself is a variable rather than a constant so that a rebuild at another level can be
+# produced from CI without editing this file (docs/OPT_LEVEL_EXPERIMENT.md). The default stays
+# -Oz, so an ordinary build is byte-for-byte the build it was before this change.
+set(MELEE_OPT "-Oz" CACHE STRING "Optimisation level for the core, compile and link")
+# The level actually in force, written where the workflow can read it. The workflow used to grep
+# the first -O token out of this file for core.json's "opt" field, which matched the "-O1" in the
+# comment above rather than the level being compiled with.
+file(WRITE "${CMAKE_BINARY_DIR}/melee_opt.txt" "${MELEE_OPT}")
+target_compile_options(core_options INTERFACE ${MELEE_OPT} -g0 -ffp-contract=off -fno-fast-math)
 target_compile_definitions(core_options INTERFACE _FILE_OFFSET_BITS=64 MELEE_SINGLE_THREAD=1)
 if(EMSCRIPTEN)
   target_compile_options(core_options INTERFACE -fwasm-exceptions)
-  target_link_options(core_options INTERFACE -Oz -g0 -fwasm-exceptions -ffp-contract=off -fno-fast-math
+  target_link_options(core_options INTERFACE ${MELEE_OPT} -g0 -fwasm-exceptions -ffp-contract=off -fno-fast-math
     -sERROR_ON_UNDEFINED_SYMBOLS=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB
     -sSTACK_SIZE=8MB -sALLOW_TABLE_GROWTH=1 -sASSERTIONS=0)
 endif()
