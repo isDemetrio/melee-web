@@ -50,6 +50,11 @@ jobs:
         # publish something fail closed, without any Cloudflare credentials.
         run: bash scripts/tests/test_deploy_guard.sh
 
+      - name: Phase 0 checkpoint runner guards
+        # run_checkpoints.sh is the one script that writes a game-derived trace. Every case
+        # ends in a refusal or in a dry run, so this needs no disc image and executes nothing.
+        run: bash scripts/tests/test_phase0_runner.sh
+
       - name: Validate workflow files
         run: |
           set -euo pipefail
