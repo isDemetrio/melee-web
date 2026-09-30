@@ -68,18 +68,41 @@ agent's call whether to raise it upstream.
 
 The WASM probe measured that native x86 FMA and the WASM `std::fma` path are not
 bit-identical over its 8,000,000-result corpus (`wasm/README.md`, "Finding"). The
-classified rerun will say whether the differences are arithmetic (a blocking bug,
-no decision needed: it must be fixed) or confined to NaN results. Only in the
-second case is there a choice:
+classified run 36647200912 says the differences are **confined to NaN bit patterns**:
+18,680 `nan-sign` and 1,464 `nan-payload` results, every one of them with a NaN operand
+(`nan-in`), while `value`, `subnormal` and `nan-vs-number` are 0. The 120 `zero-sign`
+divergences in that run were not latitude but a defect in the pinned musl `fma.c`, fixed
+in our shim (`wasm/compat/fma.h`) and expected to be 0 in the next run.
 
-1. **Keep bit-exact** and make the runtime canonicalize NaN results of the FP
-   helpers on every platform. Costs a compare per FP op on the hot path and makes
-   the port deliberately differ from Jit64 NaN bits.
+Root cause, read in the toolchain source rather than inferred: musl's `fma.c:54-55` sends
+every non-finite operand to ordinary WASM arithmetic (`return x*y + z`), and the WASM
+specification leaves the sign and payload of a NaN produced by arithmetic to the engine.
+The patch additionally negates an operand before the call for `fnmadd`/`fnmsub`, which the
+x86 instruction does not do to a NaN operand. So the residual is the platform's NaN bits,
+not arithmetic.
+
+Why it still matters: a NaN *sign* is observable through an integer sign test on a stored
+float and through division; a NaN *payload* is observable only if a NaN reaches state that
+is compared or checksummed. Whether the game ever feeds NaN into these four operations is
+**not measured** and needs the running build (Q1).
+
+Options:
+
+1. **Keep bit-exact** and make the runtime canonicalize NaN results of the FP helpers on
+   every platform. Costs a compare per FP op on the hot path and makes the port
+   deliberately differ from Jit64 NaN bits.
 2. **Accept NaN-payload differences** (enable `--allow-nan-payload-differences`
    in CI), only after the running build shows the game never feeds NaN into these
    operations. A NaN *sign* difference would still fail; it needs option 1.
-3. **Defer** until the WASM-x86 vs WASM-arm64 comparison exists, since browsers,
+3. **Emulate the reference's NaN rule in the shim**: return the first NaN operand quieted
+   and unnegated, and the x86 invalid-operation default NaN for `0*inf`. Deterministic on
+   every engine, closest to the native reference, and it costs the same kind of per-op
+   check as option 1 — but it pins x86 NaN bits into the port's contract on purpose.
+4. **Defer** until the WASM-x86 vs WASM-arm64 comparison exists, since browsers,
    not native Dolphin, are the netcode peers.
 
-- **Blocked until answered**: the default of the probe gate stays strict; nothing
-  else is blocked before Phase 3.
+- **Blocked until answered**: the default of the probe gate stays strict, so the WASM
+  probe job is red for this reason alone (the CI and Pages Functions workflows are green).
+  Nothing else is blocked before Phase 3, but `main` cannot be merged while a workflow is
+  red. Nothing was decided unilaterally here: the fix that was applied is the one upstream
+  musl and Emscripten already ship.

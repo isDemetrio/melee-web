@@ -33,3 +33,7 @@ add_executable(fma_vectors fma_vectors.cpp)
 # --dump writes 64 MB of raw result bits to the host file system for the native compare.
 target_link_options(fma_vectors PRIVATE -sNODERAWFS=1)
 add_executable(bench bench.cpp)
+# Our own shim test, through the patched ppc.h: it fails on musl fma.c's zero-addend
+# shortcut (wasm/compat/fma.h) and on any drift in the four wrappers' sign conventions.
+add_executable(fma_shim_test fma_shim_test.cpp)
+add_test(NAME fma_shim_test COMMAND "${NODE_EXECUTABLE}" "$<TARGET_FILE:fma_shim_test>")

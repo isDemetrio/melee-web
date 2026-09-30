@@ -1,10 +1,11 @@
 --- a/port/runtime/ppc/ppc.h
 +++ b/port/runtime/ppc/ppc.h
-@@ -7,8 +7,12 @@
+@@ -7,8 +7,13 @@
  #include <atomic>
  #include <cstdint>
  #include <cstring>
 +#if defined(__EMSCRIPTEN__) || !defined(_MSC_VER)
++#include "wasm/compat/fma.h"
 +#include "wasm/compat/intrin.h"
 +#else
  #include <immintrin.h>
@@ -13,23 +14,24 @@
  
  namespace ppc {
  
-@@ -275,6 +279,15 @@
+@@ -275,6 +280,16 @@
    i = (i & 0xFFFFFFFFF8000000ull) + (i & 0x8000000ull);
    std::memcpy(&d, &i, 8); return d;
  }
 +#if defined(__EMSCRIPTEN__) || !defined(_MSC_VER)
 +// Match the intrinsic sign conventions in pinned port/runtime/ppc/ppc.h:278-290.
 +// One fma call provides one rounding; negate operands, not the rounded result.
-+// NaN payload/sign parity is measured by the probe, not assumed here.
-+inline double fmadd(double a, double c, double b) { return std::fma(a, c, b); }
-+inline double fmsub(double a, double c, double b) { return std::fma(a, c, -b); }
-+inline double fnmadd(double a, double c, double b) { return std::fma(-a, c, -b); }
-+inline double fnmsub(double a, double c, double b) { return std::fma(-a, c, b); }
++// wasm_compat::fma is std::fma plus the guard for musl fma.c's zero-addend
++// shortcut; NaN sign/payload parity is measured by the probe, not assumed here.
++inline double fmadd(double a, double c, double b) { return wasm_compat::fma(a, c, b); }
++inline double fmsub(double a, double c, double b) { return wasm_compat::fma(a, c, -b); }
++inline double fnmadd(double a, double c, double b) { return wasm_compat::fma(-a, c, -b); }
++inline double fnmsub(double a, double c, double b) { return wasm_compat::fma(-a, c, b); }
 +#else
  // Hardware FMA, exactly as Jit64 emits VFMADD/VFMSUB/VFNMADD/VFNMSUB (scalar double).
  inline double fmadd(double a, double c, double b) {
    return _mm_cvtsd_f64(_mm_fmadd_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
-@@ -288,6 +301,7 @@
+@@ -288,6 +303,7 @@
  inline double fnmsub(double a, double c, double b) {  // PPC fnmsub = -(a*c - b) = VFNMADD
    return _mm_cvtsd_f64(_mm_fnmadd_sd(_mm_set_sd(a), _mm_set_sd(c), _mm_set_sd(b)));
  }

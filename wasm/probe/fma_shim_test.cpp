@@ -1,0 +1,81 @@
+// Guards the WASM FMA shim against the musl fma.c zero-addend shortcut, which loses the
+// sign of an exact zero (wasm/compat/fma.h). Runs under Node from ctest in the WASM
+// build only, through the patched ppc.h, so it exercises the code path the port uses.
+//
+// Every expected pattern here was confirmed against the platform's correctly rounded
+// fma before it was written; the probe's corpus comparison against the native x86
+// intrinsics is the measurement that matters, this is the cheap regression net.
+#include "ppc.h"
+#include "wasm/compat/fma.h"
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+static int failures = 0;
+
+static uint64_t bits(double d) { uint64_t u; std::memcpy(&u, &d, 8); return u; }
+static double from_bits(uint64_t u) { double d; std::memcpy(&d, &u, 8); return d; }
+
+static void expect(const char* what, double got, uint64_t want) {
+  const uint64_t g = bits(got);
+  if (g != want) {
+    std::printf("FAIL %-46s got=%016llx want=%016llx\n", what,
+                (unsigned long long)g, (unsigned long long)want);
+    ++failures;
+  } else {
+    std::printf("ok   %-46s %016llx\n", what, (unsigned long long)g);
+  }
+}
+
+// Edge operands, as raw patterns.
+constexpr uint64_t kMinSub = 0x0000000000000001ull;        // 2^-1074
+constexpr uint64_t kMinSubNeg = 0x8000000000000001ull;     // -2^-1074
+constexpr uint64_t kTwoPowNeg500 = 0x20B0000000000000ull;  // 2^-500
+constexpr uint64_t kTwoPowNeg600Neg = 0x9A70000000000000ull;  // -2^-600
+constexpr uint64_t kOnePlus2PowNeg52 = 0x3FF0000000000001ull;   // 1 + 2^-52
+constexpr uint64_t kNegOnePlus2PowNeg51 = 0xBFF0000000000002ull;  // -(1 + 2^-51)
+constexpr uint64_t kNegZero = 0x8000000000000000ull;
+constexpr uint64_t kPosZero = 0x0000000000000000ull;
+constexpr uint64_t kTwoPowNeg104 = 0x3970000000000000ull;  // 2^-104
+
+int main() {
+  static_assert(sizeof(double) == 8, "IEEE binary64 required");
+
+  // The zero-sign cases the probe reported: the exact product is nonzero but rounds to
+  // -0, and the addend is +0. musl's shortcut adds the zero and returns +0.
+  expect("fnmsub(2^-1074, 2^-1074, +0)", ppc::fnmsub(from_bits(kMinSub), from_bits(kMinSub), 0.0), kNegZero);
+  expect("fmadd(2^-1074, -2^-1074, +0)", ppc::fmadd(from_bits(kMinSub), from_bits(kMinSubNeg), 0.0), kNegZero);
+  expect("fmadd(2^-500, -2^-600, +0)", ppc::fmadd(from_bits(kTwoPowNeg500), from_bits(kTwoPowNeg600Neg), 0.0), kNegZero);
+  expect("fnmsub(2^-1074, 2^-1074, -0)", ppc::fnmsub(from_bits(kMinSub), from_bits(kMinSub), from_bits(kNegZero)), kNegZero);
+  expect("fmsub(2^-1074, 2^-1074, -0)", ppc::fmsub(from_bits(kMinSub), from_bits(kMinSub), from_bits(kNegZero)), kPosZero);
+
+  // The exact product is a signed zero here, so the exact sum is the IEEE addition of
+  // two zeros and the product alone is not the answer: -0 + +0 is +0. A guard that
+  // simply returned x*y when z is zero would flip these to -0 and diverge from the
+  // hardware reference in the opposite direction.
+  expect("fmadd(-0, 5, +0)", ppc::fmadd(from_bits(kNegZero), 5.0, 0.0), kPosZero);
+  expect("fmadd(0, -5, +0)", ppc::fmadd(0.0, -5.0, 0.0), kPosZero);
+  expect("fmadd(0, 5, +0)", ppc::fmadd(0.0, 5.0, 0.0), kPosZero);
+  expect("fnmadd(0, 5, +0)", ppc::fnmadd(0.0, 5.0, 0.0), kNegZero);
+
+  // One rounding over the exact product: a non-fused (x*y)+z returns +0 here.
+  expect("fma(1+2^-52, 1+2^-52, -(1+2^-51))",
+         wasm_compat::fma(from_bits(kOnePlus2PowNeg52), from_bits(kOnePlus2PowNeg52),
+                          from_bits(kNegOnePlus2PowNeg51)), kTwoPowNeg104);
+  // A nonzero addend still delegates to libc's fma, and the subnormal addend wins.
+  expect("fmadd(2^-1074, 2^-1074, 2^-1074)",
+         ppc::fmadd(from_bits(kMinSub), from_bits(kMinSub), from_bits(kMinSub)), kMinSub);
+
+  // Sign conventions of the four wrappers, on values where the result is exact.
+  expect("fmadd(3, 4, 5) = 17", ppc::fmadd(3.0, 4.0, 5.0), bits(17.0));
+  expect("fmsub(3, 4, 5) = 7", ppc::fmsub(3.0, 4.0, 5.0), bits(7.0));
+  expect("fnmadd(3, 4, 5) = -17", ppc::fnmadd(3.0, 4.0, 5.0), bits(-17.0));
+  expect("fnmsub(3, 4, 5) = -7", ppc::fnmsub(3.0, 4.0, 5.0), bits(-7.0));
+
+  if (failures) {
+    std::printf("\n%d expectation(s) failed\n", failures);
+    return 1;
+  }
+  std::puts("\nall FMA shim expectations hold");
+  return 0;
+}
