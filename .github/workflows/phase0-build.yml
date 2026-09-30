@@ -21,7 +21,13 @@ on:
       - 'wasm/**'
       - 'native/**'
       - 'patches/**'
-      - 'scripts/phase0/**'
+      # Only the scripts the build actually uses. The whole of scripts/phase0/** used to be
+      # listed, which meant that editing an unrelated tool — the checkpoint comparator, say —
+      # cost a 35-minute WASM build.
+      - 'scripts/phase0/time_compile.sh'
+      - 'scripts/phase0/fetch_and_recompile.sh'
+      - 'scripts/phase0/compile_report.py'
+      - 'scripts/phase0/wasm_report.py'
       - 'scripts/apply_patches.sh'
       - 'EMSDK_VERSION'
       - 'upstream/melee-unlocked'

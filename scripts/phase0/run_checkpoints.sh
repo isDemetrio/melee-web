@@ -22,8 +22,19 @@ script=${5:-upstream/melee-unlocked/port/scripts/vs_match.txt}
 EXPECTED_SIZE=1459978240
 EXPECTED_SHA1=d4e70c064cc714ba8400a849cf299dbd1aa326fc
 
-test -x "$exe" || { echo "not executable: $exe" >&2; exit 1; }
 test -f "$iso" || { echo "no disc image at $iso" >&2; exit 1; }
+
+# A native build is the executable itself; a WASM build is a .js loader plus its .wasm, so it
+# has to be handed to node. The loader sits beside the module, which is why the path is used
+# as given rather than copied anywhere.
+if [ "${exe##*.}" = js ]; then
+  test -f "$exe" || { echo "no module at $exe" >&2; exit 1; }
+  test -f "${exe%.js}.wasm" || { echo "no module at ${exe%.js}.wasm" >&2; exit 1; }
+  runner=(node "$exe")
+else
+  test -x "$exe" || { echo "not executable: $exe" >&2; exit 1; }
+  runner=("$exe")
+fi
 
 size=$(stat -c%s "$iso")
 if [ "$size" != "$EXPECTED_SIZE" ]; then
@@ -46,10 +57,11 @@ start=$(date +%s)
 set +e
 # A hard ceiling: a boot that deadlocks on a DVD worker would otherwise sit there for ever.
 # 2400 frames with --fast should take minutes; the ceiling is deliberately generous.
-timeout "${RUN_TIMEOUT:-1800}" nice -n 10 "$exe" \
+timeout "${RUN_TIMEOUT:-1800}" nice -n 10 "${runner[@]}" \
   --iso "$iso" --headless --fast --frames "$frames" --time-base 1 --volume 0 \
   --script "$script" --card-dir "$out/card" \
-  --state-trace "$out/trace.csv" > "$out/stdout.log" 2>&1
+  --state-trace "$out/trace.csv" --sim-times "$out/sim_times.csv" \
+  > "$out/stdout.log" 2>&1
 status=$?
 set -e
 end=$(date +%s)
@@ -61,6 +73,7 @@ rows=$(wc -l < "$out/trace.csv" 2>/dev/null || echo 0)
 echo "exit status: $status"
 echo "wall clock:  $((end - start))s for $frames requested frames"
 echo "trace rows:  $rows (header included)"
+sha1sum "$out/trace.csv" 2>/dev/null | sed 's/^/trace sha1:  /' || true
 head -2 "$out/trace.csv" 2>/dev/null || true
 echo "stdout tail:"
 tail -5 "$out/stdout.log" 2>/dev/null || true
