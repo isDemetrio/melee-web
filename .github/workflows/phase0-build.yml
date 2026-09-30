@@ -6,8 +6,18 @@ on:
         description: 'Upload the linked Node module as a private artifact (game-derived; see docs/PHASE0_TASKS.md D3)'
         type: boolean
         default: false
+      upload_spike:
+        description: 'Upload the spike page and web core as a private artifact (game-derived; S6)'
+        type: boolean
+        default: false
   pull_request:
     paths:
+      - 'web/spike.html'
+      - 'web/src/spike/**'
+      - 'web/tests/spike/**'
+      - 'web/playwright.spike.config.ts'
+      - 'web/public/sw.js'
+      - 'web/vite.config.ts'
       - 'wasm/**'
       - 'native/**'
       - 'patches/**'
@@ -93,6 +103,28 @@ jobs:
           for platform in node web; do
             python3 scripts/phase0/wasm_report.py "$RUNNER_TEMP/wasm/melee_core_$platform.wasm" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build the spike page around the web core (P0-10)
+        working-directory: web
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          npx tsc --noEmit
+          npx vite build --outDir "$RUNNER_TEMP/spike-dist" --emptyOutDir
+          mkdir -p "$RUNNER_TEMP/spike-dist/spike-core"
+          cp "$RUNNER_TEMP/wasm/melee_core_web.js" "$RUNNER_TEMP/wasm/melee_core_web.wasm" "$RUNNER_TEMP/spike-dist/spike-core/"
+          cp "$GITHUB_WORKSPACE/upstream/melee-unlocked/port/scripts/parity_vs_onett.txt" "$RUNNER_TEMP/spike-dist/spike-core/"
+          printf '{"commit":"%s","opt":"-O1"}\n' "$GITHUB_SHA" > "$RUNNER_TEMP/spike-dist/spike-core/core.json"
+      - name: Spike harness in Chromium with a synthetic disc header (no ISO)
+        working-directory: web
+        env:
+          SPIKE_DIST: ${{ runner.temp }}/spike-dist
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium
+          npx playwright test -c playwright.spike.config.ts
       - name: Numeric compilation report (also on failure)
         if: always()
         run: |
@@ -119,3 +151,11 @@ jobs:
           retention-days: 3
           if-no-files-found: error
       # Otherwise no guest-derived build products or caches are uploaded: only Actions logs.
+      - name: Upload the spike page with its core (opt-in private artifact)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_spike }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: melee-spike-dist
+          path: ${{ runner.temp }}/spike-dist
+          retention-days: 3
+          if-no-files-found: error

@@ -46,7 +46,7 @@ if(EMSCRIPTEN)
   endforeach()
   target_link_options(melee_core_node PRIVATE -sENVIRONMENT=node -sNODERAWFS=1 -sEXIT_RUNTIME=1)
   target_link_options(melee_core_web PRIVATE -sENVIRONMENT=web,worker -sFORCE_FILESYSTEM=1
-    -sMODULARIZE=1 -sEXPORT_NAME=createMeleeCore -sINVOKE_RUN=0
+    -sMODULARIZE=1 -sEXPORT_NAME=createMeleeCore -sINVOKE_RUN=0 -sEXPORT_ES6=1 -lworkerfs.js
     "-sEXPORTED_RUNTIME_METHODS=['FS','callMain']")
   add_custom_target(melee_core_wasm DEPENDS melee_core_node melee_core_web)
 endif()

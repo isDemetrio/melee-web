@@ -38,6 +38,9 @@ self.addEventListener('fetch', (event) => {
   // Never serve the API from cache: TURN credentials expire and the manifest changes.
   if (url.pathname.startsWith('/api/')) return;
 
+  // The spike core is rebuilt per commit and must never be served from cache.
+  if (url.pathname.startsWith('/spike-core/')) return;
+
   const isShell =
     SHELL.includes(url.pathname) ||
     url.pathname.endsWith('.js') ||

@@ -253,3 +253,22 @@ retraces are in-match, which is the number that matters for the rollback budget.
 **Consequences.** P0-08's first half is done and its numbers exist. The native-vs-WASM
 comparison (P0-09) still needs a WASM core, which does not exist yet (P0-04…P0-07), and the
 cross-platform criterion still needs D1 if it is ever to run in CI rather than here.
+
+## P0-10 / S6 — browser Worker harness, 2026-09-30
+
+Implementation: `web/spike.html`, one module Worker per run, ES-module web factory,
+WORKERFS disc mount, raw CSV/result JSON download, checkpoint comparison and nearest-rank
+simulation statistics. The shell build includes the page but no core; only the WASM
+workflow assembles `/spike-core/` and tests it in Chromium with a synthetic 0x440-byte
+header. No game data is included in the test. Python remains the authoritative comparator.
+
+P0-10 deviation: WORKERFS reads the selected File synchronously on demand instead of
+MEMFS-preloading the 1,459,978,240-byte ISO. No ISO upload or whole-disc memory copy.
+The service worker bypasses `/spike-core/`; controlled spike pages refuse a run.
+
+Plan/repository discrepancy: S2 landed `upload_module` and `melee-core-wasm-node`, not
+`upload_wasm` or a combined artifact. S6 preserves that Node-only interface and adds
+`upload_spike` (default false, dispatch only, three-day private artifact). No S1/S2 runtime
+or script changes, upstream edits or new port patches. Real-disc browser parity, device
+performance and go/no-go remain unmeasured; S7 and Q8 require the operator's desktop/ISO
+and confirmation of the web artifact exception. CI evidence will be recorded below.
