@@ -228,17 +228,31 @@ as the WASM target so that a checkpoint difference points at the platform, not t
   `::notice::skipped: no ISO available to CI` and exits 0, the same pattern as the deploy job);
   `scripts/phase0/run_checkpoints.sh`.
 - Run: `melee_core_native --iso <iso> --fast --frames 2400 --time-base 1 --volume 0
-  --script upstream/melee-unlocked/port/scripts/vs_match.txt --card-dir <empty>
-  --state-trace <csv>` (flags and script from `tools/validate_native.py:21,44-50`; each run gets
-  an empty card because boot differs with a save, `:38-39`). Verify the ISO first with its
-  size and SHA-1 (`docs/OPEN_QUESTIONS.md` Q1).
+  --script <script> --card-dir <empty> --state-trace <csv>` (flags from
+  `tools/validate_native.py:21,44-50`; each run gets an empty card because boot differs with a
+  save, `:38-39`). Verify the ISO first with its size and SHA-1 (`docs/OPEN_QUESTIONS.md` Q1).
+- **The script must be `@scene`-anchored. Measured 2026-09-30.** `vs_match.txt` is the wrong
+  script for this build: it assumes Slippi boot timing, this translation is `--no-slippi`, and
+  the run ends at `mode=1 state=0 match_frame=0` — 2400 deterministic retraces of a menu with
+  no match at all. `port/scripts/parity_vs_onett.txt` is the right template (its header records
+  that vanilla and native reach `GM_MENU` at retrace 403 and 702, so its entries are relative to
+  the retrace where the host first observes the scene). With it the same binary ends at
+  `mode=2 state=2 match_frame=762`, i.e. a match started around retrace 1638 and only ~762 of
+  the 2400 retraces are in-match — the number that matters for the rollback budget.
+- The risk below is now handled in code: `native/headless_main.cpp` prints
+  `final scene: mode=… state=… match_frame=…` at the end of every run, so a checkpoint count
+  can never again be read as "a match was played" without evidence.
 - Verification: two runs of the same binary identical (the spec's fallback when no Windows
   reference exists, SPEC step 1); single-thread vs threaded native build identical (proves
   patch 0005 did not move guest timing); no `mmio read `, `mmio write ` or `FATAL` in the log
   (`tools/validate_native.py:57-58`); the patch-0003 FPSCR counter recorded.
-- Risk: the boot path from P0-06 is wrong and the script desynchronises from the menus
-  (visible as a match never starting; the trace alone will not say it, so log the scene at the
-  end, `host.cpp` has scene fields for `@scene` scripts, `:624-626`).
+- Measured cost on the weakest machine in the project (the operator's 2-vCPU VPS, process
+  `nice`d): **50 s** for 2400 retraces with `vs_match.txt`, **54 s** with
+  `parity_vs_onett.txt`. Run-to-run traces are identical bit for bit:
+  `138cfc3b…` for the menu run, `c79c53b9cdf81426fa0277e7497a69e55bc5f571` for the match run.
+- Risk: the boot path from P0-06 is wrong and the script desynchronises from the menus — this
+  happened, and the scene report is what caught it (`host.cpp` has scene fields for `@scene`
+  scripts, `:624-626`).
 
 ### P0-09 — WASM checkpoints against native, under Node (M, **needs the ISO**)
 

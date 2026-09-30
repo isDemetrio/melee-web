@@ -226,13 +226,29 @@ is where the only copy of it is.
 same binary, each with its own fresh card directory, produced traces identical **bit for bit**,
 both SHA-1 `138cfc3b55afcbe9f6b293b4dcb4336c467d1797`.
 
-**What this does not establish, and it matters more than what it does.** There is no evidence
-that a *match* started. The script `vs_match.txt` assumes Slippi boot timing, this translation
-is built `--no-slippi`, and the trace alone cannot tell a menu from a match — exactly the risk
-`docs/PHASE0_TASKS.md` P0-08 records. The 360 frames carrying an event mask are consistent with
-a match-start hook firing, and 360 frames at 60 Hz is six seconds, but consistent is not
-demonstrated. Until the scene is logged at the end of the run, "2400 checkpoints" means 2400
-deterministic frames of *something*, and the next session must not describe it as a match.
+**First run was a menu, and the scene report proved it.** `vs_match.txt` assumes Slippi boot
+timing and this translation is built `--no-slippi`. The entry point now reads the scene the
+same way an `@scene` script does, and with that script the run ends at
+`mode=1 state=0 match_frame=0`: 2400 deterministic frames of a menu, no match, no Vs. mode.
+The 360 frames carrying an event mask were not a match-start hook. This is precisely the risk
+`docs/PHASE0_TASKS.md` P0-08 records, caught by measuring instead of assuming.
+
+**With an `@scene`-anchored script it is a real match.** The project's own parity scripts exist
+for exactly this reason — their header notes that vanilla and native reach `GM_MENU` at
+retrace 403 and 702 respectively, so their menu entries are relative to the retrace where the
+host *first observes* the scene, not to an absolute frame. Re-running the same binary against
+the same disc with `port/scripts/parity_vs_onett.txt`:
+
+- `final scene: mode=2 state=2 match_frame=762 (retraces=2400)` — Vs. mode, and the match had
+  simulated **762 frames** when the run ended, so the match starts around retrace 1638
+- exit status 0, **54 s** for 2400 retraces
+- two independent runs again **bit-identical**, both SHA-1
+  `c79c53b9cdf81426fa0277e7497a69e55bc5f571` (a different trace from the menu run, as it must be)
+
+So the reference is real and reproducible: the game boots, reaches Vs. mode, plays a match, and
+produces the same trace every time. **`vs_match.txt` is the wrong script for this build** —
+P0-08's checkpoint harness must use an `@scene`-anchored script, and only ~762 of the 2400
+retraces are in-match, which is the number that matters for the rollback budget.
 
 **Consequences.** P0-08's first half is done and its numbers exist. The native-vs-WASM
 comparison (P0-09) still needs a WASM core, which does not exist yet (P0-04…P0-07), and the
