@@ -122,7 +122,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/spike-dist/spike-core"
           cp "$RUNNER_TEMP/wasm/melee_core_web.js" "$RUNNER_TEMP/wasm/melee_core_web.wasm" "$RUNNER_TEMP/spike-dist/spike-core/"
           cp "$GITHUB_WORKSPACE/upstream/melee-unlocked/port/scripts/parity_vs_onett.txt" "$RUNNER_TEMP/spike-dist/spike-core/"
-          printf '{"commit":"%s","opt":"-O1"}\n' "$GITHUB_SHA" > "$RUNNER_TEMP/spike-dist/spike-core/core.json"
+          # Read the reported level out of the build definition instead of typing it: the string
+          # was hardcoded to "-O1", so a core built from a branch that compiles with -Oz declared
+          # itself "-O1" and the field proved nothing.
+          opt=$(grep -m1 -oE -- '-O[a-z0-9]+' "$GITHUB_WORKSPACE/wasm/core/CMakeLists.txt")
+          printf '{"commit":"%s","opt":"%s"}\n' "$GITHUB_SHA" "$opt" > "$RUNNER_TEMP/spike-dist/spike-core/core.json"
+          cat "$RUNNER_TEMP/spike-dist/spike-core/core.json"
       - name: Spike harness in Chromium with a synthetic disc header (no ISO)
         working-directory: web
         env:

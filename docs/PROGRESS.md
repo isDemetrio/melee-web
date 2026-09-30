@@ -369,3 +369,34 @@ are preserved. Only the report append conflicted. The runner still defaults to
 The synthetic-disc failure is now at `native/headless_host.cpp:199` (plan: line 196).
 All measured runs above precede this documentation/base integration; subsequent PR checks
 must pass before merge. No compiled source changed during integration.
+
+## Phase 0 — the module shrinks by 81%, and stays bit-identical (2026-09-30, evening)
+
+The module was **87.118.511 bytes**, 3.3x Cloudflare Pages' 25 MiB per-file limit, and it is what
+a phone would have to download. Two of the three size levers cannot touch arithmetic (`-g2` debug
+info, `-sASSERTIONS=1`); the third, `-Oz` instead of `-O1`, can in principle, so it was measured
+rather than argued about, on branch `phase0/oz-size-experiment` (run `36743835141`).
+
+| | `-O1` | `-Oz` | |
+| --- | --- | --- | --- |
+| module | 87.118.511 B | **16.323.657 B** | **−81.3%** |
+| Pages 25 MiB limit | 3.3x over | **under** | |
+| 2400 checkpoints | `c79c53b9…` | `c79c53b9…` | **identical** |
+| 2400 retraces | 81 s | 79 s | |
+| in-match mean / p95 / p99 | 27.34 / 34.82 / 43.36 ms | 28.92 / 37.78 / 46.53 ms | ~6% slower |
+
+**What this establishes.** The size blocker is gone: the module is a normal mobile download and
+fits the deploy target. And it is gone *without* buying it with correctness — the `-Oz` module
+reproduces the native reference trace byte for byte, on the same commit and the same script, so
+the optimiser changed nothing observable. `-ffp-contract=off` and `-fno-fast-math` held at the
+new level, which is the part that could have broken the arithmetic and did not.
+
+**What it costs.** About 6% on the simulation, measured the same way as everything else. `-Oz`
+optimises for size, so this is the expected shape of the trade, not a surprise.
+
+**Still open.** The real go/no-go threshold for a phone is a mean of ≤ 3 ms and a p99 of ≤ 6 ms
+per frame (`docs/SPEC_PIANO.md`, "Criteri go/no-go" — the 16.67 ms frame budget is necessary but
+not sufficient, because Slippi's rollback can resimulate up to 7 frames in one tick). At 28.92 ms
+on this VPS the mobile target is ~10x away, and `docs/PHASE0_DEVICE_PLAN.md` says to expect a
+NO-GO. Two things keep that provisional: this is a shared 2-vCPU VPS rather than a phone's big
+core, and no measurement has been taken on a device yet.

@@ -11,13 +11,18 @@ include("${REPO}/native/core_sources.cmake")
 add_library(core_options INTERFACE)
 target_compile_features(core_options INTERFACE cxx_std_17)
 target_include_directories(core_options INTERFACE ${MELEE_CORE_INCLUDES})
-target_compile_options(core_options INTERFACE -O1 -ffp-contract=off -fno-fast-math)
+# -Oz and no debug info, to find out what they cost in size and whether they cost anything in
+# behaviour. The oracle answers the second question: the -O1 module was verified bit-identical
+# to the native reference on all 2400 checkpoints, so any -Oz module that reproduces the same
+# trace is bit-exact too, whatever it optimised away. -ffp-contract=off and -fno-fast-math are
+# not negotiable at any level: they are what keeps the arithmetic reproducible.
+target_compile_options(core_options INTERFACE -Oz -g0 -ffp-contract=off -fno-fast-math)
 target_compile_definitions(core_options INTERFACE _FILE_OFFSET_BITS=64 MELEE_SINGLE_THREAD=1)
 if(EMSCRIPTEN)
   target_compile_options(core_options INTERFACE -fwasm-exceptions)
-  target_link_options(core_options INTERFACE -O1 -g2 -fwasm-exceptions -ffp-contract=off -fno-fast-math
+  target_link_options(core_options INTERFACE -Oz -g0 -fwasm-exceptions -ffp-contract=off -fno-fast-math
     -sERROR_ON_UNDEFINED_SYMBOLS=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB
-    -sSTACK_SIZE=8MB -sALLOW_TABLE_GROWTH=1 -sASSERTIONS=1)
+    -sSTACK_SIZE=8MB -sALLOW_TABLE_GROWTH=1 -sASSERTIONS=0)
 endif()
 # P0-04: relocatable list, never a glob or a hand-maintained TU list.
 add_library(guest STATIC ${GUEST_SOURCES}
