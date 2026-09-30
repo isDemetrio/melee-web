@@ -17,6 +17,8 @@ the CI checkout only.
 | `0005-single-thread-workers.patch` | `hle/hle_dvd.cpp`, `host/host.cpp`, `hle/exi_slippi.cpp` | Inline DVD reads, log drain and Sys preload under MELEE_SINGLE_THREAD; preserve virtual DVD completion times. | CI patch series | Pending native/emcc compile |
 | `0006-exi-portable-mkdir.patch` | `hle/exi_slippi.cpp` | Replace the sole Win32 directory creation call with nonthrowing filesystem operation. | CI patch series | Pending clang/emcc compile |
 
+| `0007-gx-settings-boundary.patch` | `gx/gx_core.cpp`, `gx/pc_settings_shared.h`, new `gx/pc_settings_guest.h` | Move the guest menu observer declaration into a platform-neutral header, so FIFO decoding does not include Win32/XInput settings UI types. | CI patch series | clang run 36709850208 identified the include chain; verification pending |
+
 ## Why the FMA family goes through `wasm/compat/fma.h`
 
 The patch's Emscripten branch used to call `std::fma` directly. Emscripten's libc is

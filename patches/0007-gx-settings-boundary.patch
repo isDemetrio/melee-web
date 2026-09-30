@@ -1,0 +1,38 @@
+--- a/port/runtime/gx/gx_core.cpp
++++ b/port/runtime/gx/gx_core.cpp
+@@ -2,7 +2,7 @@
+ // GX command processor: FIFO -> register state -> captured frames.
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "gx_core.h"
+-#include "pc_settings_shared.h"
++#include "pc_settings_guest.h"
+ #include "host.h"
+ #include "native_pose_bridge.h"
+ #include "slippi_online.h"
+--- a/port/runtime/gx/pc_settings_shared.h
++++ b/port/runtime/gx/pc_settings_shared.h
+@@ -3,6 +3,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #pragma once
+ #include "gx_core.h"
++#include "pc_settings_guest.h"
+ #include "render_options.h"
+ #include "host.h"            // host::PadState, which input_bindings.h uses without declaring
+ #include "input_bindings.h"
+@@ -87,6 +88,6 @@
+ bool settings_frame(SettingsState& state, RenderOptions& options);
+ // Guest Settings menu slot 3 is the original game's unused row, made selectable
+ // during translation. Only a completed guest frame publishes its state here.
+-void settings_guest_options_frame(uint8_t menu, uint16_t selection, uint32_t buttons);
++// Declaration lives in pc_settings_guest.h for simulation-only builds.
+ 
+ }  // namespace gx
+--- /dev/null
++++ b/port/runtime/gx/pc_settings_guest.h
+@@ -0,0 +1,6 @@
++#pragma once
++#include <cstdint>
++namespace gx {
++// Observes the guest Settings row; independent of the renderer settings UI.
++void settings_guest_options_frame(uint8_t menu, uint16_t selection, uint32_t buttons);
++}
