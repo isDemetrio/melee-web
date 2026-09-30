@@ -540,6 +540,57 @@ not a device number, and it does not enter the verdict.
 (the `deploy_spike` step). Both are `[subito]`. The device runs (M1/M2 via road D) need the
 operator and no Cloudflare credentials.
 
+## The checkpoint runner stops defaulting to the wrong script — 2026-09-30, evening
+
+`scripts/phase0/run_checkpoints.sh` is the only script in this repository that writes a
+game-derived trace, and it carried three defects that only bite when someone runs it for real:
+its default script was `port/scripts/vs_match.txt`, which P0-08 measured as wrong for this
+`--no-slippi` build (2400 deterministic retraces of a menu, no match at all); a typo in the
+script argument fell back to that default silently; and nothing stopped the output directory
+from being inside the checkout, where the script removes and recreates it — the trace and card
+image it then writes are game-derived, so a path inside the repository would have deleted
+tracked files and left files that `scripts/check_no_game_data.py` rejects.
+
+**What changed** (one logical change, PR #18, branch `phase0/runner-guards`, commit `175aae7`):
+the default is `port/scripts/parity_vs_onett.txt`, the @scene-anchored script P0-08 established
+as the right one; a nonexistent script is a refusal that names the path; an output directory
+inside the repository is a refusal; `--dry-run` resolves everything, prints the exact command a
+real run would execute and touches no disc; a `.js` module is run with `${NODE:-node}`; and the
+end-of-run report now prints the trace SHA-1, the `final scene:` line and the `FPSCR requests:`
+line, because P0-08 was caught by the scene line and a checkpoint count must never again be read
+as "a match was played" without evidence. No upstream file is touched, so there is no `patches/`
+entry and no `docs/PORT_CHANGES.md` row.
+
+**The guards are the deliverable, not the prose.** `scripts/tests/test_phase0_runner.sh` is new
+and runs in the hygiene job of `ci.yml`. Every case ends in a refusal or in a dry run: no ISO is
+needed and no binary is launched, so it works in CI, where the disc does not exist.
+
+| Check | Result |
+| --- | --- |
+| Locally, on this VPS | **44/44 guards hold**, exit 0 |
+| Mutation: the default back to `vs_match.txt` | **2 guards fail, exit 1** — the suite is not vacuous |
+| CI, PR run `36771942657`, hygiene step "Phase 0 checkpoint runner guards" | **success**, log line `44 checkpoint runner guards hold` |
+| The same step, from the log timestamps | 20:20:56.93 → 20:20:57.04, about **0.1 s** |
+| Hygiene job duration | 22 s (PR run `36771942657`) and 18 s (push run `36771929834`), both success |
+
+**Deviation from `docs/PHASE0_NEXT.md` S2 item 3, deliberate.** The repository root is derived
+from the location of the script (`BASH_SOURCE`) instead of from `git rev-parse --show-toplevel`
+in the directory of the caller, as that step prescribed. Every real trace is written under
+`/home/hermes/incoming/phase0`, which is not a repository: `git rev-parse` fails there, the
+fallback would be `pwd`, and the "inside the checkout" test would then refuse the legitimate
+output directory. That step also asked for the two `grep` lines at the end of the run: they are
+there. The `.js` handling already existed in `main`.
+
+**Not verified, and deliberately not covered.** Nothing has run against a real disc since this
+change, so the new report lines are exercised only through the refusal paths. The
+"expected size, wrong SHA-1" refusal is not covered by the new suite: it is only reachable with
+a 1,459,978,240-byte fixture, and the same gate over the same fixture is already exercised for
+`scripts/phase0/upload_disc.sh` in `scripts/tests/test_deploy_guard.sh`. What the new suite
+checks instead is that the two constants still match the Redump values stated in
+`docs/OPEN_QUESTIONS.md`. The row in `docs/PHASE0_NEXT.md` §0 that says the runner defaults to
+the wrong script is left as written: it records the state at 12:20 UTC, and this section
+supersedes it.
+
 ## The device row: the iPhone runs the same game, and lands in the "desktop only" band (2026-09-30, night)
 
 Three runs of the 2400-retrace spike on the operator's **iPhone 16 Pro**, served over HTTPS, verified
