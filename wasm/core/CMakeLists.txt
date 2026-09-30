@@ -34,6 +34,7 @@ add_library(runtime_core STATIC
   "${PORT}/runtime/hle/exi_slippi.cpp" "${PORT}/runtime/gx/gx_core.cpp"
   "${PORT}/runtime/gx/gx_texture.cpp")
 target_link_libraries(runtime_core PUBLIC core_options)
+target_include_directories(runtime_core PRIVATE "${REPO}/upstream/melee-unlocked/native")
 if(EMSCRIPTEN)
   add_library(offline_core OBJECT ${MELEE_HEADLESS_SOURCES} ${MELEE_SIM_SOURCES})
   target_link_libraries(offline_core PUBLIC core_options)

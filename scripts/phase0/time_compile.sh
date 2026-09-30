@@ -19,6 +19,6 @@ if [[ "$status" == 0 && -f "$object_file" ]]; then bytes=$(stat -c%s "$object_fi
 # GNU time adds a status line on failure; its final line always holds the metrics.
 {
   flock 9
-  printf '%s,%s,%s,%s\n' "$source_file" "$(tail -n 1 "$metrics")" "$bytes" "$status" >&9
+  printf '%s,%s,%s,%s,%s\n' "$source_file" "$(tail -n 1 "$metrics")" "$bytes" "$status" "${MELEE_COMPILE_LABEL:-offline}" >&9
 } 9>>"$MELEE_COMPILE_CSV"
 exit "$status"
