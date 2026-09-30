@@ -8,6 +8,16 @@ export interface AssetBucket {
   get(key: string): Promise<{ body: ReadableStream | null } | null>;
 }
 
+/**
+ * Structural subset of R2Bucket for the Phase 0 disc objects: metadata for the size, then either
+ * the whole object or one explicit byte range. A real R2Bucket satisfies both signatures.
+ */
+export interface DiscBucket {
+  head(key: string): Promise<{ size: number } | null>;
+  get(key: string, options?: { range?: { offset: number; length: number } }):
+    Promise<{ body: ReadableStream | null } | null>;
+}
+
 export interface AppEnv {
   TURN_KEY_ID?: string;
   TURN_KEY_API_TOKEN?: string;
@@ -18,6 +28,7 @@ export interface AppEnv {
   CF_PAGES_BRANCH?: string;
   CF_PAGES_COMMIT_SHA?: string;
   ASSETS_R2?: AssetBucket;
+  PHASE0_DISC?: DiscBucket;
 }
 
 export interface AppContext {

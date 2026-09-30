@@ -436,3 +436,61 @@ false and the clock is coarser than the ≤ 0.1 ms the verdict needs
 
 Also still open from §6: PR 3 (the `/phase0/disc` Function), PR 4 (the OPFS page), PR 5 (the
 deploy step), and the operator's decision O1.
+
+## Deploy plan PR 3 — the disc Function (2026-09-30, evening)
+
+`docs/PHASE0_DEPLOY_PLAN.md` §6 step 4, the first of the four `[subito]` PRs after the plan.
+PR #16, commit `2208884`, branch `phase0/disc-function`, one logical change, no upstream file
+touched, so no `patches/` entry and no `docs/PORT_CHANGES.md` row.
+
+**What it is.** `functions/phase0/[[path]].ts` answers `GET` and `HEAD` for `/phase0/disc`
+(object `melee-ntsc102.iso`) and `/phase0/disc-chunks` (object `disc-chunks.json`), the two
+objects `scripts/phase0/upload_disc.sh` puts in the private `melee-phase0-disc` bucket. The
+object key is chosen from the request path against a fixed table and never taken from the
+request. One `bytes=` range is served with `206` and a `Content-Range` computed from a real
+ranged R2 read; an unsatisfiable range is `416` with `bytes */<size>`; a malformed, multi-range
+or unknown-unit header is ignored and the whole object is served; `HEAD` never reads a body;
+`503` without the binding, `404` for an unknown path under `/phase0` or an absent object, `502`
+on an R2 failure with no diagnostics forwarded. `Cache-Control: no-store`,
+`Cross-Origin-Resource-Policy: same-origin`, `Accept-Ranges: bytes`. `functions/types.ts` gains
+`PHASE0_DISC` as a structural subset of `R2Bucket` (the `ASSETS_R2` pattern), `wrangler.toml`
+the second `[[r2_buckets]]` block.
+
+**Deviation, deliberate.** The plan names `functions/phase0/disc.ts`. The file is the catch-all
+`functions/phase0/[[path]].ts` instead: `wrangler pages functions build` treats every `.ts` file
+under `functions/` as a route candidate (`vitest.config.ts` records the same constraint for the
+tests), so the range logic cannot live in a shared helper module there, and one file per route
+would duplicate it. The route table is what keeps the keys fixed.
+
+### Measured verification
+
+| Actions run | Job | Conclusion | Measurement |
+| --- | --- | --- | --- |
+| `36760716404` (Pages Functions) | `functions` | **success** | 33 s; typecheck, `vitest` and `wrangler pages functions build` |
+| same run | `Run npm test` | — | `tests/functions/phase0-disc.test.ts` **23 tests**, suite **120 tests in 5 files**, all passed |
+| `36760716501` (PR CI) | hygiene / web shell | **success** | 18 s / 37 s |
+| `36760654826` (push CI) | hygiene / web shell / browser | **success** | 22 s / 42 s / 1m51s (10 Chromium tests) |
+
+The 23 tests are 18 assertions over a ten-byte fake object (whole object, chunk manifest,
+eleven range headers, ranged and unranged `HEAD`, `405`, unknown path, `503`, absent object,
+`502`, and the exact R2 keys and ranged reads) plus the composed-middleware case, which asserts
+that a request without an Access token is answered `403` **before** R2 is touched.
+
+**Demonstrated:** the routing, the range arithmetic, the response headers and every error path,
+plus the route still bundling. **Not demonstrated, and the commit says so:** nothing has run
+against a real R2 bucket; the bucket does not exist yet (operator item O3); whether Cloudflare's
+edge or Pages passes a `Range` header through to a Function unchanged is on the §3 checklist for
+the first deploy.
+
+**Risk recorded, not fixed.** `wrangler.toml` now declares a binding to a bucket that does not
+exist. The `ci.yml` deploy job skips only while the Cloudflare credentials are absent, so the
+first shell deploy after the credentials arrive will fail until O3 is done or the block is
+removed. That is what the plan asks for; it is in the PR description so the failure is not a
+surprise in the wrong job.
+
+**Next, in plan order:** PR 4 (the page that populates OPFS from `/phase0/disc`, with the
+`disc_source`/`storage_persisted`/`core_load_ms` fields in the result JSON), then PR 5 (the
+`deploy_spike` step in `phase0-build.yml`). Both are `[subito]`: the OPFS page is testable in
+Chromium against a synthetic disc with ranged responses, and the deploy step skips itself
+without credentials. Step 3 of §6 — a native trace at the commit the served core was built from
+— still needs a dispatch plus the ISO, and step 6 onwards need O1 (the Cloudflare decision).
