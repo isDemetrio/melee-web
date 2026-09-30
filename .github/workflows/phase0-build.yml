@@ -50,6 +50,12 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      # One place decides the level: the dispatch input, or -Oz for every other event (pull
+      # requests have no inputs). wasm/core/CMakeLists.txt writes it back out to melee_opt.txt, and
+      # core.json is filled from that file, so the field reports what CMake configured with rather
+      # than what the workflow intended.
+      MELEE_OPT: ${{ inputs.opt_level || '-Oz' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,19 +82,31 @@ jobs:
           echo 'tu,seconds,max_rss_kb,object_bytes,status,variant' > "$RUNNER_TEMP/compile.csv"
           date +%s > "$RUNNER_TEMP/build-start"
           { nproc; free -m; echo "MemAvailable_KiB=$available ninja_jobs=$jobs"; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Name the artifacts after the level
+        run: |
+          # An artifact called melee-core-wasm-node says nothing about the level inside it, and two
+          # dispatches at different levels would produce two indistinguishable downloads. The
+          # default keeps the documented name (docs/PHASE0_TASKS.md D3); other levels get a suffix.
+          suffix=""
+          if [ "$MELEE_OPT" != "-Oz" ]; then suffix="-$MELEE_OPT"; fi
+          {
+            echo "NODE_ARTIFACT=melee-core-wasm-node$suffix"
+            echo "SPIKE_ARTIFACT=melee-spike-dist$suffix"
+          } >> "$GITHUB_ENV"
       - name: Compile minimum upstream runtime with host clang
         run: |
           cmake -S wasm/core -B "$RUNNER_TEMP/clang" -G Ninja \
-            -DCMAKE_CXX_COMPILER=clang++ -DMELEE_GEN="$RUNNER_TEMP/generated"
+            -DCMAKE_CXX_COMPILER=clang++ -DMELEE_GEN="$RUNNER_TEMP/generated" \
+            -DMELEE_OPT="$MELEE_OPT"
           cmake --build "$RUNNER_TEMP/clang" --target runtime_core sha1_test --parallel "$BUILD_JOBS"
           "$RUNNER_TEMP/clang/sha1_test"
       - name: Compile and link WASM offline core and minimum upstream runtime
         run: |
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/wasm" -G Ninja \
             -DMELEE_GEN="$RUNNER_TEMP/generated" \
-            -DMELEE_OPT="${{ inputs.opt_level || '-Oz' }}" \
+            -DMELEE_OPT="$MELEE_OPT" \
             -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/scripts/phase0/time_compile.sh"
-          echo "opt_level=${{ inputs.opt_level || '-Oz' }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "opt_level=$MELEE_OPT" | tee -a "$GITHUB_STEP_SUMMARY"
           SECONDS=0
           cmake --build "$RUNNER_TEMP/wasm" --target guest runtime_core melee_core_wasm sha1_test --parallel "$BUILD_JOBS"
           echo "offline_compile_link_seconds=$SECONDS" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -96,6 +114,7 @@ jobs:
         run: |
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/wasm-release" -G Ninja \
             -DMELEE_GEN="$RUNNER_TEMP/generated-release" \
+            -DMELEE_OPT="$MELEE_OPT" \
             -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/scripts/phase0/time_compile.sh"
           SECONDS=0
           MELEE_COMPILE_LABEL=release cmake --build "$RUNNER_TEMP/wasm-release" --target guest --parallel "$BUILD_JOBS"
@@ -173,7 +192,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_module }}
         uses: actions/upload-artifact@v4
         with:
-          name: melee-core-wasm-node
+          name: ${{ env.NODE_ARTIFACT }}
           path: |
             ${{ runner.temp }}/wasm/melee_core_node.js
             ${{ runner.temp }}/wasm/melee_core_node.wasm
@@ -184,7 +203,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_spike }}
         uses: actions/upload-artifact@v4
         with:
-          name: melee-spike-dist
+          name: ${{ env.SPIKE_ARTIFACT }}
           path: ${{ runner.temp }}/spike-dist
           retention-days: 3
           if-no-files-found: error

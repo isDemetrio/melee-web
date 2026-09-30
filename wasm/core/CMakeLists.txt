@@ -21,6 +21,10 @@ target_include_directories(core_options INTERFACE ${MELEE_CORE_INCLUDES})
 # produced from CI without editing this file (docs/OPT_LEVEL_EXPERIMENT.md). The default stays
 # -Oz, so an ordinary build is byte-for-byte the build it was before this change.
 set(MELEE_OPT "-Oz" CACHE STRING "Optimisation level for the core, compile and link")
+set_property(CACHE MELEE_OPT PROPERTY STRINGS -Oz -O1 -O2 -O3)
+if(NOT MELEE_OPT MATCHES "^-O[a-z0-9]+$")
+  message(FATAL_ERROR "MELEE_OPT must be an -O flag such as -Oz or -O1, got '${MELEE_OPT}'")
+endif()
 # The level actually in force, written where the workflow can read it. The workflow used to grep
 # the first -O token out of this file for core.json's "opt" field, which matched the "-O1" in the
 # comment above rather than the level being compiled with.
