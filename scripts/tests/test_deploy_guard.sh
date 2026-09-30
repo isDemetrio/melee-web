@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Guards for scripts/deploy.sh and scripts/upload_assets.sh.
+# Guards for deploy.sh, upload_assets.sh and phase0/upload_disc.sh.
 #
 # Nothing here touches Cloudflare. Every case ends in a refusal or in a dry run, which only
 # prints the command it would have run -- that is the point: these are the paths that decide
@@ -35,12 +35,12 @@ expect_refusal() {
   set -e
   if [ "$status" -eq 0 ]; then
     fail "$label: expected a refusal, but it exited 0"
-    echo "$out" | sed 's/^/    /' >&2
+    awk '{print "    " $0}' <<<"$out" >&2
     return
   fi
   if [ "$status" -ne "$expected_status" ]; then
     fail "$label: exited $status, expected $expected_status"
-    echo "$out" | sed 's/^/    /' >&2
+    awk '{print "    " $0}' <<<"$out" >&2
     return
   fi
   grep -q "$expected_text" <<<"$out" ||
@@ -70,38 +70,38 @@ printf 'unknown' >"$assets/files/unknown.bin"
 manifest="$tmp/assets/manifest.json"
 python3 "$root/scripts/make_manifest.py" --assets "$assets" --out "$manifest" >/dev/null
 
-deploy="bash $root/scripts/deploy.sh"
-upload="bash $root/scripts/upload_assets.sh"
+deploy=(bash "$root/scripts/deploy.sh")
+upload=(bash "$root/scripts/upload_assets.sh")
 
 # 1. No credentials: the one thing that must never happen is a deploy without them.
 expect_refusal "deploy without credentials" 2 "CLOUDFLARE_API_TOKEN" \
   env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID -u CF_PAGES_PROJECT \
-  $deploy --repo-dir "$repo" --dist-dir "$repo/web/dist"
+  "${deploy[@]}" --repo-dir "$repo" --dist-dir "$repo/web/dist"
 
 # 2. Dirty tree: the deployed shell has to correspond to a commit.
 printf 'wip\n' >"$repo/wip.txt"
 expect_refusal "deploy with a dirty tree" 3 "uncommitted changes" \
   env CLOUDFLARE_API_TOKEN=dummy CLOUDFLARE_ACCOUNT_ID=dummy CF_PAGES_PROJECT=melee-web \
-  $deploy --repo-dir "$repo" --dist-dir "$repo/web/dist"
+  "${deploy[@]}" --repo-dir "$repo" --dist-dir "$repo/web/dist"
 rm -f "$repo/wip.txt"
 
 # 3. dist without _headers: the shell would deploy without COOP/COEP.
 mv "$repo/web/dist/_headers" "$tmp/_headers"
 expect_refusal "deploy without dist/_headers" 4 "run scripts/build_web.sh" \
   env CLOUDFLARE_API_TOKEN=dummy CLOUDFLARE_ACCOUNT_ID=dummy CF_PAGES_PROJECT=melee-web \
-  $deploy --repo-dir "$repo" --dist-dir "$repo/web/dist"
+  "${deploy[@]}" --repo-dir "$repo" --dist-dir "$repo/web/dist"
 mv "$tmp/_headers" "$repo/web/dist/_headers"
 
 # 4. The happy path, as far as it can be exercised here: a dry run that names the command,
 #    the project and the branch, and that does not echo the token.
 set +e
 dry=$(env CLOUDFLARE_API_TOKEN=dummy-token-value CLOUDFLARE_ACCOUNT_ID=dummy CF_PAGES_PROJECT=melee-web \
-  $deploy --dry-run --repo-dir "$repo" --dist-dir "$repo/web/dist" 2>&1)
+  "${deploy[@]}" --dry-run --repo-dir "$repo" --dist-dir "$repo/web/dist" 2>&1)
 dry_status=$?
 set -e
 if [ "$dry_status" -ne 0 ]; then
   fail "deploy --dry-run exited $dry_status"
-  echo "$dry" | sed 's/^/    /' >&2
+  awk '{print "    " $0}' <<<"$dry" >&2
 else
   grep -q "pages deploy" <<<"$dry" || fail "deploy --dry-run does not print the wrangler command"
   grep -q "melee-web" <<<"$dry" || fail "deploy --dry-run does not print the project name"
@@ -112,29 +112,51 @@ fi
 # 5. Asset upload without credentials.
 expect_refusal "upload --apply without credentials" 2 "CLOUDFLARE_API_TOKEN" \
   env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-  $upload --apply --manifest "$manifest" --store "$tmp/assets/store"
+  "${upload[@]}" --apply --manifest "$manifest" --store "$tmp/assets/store"
 
 # 6. Asset upload refuses a store that does not hold every object the manifest names.
 manifest_nostore="$tmp/assets/manifest-nostore.json"
 python3 "$root/scripts/make_manifest.py" --assets "$assets" --out "$manifest_nostore" --no-store >/dev/null
 expect_refusal "upload with an incomplete store" 3 "does not hold every object" \
-  $upload --manifest "$manifest_nostore" --store "$tmp/absent-store"
+  "${upload[@]}" --manifest "$manifest_nostore" --store "$tmp/absent-store"
 
 # 7. The asset dry run needs no credentials, and it is what the operator reads before the
 #    real upload.
 set +e
 plan=$(env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \
-  $upload --manifest "$manifest" --store "$tmp/assets/store" 2>&1)
+  "${upload[@]}" --manifest "$manifest" --store "$tmp/assets/store" 2>&1)
 plan_status=$?
 set -e
 if [ "$plan_status" -ne 0 ]; then
   fail "upload dry run exited $plan_status"
-  echo "$plan" | sed 's/^/    /' >&2
+  awk '{print "    " $0}' <<<"$plan" >&2
 else
   grep -q "dry run: nothing is uploaded" <<<"$plan" || fail "upload dry run does not say it uploaded nothing"
   grep -q "4 distinct blob(s)" <<<"$plan" || fail "upload dry run does not count the four distinct blobs"
   echo "ok: upload dry run lists the plan without credentials"
 fi
+
+# 8. Disc upload requires S3 credentials, including in the default dry run.
+disc_upload="$root/scripts/phase0/upload_disc.sh"
+for mode in --dry-run --apply; do
+  expect_refusal "disc $mode without credentials" 2 "R2_ACCESS_KEY_ID" \
+    env -u CLOUDFLARE_ACCOUNT_ID -u R2_ACCESS_KEY_ID -u R2_SECRET_ACCESS_KEY \
+    bash "$disc_upload" "$mode" --iso "$tmp/absent.iso"
+done
+
+# 9. Wrong size and correct size with wrong SHA-1 both fail before any PUT.
+# truncate creates a sparse zero fixture outside the repo, not a copy of game data.
+printf 'invalid disc' >"$tmp/wrong.iso"
+for mode in --dry-run --apply; do
+  expect_refusal "disc $mode wrong size" 3 "ISO size must be" \
+    env CLOUDFLARE_ACCOUNT_ID=dummy R2_ACCESS_KEY_ID=dummy R2_SECRET_ACCESS_KEY=dummy \
+    bash "$disc_upload" "$mode" --iso "$tmp/wrong.iso" --out "$tmp/chunks.json"
+done
+truncate -s 1459978240 "$tmp/wrong.iso"
+expect_refusal "disc --apply wrong SHA-1" 3 "ISO SHA-1 mismatch" \
+  env CLOUDFLARE_ACCOUNT_ID=dummy R2_ACCESS_KEY_ID=dummy R2_SECRET_ACCESS_KEY=dummy \
+  bash "$disc_upload" --apply --iso "$tmp/wrong.iso" --out "$tmp/chunks.json"
+[ ! -e "$tmp/chunks.json" ] || fail "invalid disc wrote a chunk manifest"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures guard(s) failed" >&2
