@@ -10,6 +10,15 @@ on:
         description: 'Upload the spike page and web core as a private artifact (game-derived; S6)'
         type: boolean
         default: false
+      opt_level:
+        description: 'Optimisation level for the core (docs/OPT_LEVEL_EXPERIMENT.md). -Oz is the shipped default; the others exist to measure what the level costs in speed and size.'
+        type: choice
+        options:
+          - '-Oz'
+          - '-O1'
+          - '-O2'
+          - '-O3'
+        default: '-Oz'
   pull_request:
     paths:
       - 'web/spike.html'
@@ -41,6 +50,12 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      # One place decides the level: the dispatch input, or -Oz for every other event (pull
+      # requests have no inputs). wasm/core/CMakeLists.txt writes it back out to melee_opt.txt, and
+      # core.json is filled from that file, so the field reports what CMake configured with rather
+      # than what the workflow intended.
+      MELEE_OPT: ${{ inputs.opt_level || '-Oz' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,17 +82,31 @@ jobs:
           echo 'tu,seconds,max_rss_kb,object_bytes,status,variant' > "$RUNNER_TEMP/compile.csv"
           date +%s > "$RUNNER_TEMP/build-start"
           { nproc; free -m; echo "MemAvailable_KiB=$available ninja_jobs=$jobs"; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Name the artifacts after the level
+        run: |
+          # An artifact called melee-core-wasm-node says nothing about the level inside it, and two
+          # dispatches at different levels would produce two indistinguishable downloads. The
+          # default keeps the documented name (docs/PHASE0_TASKS.md D3); other levels get a suffix.
+          suffix=""
+          if [ "$MELEE_OPT" != "-Oz" ]; then suffix="-$MELEE_OPT"; fi
+          {
+            echo "NODE_ARTIFACT=melee-core-wasm-node$suffix"
+            echo "SPIKE_ARTIFACT=melee-spike-dist$suffix"
+          } >> "$GITHUB_ENV"
       - name: Compile minimum upstream runtime with host clang
         run: |
           cmake -S wasm/core -B "$RUNNER_TEMP/clang" -G Ninja \
-            -DCMAKE_CXX_COMPILER=clang++ -DMELEE_GEN="$RUNNER_TEMP/generated"
+            -DCMAKE_CXX_COMPILER=clang++ -DMELEE_GEN="$RUNNER_TEMP/generated" \
+            -DMELEE_OPT="$MELEE_OPT"
           cmake --build "$RUNNER_TEMP/clang" --target runtime_core sha1_test --parallel "$BUILD_JOBS"
           "$RUNNER_TEMP/clang/sha1_test"
       - name: Compile and link WASM offline core and minimum upstream runtime
         run: |
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/wasm" -G Ninja \
             -DMELEE_GEN="$RUNNER_TEMP/generated" \
+            -DMELEE_OPT="$MELEE_OPT" \
             -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/scripts/phase0/time_compile.sh"
+          echo "opt_level=$MELEE_OPT" | tee -a "$GITHUB_STEP_SUMMARY"
           SECONDS=0
           cmake --build "$RUNNER_TEMP/wasm" --target guest runtime_core melee_core_wasm sha1_test --parallel "$BUILD_JOBS"
           echo "offline_compile_link_seconds=$SECONDS" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -85,6 +114,7 @@ jobs:
         run: |
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/wasm-release" -G Ninja \
             -DMELEE_GEN="$RUNNER_TEMP/generated-release" \
+            -DMELEE_OPT="$MELEE_OPT" \
             -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/scripts/phase0/time_compile.sh"
           SECONDS=0
           MELEE_COMPILE_LABEL=release cmake --build "$RUNNER_TEMP/wasm-release" --target guest --parallel "$BUILD_JOBS"
@@ -122,10 +152,17 @@ jobs:
           mkdir -p "$RUNNER_TEMP/spike-dist/spike-core"
           cp "$RUNNER_TEMP/wasm/melee_core_web.js" "$RUNNER_TEMP/wasm/melee_core_web.wasm" "$RUNNER_TEMP/spike-dist/spike-core/"
           cp "$GITHUB_WORKSPACE/upstream/melee-unlocked/port/scripts/parity_vs_onett.txt" "$RUNNER_TEMP/spike-dist/spike-core/"
-          # Read the reported level out of the build definition instead of typing it: the string
-          # was hardcoded to "-O1", so a core built from a branch that compiles with -Oz declared
-          # itself "-O1" and the field proved nothing.
-          opt=$(grep -m1 -oE -- '-O[a-z0-9]+' "$GITHUB_WORKSPACE/wasm/core/CMakeLists.txt")
+          # Read the level CMake actually configured with, not a guess at it. The field was first
+          # hardcoded to "-O1", then grepped out of the build definition — which matched the first
+          # -O token anywhere in that file, including the "-O1" mentioned in a comment, so a core
+          # built at another level could still declare itself "-O1". wasm/core/CMakeLists.txt writes
+          # MELEE_OPT to melee_opt.txt at configure time; the grep stays only as a fallback.
+          opt_file="$RUNNER_TEMP/wasm/melee_opt.txt"
+          if [ -f "$opt_file" ]; then
+            opt=$(cat "$opt_file")
+          else
+            opt=$(grep -m1 -oE -- '-O[a-z0-9]+' "$GITHUB_WORKSPACE/wasm/core/CMakeLists.txt")
+          fi
           printf '{"commit":"%s","opt":"%s"}\n' "$GITHUB_SHA" "$opt" > "$RUNNER_TEMP/spike-dist/spike-core/core.json"
           cat "$RUNNER_TEMP/spike-dist/spike-core/core.json"
       - name: Spike harness in Chromium with a synthetic disc header (no ISO)
@@ -155,7 +192,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_module }}
         uses: actions/upload-artifact@v4
         with:
-          name: melee-core-wasm-node
+          name: ${{ env.NODE_ARTIFACT }}
           path: |
             ${{ runner.temp }}/wasm/melee_core_node.js
             ${{ runner.temp }}/wasm/melee_core_node.wasm
@@ -166,7 +203,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_spike }}
         uses: actions/upload-artifact@v4
         with:
-          name: melee-spike-dist
+          name: ${{ env.SPIKE_ARTIFACT }}
           path: ${{ runner.temp }}/spike-dist
           retention-days: 3
           if-no-files-found: error
