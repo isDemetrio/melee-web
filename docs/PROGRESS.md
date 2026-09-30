@@ -590,3 +590,40 @@ checks instead is that the two constants still match the Redump values stated in
 `docs/OPEN_QUESTIONS.md`. The row in `docs/PHASE0_NEXT.md` §0 that says the runner defaults to
 the wrong script is left as written: it records the state at 12:20 UTC, and this section
 supersedes it.
+
+## The device row: the iPhone runs the same game, and lands in the "desktop only" band (2026-09-30, night)
+
+Three runs of the 2400-retrace spike on the operator's **iPhone 16 Pro**, served over HTTPS, verified
+on the VPS from the JSONs the page produced. Full evidence, tables and every check:
+`docs/DEVICE_TEST_IPHONE16PRO.md`.
+
+- **Correctness: pass, three times.** Trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` in all
+  three runs, and **0 differing rows out of 2400** against `$D/runs/native-1/trace.csv`. JavaScriptCore
+  on iOS reproduces the native reference exactly: the open question of `docs/PHASE0_DEVICE_PLAN.md` §0.3
+  is now answered by a measurement, not an inference.
+- **The clock is clean**: `cross_origin_isolated: true`, `timer_resolution_ms` **0.02 ms** (threshold
+  0.1). Reaching a secure context took a detour: `tailscale serve` failed with `Access denied: serve
+  config denied` (writing serve config needs root and this VPS has no sudo), so the page was served
+  through a `cloudflared` quick tunnel — trusted HTTPS, verified with `curl` before the runs.
+- **Timings, in-match, worst of three: mean 3.2442 ms, p99 5.64 ms.** The three runs gave means
+  3.0315 / 3.2442 / 3.0809 and p99 3.96 / 5.64 / 4.12.
+  Against the spec's thresholds: **not GO** (`m + q ≤ 3` fails by 0.26 ms, about
+  9%) and **not NO-GO**, therefore the "desktop only" band — proceed on desktop and
+  re-evaluate the mobile row in Phase 4. `p ≤ 16.67 ms`, so 60 Hz without rollback holds.
+- **Where it can move.** The served core is `-Oz`, measured here as ~6% slower than `-O1`; applying that
+  ratio puts the worst run at ~3.07 ms (still outside the GO line) and the best at
+  ~2.87 ms (inside). That is an extrapolation from a VPS measurement,
+  not a device measurement: to settle it, rebuild at `-O1` and repeat the three runs.
+  `phase0-build.yml` has no input for the optimisation level today, so it needs a code change, with the
+  2400-checkpoint parity as the precondition (both levels already produce `c79c53b9…` on the VPS).
+- **Not established.** One device, one OS version (the operator reports iOS 27, the page's user agent
+  says `iPhone OS 18_7`; both are recorded, the discrepancy is unresolved), Safari only. No graphics, no
+  audio, no input, no network, no long session: run 2 shows thermal drift (+6.6% inside the run) already
+  at this scale, and the timings are declared by the page, not proven to come from the phone.
+- **Evidence**, kept out of the repository because the trace is game-derived:
+  `/home/hermes/incoming/phase0/devices/iphone-safari/` (three JSONs as received, plus the extracted
+  `runN_trace.csv` / `runN_sim_times.csv`).
+
+**Next step.** Either accept the "desktop only" reading for the mobile row, or make the optimisation
+level selectable in `phase0-build.yml` and repeat the three runs at `-O1`; the second is the only path
+that turns the extrapolation above into a number.
