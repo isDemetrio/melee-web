@@ -43,6 +43,19 @@ class FindViolationsTest(unittest.TestCase):
         violations = find_violations(paths, sizes={})
         self.assertEqual(len(violations), len(paths))
 
+    def test_rejects_the_generated_asset_manifest_and_its_blob_store(self) -> None:
+        # Both are derived from the disc: the manifest names every disc file and the store
+        # holds its bytes. They belong in R2, never in git (docs/DEPLOY.md).
+        paths = ["assets/manifest.json", "assets/store/" + "0" * 64 + ".bin"]
+        violations = find_violations(paths, sizes={})
+        self.assertEqual({v.path for v in violations}, set(paths))
+
+    def test_asset_prefix_is_root_anchored_and_spares_the_shell_output(self) -> None:
+        # `assets/` must not swallow the shell's own Vite output, which is served from
+        # web/dist/assets and is ours, not the disc's.
+        paths = ["web/dist/assets/index-abc123.js", "web/public/assets/icon.svg"]
+        self.assertEqual(find_violations(paths, sizes={}), [])
+
     def test_rejects_native_build_output_and_wasm(self) -> None:
         paths = ["build/melee_port.exe", "out/melee.wasm", "lib/runtime.a", "x.obj"]
         self.assertEqual(len(find_violations(paths, sizes={})), len(paths))

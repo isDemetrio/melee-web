@@ -1,0 +1,36 @@
+{
+  "$comment": [
+    "Hand-written subset of JSON Schema, checked by scripts/make_manifest.py --check",
+    "with no third-party dependency (docs/PLAN_BREAKDOWN.md T8). Supported keywords:",
+    "type, required, properties, additionalProperties, items, minItems, pattern,",
+    "minLength, minimum, enum. Cross-field invariants the schema cannot express",
+    "(unique paths, stored == sha256 + '.bin') live in check_invariants()."
+  ],
+  "type": "object",
+  "required": ["version", "generatedAt", "baseUrl", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string" },
+    "baseUrl": { "type": "string" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "size", "group", "stored", "encoding"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "size": { "type": "integer", "minimum": 0 },
+          "group": {
+            "type": "string",
+            "pattern": "^(boot|menu|music|movies|other|character:.+|stage:.+)$"
+          },
+          "stored": { "type": "string", "pattern": "^[0-9a-f]{64}\\.bin$" },
+          "encoding": { "type": "string", "enum": ["gzip", "identity"] }
+        }
+      }
+    }
+  }
+}

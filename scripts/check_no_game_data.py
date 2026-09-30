@@ -50,6 +50,9 @@ FORBIDDEN_PREFIXES = (
     "port/generated",
     "upstream/melee-unlocked/port/generated",
     "assets-extracted/",
+    # The generated manifest and the content-addressed blob store: derived from the disc,
+    # so they belong in R2. Root-anchored, so it cannot shadow the shell's own dist/assets.
+    "assets/",
     "private/",
     "upstream/melee-unlocked/Sys/",
     "wasm-probe/out/",

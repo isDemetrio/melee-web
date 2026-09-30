@@ -7,6 +7,9 @@
 *.gci
 private/
 assets-extracted/
+# The generated manifest and its blob store are derived from the disc: the manifest names
+# every disc file and the store holds its bytes. They live in R2 (docs/DEPLOY.md).
+/assets/
 port/generated/
 port/generated*/
 upstream/melee-unlocked/port/generated/

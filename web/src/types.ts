@@ -40,12 +40,18 @@ export interface TransportStats {
   readonly bytesReceived: number;
 }
 
+/** How the object holding a file's bytes is encoded, as declared in the manifest. */
+export type AssetEncoding = 'gzip' | 'identity';
+
 /** Frozen description of one available game asset, as published in the manifest. */
 export interface AssetEntry {
   readonly path: string;
   readonly sha256: string;
   readonly size: number;
   readonly group: AssetGroup;
+  /** Bucket key of the bytes: the SHA-256 of the *uncompressed* file, plus `.bin`. */
+  readonly stored: string;
+  readonly encoding: AssetEncoding;
 }
 
 export type AssetGroup =
@@ -54,7 +60,8 @@ export type AssetGroup =
   | `character:${string}`
   | `stage:${string}`
   | 'music'
-  | 'movies';
+  | 'movies'
+  | 'other';
 
 export interface AssetManifest {
   readonly version: string;
