@@ -656,3 +656,39 @@ shows the same gap (about 53 s of wall clock for about 11 s of frames) with and 
 Caveat kept in the record: this ran the x86 binary on the VPS, not the WebAssembly module under
 JavaScriptCore, so it removes one candidate explanation without explaining the gap. Method, table and
 limits: `docs/HARNESS_OVERHEAD_EXPERIMENT.md`.
+
+## The optimisation level: measured, bit-exact, and 5.2x too big to ship (2026-09-30, night)
+
+The device row misses the GO line by 8% and the served core is `-Oz`, which this repository had
+measured as roughly 6% slower than `-O1`. That made the optimisation level the first lever to test.
+`phase0-build.yml` now takes an `opt_level` input and `wasm/core/CMakeLists.txt` exposes `MELEE_OPT`
+with `-Oz` as the unchanged default (PR #20), so the lever became measurable instead of arguable.
+
+Dispatch `36779031737` (main `f008e27`, `opt_level=-O1`, both uploads on), success, 21:22 → 22:00 UTC.
+The run summary prints `opt_level=-O1`, and the artifact's `core.json` says
+`{"commit":"f008e27881e67b5233d8384c60934713b9e92eca","opt":"-O1"}` — the field now reports what CMake
+configured with, which is what PR #20 fixed: it used to be grepped out of the build definition and
+matched the `-O1` in a comment.
+
+| module | `-O1` bytes | `-Oz` bytes (run 36776512026) | Pages limit | `within_pages_limit` at `-O1` |
+| --- | --- | --- | --- | --- |
+| `melee_core_node.wasm` | 85.658.487 | 16.323.657 | 26.214.400 | **false** |
+| `melee_core_web.wasm` | 85.658.030 | 16.323.255 | 26.214.400 | **false** |
+
+Where the bytes went, read by opening the module rather than guessed: the `code` section is
+84.881.224 bytes, **99.1%** of the file. It is not the name section and not debug information, so
+"compile at `-O1` and strip the symbols" has nothing to strip.
+
+**Correctness and speed, measured on the VPS** with the downloaded Node module, the operator's own
+disc, the project's script and 2400 frames: two runs, both `exit 0`, both trace SHA-1 `c79c53b9…`,
+both `identical: 2400 retraces` against the native reference, both ending at
+`mode=2 state=2 match_frame=762`. In-match means 28.46 and 25.31 ms against 30.02 / 27.76 / 28.92 ms
+for the three `-Oz` runs of the same day: **about 7% faster**, which is the ratio the repository had
+been carrying as an estimate from an older commit.
+
+**The level is therefore not the lever, and the reason is size, not speed.** `-Oz` stays the shipped
+core because at `-O1` the module cannot be published to Cloudflare Pages at all — 3.3x over the
+per-file limit. The route that remains is a level per file: the hot translation units at `-O2`/`-O3`
+and the rest at `-Oz`, which should cost few bytes and must be measured with this same method (2400
+checkpoints, bytes, `within_pages_limit`). Full method, acceptance criteria and numbers:
+`docs/OPT_LEVEL_EXPERIMENT.md`.
