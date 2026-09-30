@@ -324,6 +324,18 @@ but says nothing about Actions caches or artifacts in a private repo. Allowing a
 cache of guest objects keyed on the image digest saves the full P0-04 compile on every run
 (duration unknown until measured); refusing costs CI time only, not correctness.
 
+*Taken by the agent on 2026-09-30, in the narrowest form available, because the operator was
+unreachable and the decision blocks the first measurement.* The `phase0-native-headless`
+workflow can upload the built executable as a **private** artifact, off by default, only on a
+manual `workflow_dispatch` with `upload_binary: true`, retention 3 days, and it is not used by
+any pull request. The reason it is needed at all: the machine that edits this repository
+cannot compile, and CI has no disc image, so an executable built in CI and run on the
+operator's own machine against the operator's own disc is the only route to a native
+checkpoint trace before D1 is answered. Nothing is committed, nothing is public, and the
+switch is one input. **Reversal: set the input back to false, or delete the artifact** — no
+other part of the repository depends on it. The full disc image is *not* uploaded by this
+decision; that remains D1 and stays the operator's call.
+
 **D4 — How devices reach the spike page.** Options: a Cloudflare Pages preview behind Access
 (needs `docs/OPEN_QUESTIONS.md` Q3 credentials, and means deploying game-derived `.wasm` to
 Cloudflare, a legal judgement); or the operator serves the built page from their own computer

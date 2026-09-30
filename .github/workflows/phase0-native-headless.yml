@@ -1,6 +1,11 @@
 name: Phase 0 — Linux headless reference (offline)
 on:
   workflow_dispatch:
+    inputs:
+      upload_binary:
+        description: 'Upload the built executable as a private artifact (game-derived; see docs/PHASE0_TASKS.md D3)'
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'native/**'
@@ -57,4 +62,16 @@ jobs:
           echo 'Build/CLI checks only. ISO boot, 2400-frame run and Windows parity remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - name: Repository hygiene
         run: python3 scripts/check_no_game_data.py --all
-      # No binary/guest artifacts: these contain game code. Only Actions logs are retained.
+      # No binary/guest artifacts by default: these contain game code. Only Actions logs are
+      # retained. The exception is opt-in and one run at a time: the machine that edits this
+      # repository cannot compile, and CI has no disc image, so a private artifact is the only
+      # route by which the operator's own copy of the disc can produce a checkpoint trace.
+      # See docs/PHASE0_TASKS.md D3.
+      - name: Upload the reference executable (opt-in private artifact)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_binary }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: melee-core-headless
+          path: ${{ runner.temp }}/build-native/melee_core_headless
+          retention-days: 3
+          if-no-files-found: error
