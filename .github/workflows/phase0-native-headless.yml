@@ -47,6 +47,13 @@ jobs:
           "$exe" --help
           "$exe" --check-dol "$RUNNER_TEMP/dol/main.dol"
           if "$exe" --iso missing.iso --frames 0; then exit 1; fi
+          # --sim-times is reported before the ISO checks, so it fires even with a bad ISO path.
+          "$exe" --help > "$RUNNER_TEMP/help.txt"
+          grep -q -- '--sim-times' "$RUNNER_TEMP/help.txt"
+          if "$exe" --iso missing.iso --frames 1 --sim-times "$RUNNER_TEMP/st.csv" > "$RUNNER_TEMP/st.log" 2>&1; then
+            echo '--sim-times without --fast accepted'; exit 1
+          fi
+          grep -q -- '--sim-times requires --fast' "$RUNNER_TEMP/st.log"
           if "$exe" --hidden; then exit 1; fi
           echo 'Build/CLI checks only. ISO boot, 2400-frame run and Windows parity remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - name: Repository hygiene

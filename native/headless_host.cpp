@@ -20,6 +20,7 @@ namespace hle { void audio_tick(bool); void dvd_poll(); void dvd_settle(); }
 namespace host {
 Options options;
 std::string dol_path;
+std::string sim_times_path;
 uint8_t* ram = nullptr;
 uint32_t ram_size = ppc::RAM_SIZE;
 uint8_t* aram = nullptr;
@@ -28,6 +29,8 @@ ppc::Context* cpu = nullptr;
 static FILE* g_disc = nullptr;
 static FILE* g_state_trace = nullptr;
 static FILE* g_state_digest = nullptr;
+static FILE* g_sim_times = nullptr;
+static std::chrono::steady_clock::time_point g_sim_resume;
 static uint32_t g_fst_offset, g_fst_size, g_fst_max;
 static std::deque<Completion> g_completions;
 static bool g_pe_finish_pending = false;
@@ -237,6 +240,11 @@ void boot_setup() {
     if (!g_state_trace) die("cannot open state trace");
     std::fprintf(g_state_trace, "retrace,cpu,ram,aram,events\n");
   }
+  if (!sim_times_path.empty()) {
+    g_sim_times = std::fopen(sim_times_path.c_str(), "w");
+    if (!g_sim_times) die("cannot open sim times");
+    std::fprintf(g_sim_times, "retrace,sim_ms,match_frame\n");
+  }
   ram = (uint8_t*)std::calloc(ppc::RAM_SIZE + 64, 1);
   aram = (uint8_t*)std::calloc(0x01000000, 1);
   ax::set_memory({rd16, rd32, wr16, wr32, aram, 0x01000000});
@@ -293,6 +301,7 @@ void boot_setup() {
   cpu->fpscr = 0;
   ppc::update_mxcsr(*cpu);
   g_next_frame = std::chrono::steady_clock::now();
+  g_sim_resume = g_next_frame;
 }
 
 // ---------------- guest calls from host ----------------
@@ -522,6 +531,18 @@ static void digest_state() {
   std::fflush(g_state_digest);
 }
 
+// --sim-times: wall time spent simulating since the previous retrace finished its checkpoint
+// bookkeeping, so the 40 MiB of RAM/ARAM hashing below is never counted. --fast only.
+static void record_sim_time() {
+  if (!g_sim_times) return;
+  const auto now = std::chrono::steady_clock::now();
+  uint32_t major = 0, minor = 0, match_frame = 0;
+  current_scene(&major, &minor, &match_frame);
+  std::fprintf(g_sim_times, "%u,%.4f,%u\n", g_retraces,
+      std::chrono::duration<double, std::milli>(now - g_sim_resume).count(), match_frame);
+  std::fflush(g_sim_times);
+}
+
 // Same virtual-time and interrupt order as Windows retrace(), without UI/network/profiling.
 void retrace() {
   struct Guard { Guard() { g_in_retrace = true; } ~Guard() { g_in_retrace = false; } } guard;
@@ -540,8 +561,10 @@ void retrace() {
   di0 |= 0x8000;
   g_mmio[0x2030] = uint8_t(di0 >> 8); g_mmio[0x2031] = uint8_t(di0);
   deliver_interrupt(24);
+  record_sim_time();
   trace_state();
   digest_state();
+  if (g_sim_times) g_sim_resume = std::chrono::steady_clock::now();
   if (options.frames && g_retraces >= options.frames) request_exit(0);
   if (g_exit) throw ExitRequested{g_exit_code.load()};
 }

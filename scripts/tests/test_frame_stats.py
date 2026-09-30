@@ -98,6 +98,54 @@ class FrameStatsTest(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertIn('nope.csv', err)
 
+    # --in-match: the runtime's --sim-times CSV, filtered to the frames of a real match.
+
+    SIM_TIMES = 'retrace,sim_ms,match_frame\n1,5.0,0\n2,6.0,0\n3,7.0,1\n4,8.0,2\n5,9.0,3\n'
+
+    def test_in_match_keeps_only_positive_match_frame(self):
+        self.assertEqual(frame_stats.parse_durations(self.SIM_TIMES, in_match=True), [7.0, 8.0, 9.0])
+
+    def test_without_in_match_the_whole_file_is_measured(self):
+        self.assertEqual(frame_stats.parse_durations(self.SIM_TIMES), [5.0, 6.0, 7.0, 8.0, 9.0])
+
+    def test_in_match_without_the_column_is_an_error(self):
+        with self.assertRaises(ValueError) as raised:
+            frame_stats.parse_durations('frame,sim_ms\n1,5.0\n', in_match=True)
+        self.assertIn('no match_frame column', str(raised.exception))
+
+    def test_in_match_without_a_header_is_an_error(self):
+        with self.assertRaises(ValueError) as raised:
+            frame_stats.parse_durations('5.0\n6.0\n', in_match=True)
+        self.assertIn('no match_frame column', str(raised.exception))
+
+    def test_in_match_with_no_match_frames_is_an_error(self):
+        with self.assertRaises(ValueError) as raised:
+            frame_stats.parse_durations('retrace,sim_ms,match_frame\n1,5.0,0\n2,6.0,0\n', in_match=True)
+        self.assertIn('no in-match rows', str(raised.exception))
+
+    def test_in_match_rejects_a_non_numeric_match_frame(self):
+        with self.assertRaises(ValueError) as raised:
+            frame_stats.parse_durations('retrace,sim_ms,match_frame\n1,5.0,later\n', in_match=True)
+        self.assertIn('not a match frame', str(raised.exception))
+
+    def test_main_in_match_flag_reports_rows(self):
+        path = self.write(self.SIM_TIMES)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            status = frame_stats.main(['frame_stats.py', '--in-match', path])
+        self.assertEqual(status, 0)
+        result = json.loads(out.getvalue())
+        self.assertEqual(result['rows'], 'in-match')
+        self.assertEqual(result['count'], 3)
+
+    def test_main_without_the_flag_reports_all_rows(self):
+        path = self.write(self.SIM_TIMES)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            status = frame_stats.main(['frame_stats.py', path])
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(out.getvalue())['rows'], 'all')
+
 
 if __name__ == '__main__':
     unittest.main()

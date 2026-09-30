@@ -36,11 +36,20 @@ an operator can run (not compile) it with the ISO:
 ```sh
 melee_core_headless --iso /absolute/path/melee.iso --headless --fast \
   --frames 2400 --time-base 1 --volume 0 \
-  --script upstream/melee-unlocked/port/scripts/vs_match.txt \
+  --script upstream/melee-unlocked/port/scripts/parity_vs_onett.txt \
   --card-dir /tmp/melee-reference/trial/card \
   --state-trace /tmp/melee-reference/trace.csv \
+  --sim-times /tmp/melee-reference/sim_times.csv \
   --state-digest /tmp/melee-reference/digest.csv
 ```
+
+`--sim-times PATH` writes `retrace,sim_ms,match_frame`, where `sim_ms` for retrace *n* is the
+wall time from the end of retrace *n−1*'s checkpoint bookkeeping to the start of retrace *n*'s:
+all guest execution, interrupts, audio and DVD work, and **not** the 40 MiB of RAM/ARAM hashing
+that `--state-trace` does every retrace. It therefore needs `--fast` and refuses to run without
+it, and it is what `scripts/phase0/frame_stats.py --in-match` measures. Note that
+`vs_match.txt` is **not** usable here: it assumes Slippi boot timing and ends in a menu
+(`mode=1 state=0 match_frame=0`) instead of a match.
 
 Create the trace directory first. Use fresh, isolated card directories **and their
 parent directories** per trial (upstream persists `sram.bin` beside the card).
