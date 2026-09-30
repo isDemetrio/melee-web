@@ -96,8 +96,18 @@ class FakeFileHandle implements OpfsFileHandleLike {
 export class FakeOpfsDirectory implements OpfsDirectoryLike {
   private readonly files = new Map<string, FakeFileHandle>();
   private readonly directories = new Map<string, FakeOpfsDirectory>();
-  /** Test-only: how many times a handle was asked for, per name. */
-  readonly lookups: string[] = [];
+  /**
+   * Test-only: every name a handle was asked for, in this tree, in order.
+   *
+   * Shared with the child directories rather than kept per directory, because what a test
+   * wants to observe is how the store reaches for a name -- and the blob it reaches for lives
+   * in `assets/`, one level below the root the store was handed.
+   */
+  readonly lookups: string[];
+
+  constructor(lookups: string[] = []) {
+    this.lookups = lookups;
+  }
 
   get fileNames(): string[] {
     return [...this.files.keys()].sort();
@@ -125,7 +135,7 @@ export class FakeOpfsDirectory implements OpfsDirectoryLike {
     const existing = this.directories.get(name);
     if (existing) return existing;
     if (!options?.create) throw notFound();
-    const directory = new FakeOpfsDirectory();
+    const directory = new FakeOpfsDirectory(this.lookups);
     this.directories.set(name, directory);
     return directory;
   }
