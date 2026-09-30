@@ -56,11 +56,15 @@ describe('InputController', () => {
     let pads: readonly (GamepadLike | null)[] = [padWithButton(PAD.B)];
     const input = new InputController({}, new GamepadReader({ getGamepads: () => pads }));
     expect(input.poll().button).toBe(PAD.B);
+    expect(input.source).toBe('gamepad');
     // An unplugged pad keeps its slot with connected: false and frozen values.
     pads = [{ ...padWithButton(PAD.B), connected: false }];
     input.keyboard.handleKeyDown({ code: 'KeyZ' });
+    // `source` names the device of the last poll, so it is read after the poll that sees
+    // the pad gone: reading it before would report the previous poll's device.
+    const state = input.poll();
     expect(input.source).toBe('keyboard');
-    expect(input.poll().button).toBe(PAD.A);
+    expect(state.button).toBe(PAD.A);
   });
 
   it('reports no input device as an unplugged port, not as a pad at rest', () => {
