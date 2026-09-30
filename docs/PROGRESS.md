@@ -87,7 +87,6 @@ the measurement next to it:
    or a Codespace (faster, needs an authorisation and consumes the free core-hours).
 
 ## Next step
-
 1. Merge PR #1 to `main` (every workflow is green) once the operator has read it; the PR
    description needs rewriting first, it still describes only the docs commit.
 2. Then, in order: the WASM-x86 vs WASM-arm64 probe comparison (the browser-to-browser
@@ -154,3 +153,50 @@ All from CI, never from this VPS (which has no compiler). Runner
 
 See `docs/OPEN_QUESTIONS.md`. In short: the ISO (Q1), where the DOL lives for CI (Q2), and
 Cloudflare/Supabase credentials (Q3). Q7 is closed by measurement.
+
+## Phase 0 progress — 2026-09-30, after the disc arrived
+
+`docs/PHASE0_TASKS.md` is the breakdown: twelve tasks from the DOL to the go/no-go report,
+each with its files, its CI verification and its risk. Two of them are done and green, and
+one real attempt at the native reference exists but has never been compiled.
+
+**P0-01, done.** The recompiler's generated C++ compiles, both with `em++` and with the host
+`g++`. Run 36699635826, `ubuntu-24.04`:
+
+| TU | em++ | g++ |
+| --- | --- | --- |
+| `guest_000.cpp` (smallest) | 6.60 s, 229 MB RSS, 762 KB object | 7.08 s, 332 MB, 535 KB |
+| `guest_139.cpp` (largest) | 6.13 s, 196 MB, 540 KB | 6.17 s, 355 MB, 1.15 MB |
+
+Two corrections came out of doing it. The first run measured `guest_table.cpp` as "the
+largest TU" — that file is the dispatch table, not a guest function, so the number described
+something other than what it claimed; the selection now excludes it. And the step failed once
+on `sort: fflush failed: Broken pipe`: under `set -o pipefail`, a `head` that closes the pipe
+kills `sort` with SIGPIPE and the step exits 2. Replaced with one `awk` that reads the whole
+stream.
+
+**P0-02, done, and the prediction was wrong.** The recompiler now runs with
+`--gct-base 0x8065CC80`, the address the release build bakes Slippi's code table at
+(`build.bat:26`, `README.md:119`), and the job fails if its log still says the table was
+skipped. The breakdown expected the TU count, the function count and the guest image digest
+to change. **They do not.** 144 TUs, 20,076 functions, image `7883e197ff19`, identical with
+and without the flag. What changes is the log: `skipped: pass --gct-base` disappears and the
+hook line reads `203 hooks, 0 C0 caves`. So the flag takes effect and has nothing to
+translate, because this code list carries no C0 caves. The expectations were left as they
+were, with the reason written beside them.
+
+**The Linux headless reference, unverified.** `native/` (1533 lines, PR #2) links real
+generated guest functions, PPC dispatch, OS/DVD/PAD/card HLE, ARAM DMA and AX mixing, with a
+portable host layer in place of the Win32 one, plus patch `0002` and its own CI workflow. It
+has **never been compiled or run**: the workflow in the same PR is what will decide. Its
+README states what it substitutes (a FIFO decoder that keeps CP/VAT framing and discards
+presentation work, no renderer, no network, Slippi rejected at boot so it needs `--no-slippi`)
+and what is unverified: build, boot, the 2400 frames, scripted match entry, Windows parity.
+`scripts/apply_patches.sh` applies both patches in order — checked here, and a check of `0002`
+against an unpatched tree fails, which is expected and is not a defect.
+
+**What is still the operator's call.** D1: whether the ISO goes somewhere CI can read, without
+which P0-08 and P0-09 — the 2400-checkpoint comparison, the first go/no-go criterion — cannot
+run at all. D2: runner size, only if the full guest build fails on a standard runner. D3:
+whether game-derived build products may be cached. D4/D5: how devices reach the spike page and
+which devices. All six are written out in `docs/PHASE0_TASKS.md` §4 with the cost of waiting.
