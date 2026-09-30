@@ -184,6 +184,7 @@ button:focus-visible {
 }
 
 .stick-zone,
+.c-stick-zone,
 .button-zone {
   position: absolute;
   bottom: 0;
@@ -192,14 +193,44 @@ button:focus-visible {
   touch-action: none;
 }
 
+/* Control stick, C-stick and buttons, left to right. The zone *is* the control: deflection is
+   measured in finger travel from where the finger landed (web/src/input/touch.ts), so there is
+   no stick to aim at. */
 .stick-zone {
   left: 0;
-  width: 45%;
+  width: 40%;
+}
+
+.c-stick-zone {
+  left: 40%;
+  width: 18%;
 }
 
 .button-zone {
   right: 0;
-  width: 55%;
+  width: 42%;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  align-content: center;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.touch-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .status {
