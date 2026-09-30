@@ -12,6 +12,13 @@ the CI checkout only.
 | `0002-native-linux-runtime.patch` | `port/runtime/ppc/ppc.h` | Restore native x86 `<immintrin.h>` in the non-MSVC path introduced by 0001: Linux runtime uses MXCSR and TSC while WASM must not include x86 intrinsics | `scripts/apply_patches.sh` (CI only) | Patch-series applicability checked in a temporary tree; native build/runtime verification pending GitHub Actions and an operator ISO run |
 | `0002-native-linux-runtime.patch` | `port/runtime/hle/hle_dvd.cpp` | Under `MELEE_HEADLESS`, drain and join the DVD worker before C++ static destruction on Linux; Windows retains its detached worker | `scripts/apply_patches.sh` (CI only) | Patch-series applicability checked in a temporary tree; CI and ISO shutdown verification pending |
 
+| `0003-portable-runtime-platform.patch` | `host/host.cpp`, `host/host.h`, `ppc/ppc.h` | Portable SHA-1, file/timing operations; restart explicitly unavailable off Windows; profiler cycles unavailable off Windows. Preserve Win32 behavior. | CI patch series | Pending clang/emcc runtime compile |
+| `0004-ppc-fpscr-diagnostics.patch` | `ppc/ppc_runtime.cpp`, `ppc/ppc.h` | Keep MXCSR only on x86; count RN/NI requests and log each category once on non-x86, without emulation. | CI patch series | Pending WASM link/ISO observation |
+| `0005-single-thread-workers.patch` | `hle/hle_dvd.cpp`, `host/host.cpp`, `hle/exi_slippi.cpp` | Inline DVD reads, log drain and Sys preload under MELEE_SINGLE_THREAD; preserve virtual DVD completion times. | CI patch series | Pending native/emcc compile |
+| `0006-exi-portable-mkdir.patch` | `hle/exi_slippi.cpp` | Replace the sole Win32 directory creation call with nonthrowing filesystem operation. | CI patch series | Pending clang/emcc compile |
+
+| `0007-gx-settings-boundary.patch` | `gx/gx_core.cpp`, `gx/pc_settings_shared.h`, new `gx/pc_settings_guest.h` | Move the guest menu observer declaration into a platform-neutral header, so FIFO decoding does not include Win32/XInput settings UI types. | CI patch series | clang run 36709850208 identified the include chain; verification pending |
+
 ## Why the FMA family goes through `wasm/compat/fma.h`
 
 The patch's Emscripten branch used to call `std::fma` directly. Emscripten's libc is

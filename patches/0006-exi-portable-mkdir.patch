@@ -1,0 +1,22 @@
+--- a/port/runtime/hle/exi_slippi.cpp
++++ b/port/runtime/hle/exi_slippi.cpp
+@@ -8,8 +8,6 @@
+ #include "host.h"
+ #include "vcdiff.h"
+ #include "lab_view.h"
+-#define NOMINMAX
+-#include <windows.h>
+ #include <cstdio>
+ #include <atomic>
+ #include <cstring>
+@@ -121,7 +119,9 @@
+ 
+ void create_file() {
+   close_file();
+-  CreateDirectoryA(g_replay_dir.c_str(), nullptr);
++  std::error_code mkdir_error;
++  std::filesystem::create_directories(g_replay_dir, mkdir_error);
++  if (mkdir_error) { host::log("slippi: cannot create replay directory: %s", mkdir_error.message().c_str()); return; }
+   char stamp[32];
+   std::strftime(stamp, sizeof stamp, "%Y%m%dT%H%M%S", std::localtime(&g_start_time));
+   g_replay_path = g_replay_dir + "\\Game_" + stamp + ".slp";

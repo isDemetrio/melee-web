@@ -27,7 +27,12 @@ static void usage() {
 namespace ppc { void init_dispatch(); }
 namespace hle { void dvd_shutdown(); }
 int main(int argc, char** argv) {
-  struct DvdShutdown { ~DvdShutdown() { hle::dvd_shutdown(); } } shutdown;
+  struct DvdShutdown { ~DvdShutdown() {
+    hle::dvd_shutdown();
+    std::fprintf(stderr, "FPSCR requests: RN=%llu NI=%llu (non-x86 observation only)\n",
+        (unsigned long long)ppc::fpscr_nondefault_rn_requests,
+        (unsigned long long)ppc::fpscr_ni_requests);
+  } } shutdown;
   try {
     auto& o = host::options;
     o.state_trace = "-";

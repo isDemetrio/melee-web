@@ -1,0 +1,175 @@
+--- a/port/runtime/host/host.cpp
++++ b/port/runtime/host/host.cpp
+@@ -3,8 +3,15 @@
+ #include "host.h"
+ #include "cosmetic_mods.h"
+ #include "memory_range.h"
++#ifdef _WIN32
+ #include <windows.h>
+ #include <bcrypt.h>
++#else
++#include <strings.h>
++#include "wasm/compat/sha1.h"
++#define _fseeki64 fseeko
++#define _strnicmp strncasecmp
++#endif
+ #include "guest_registry.h"
+ #include "guest_symbols.h"
+ #include "gx_core.h"
+@@ -309,6 +316,7 @@
+   constexpr uint32_t dol_size = 0x4385E0u;
+   std::vector<uint8_t> image(dol_size);
+   if (!disc_read(disc_dol_offset(), image.data(), dol_size)) die("cannot read full Melee DOL");
++#ifdef _WIN32
+   BCRYPT_ALG_HANDLE algorithm = nullptr;
+   uint8_t digest[20];
+   const uint8_t expected[20] = {0x08,0xe0,0xbf,0x20,0x13,0x4d,0xfc,0xb2,0x60,0x69,0x96,0x71,0x00,0x45,0x27,0xb2,0xd6,0xbb,0x1a,0x45};
+@@ -317,6 +325,11 @@
+   NTSTATUS hash_status = BCryptHash(algorithm, nullptr, 0, image.data(), dol_size, digest, sizeof digest);
+   BCryptCloseAlgorithmProvider(algorithm, 0);
+   return hash_status >= 0 && std::memcmp(digest, expected, sizeof digest) == 0;
++#else
++  const auto digest = wasm_compat::sha1(image.data(), image.size());
++  const uint8_t expected[20] = {0x08,0xe0,0xbf,0x20,0x13,0x4d,0xfc,0xb2,0x60,0x69,0x96,0x71,0x00,0x45,0x27,0xb2,0xd6,0xbb,0x1a,0x45};
++  return std::memcmp(digest.data(), expected, 20) == 0;
++#endif
+ }
+ static void load_dol_from_disc() {
+   const uint32_t dol_offset = disc_dol_offset();
+@@ -462,6 +475,7 @@
+ bool exit_requested() { return g_exit; }
+ void request_exit(int code) { g_exit_code.store(code); g_exit.store(true); }
+ void request_restart() {
++#ifdef _WIN32
+   // Start the replacement first and only then ask for a clean shutdown: if the launch fails there
+   // is nothing to recover to, so the running game is left alone rather than closed into nothing.
+   wchar_t exe[MAX_PATH];
+@@ -476,6 +490,9 @@
+   CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+   log("restart: relaunched, shutting down this instance");
+   request_exit(0);
++#else
++  log("restart: unavailable on this platform");
++#endif
+ }
+ int exit_code() { return g_exit_code.load(); }
+ uint32_t retrace_count() { return g_retraces; }
+@@ -707,7 +724,13 @@
+     const auto path = std::filesystem::u8path(cfg.lobby_status_file);
+     const auto temp = std::filesystem::u8path(cfg.lobby_status_file + ".tmp");
+     { std::ofstream f(temp); f << "{\"status\":\"" << (in_match ? "In match" : "In game") << "\",\"stocks\":[" << stocks << "]}"; }
++#ifdef _WIN32
+     MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
++#else
++    std::error_code ec;
++    std::filesystem::rename(temp, path, ec);
++    if (ec) log("lobby status: %s", ec.message().c_str());
++#endif
+   }
+   // Native lobby boot is a single negotiated match. Return to the launcher after it ends.
+   // A failed negotiation must not leave either player stuck in the loading scene indefinitely.
+@@ -749,6 +772,7 @@
+ // retrace the frame's work time (sleep excluded) is logged when it exceeds 20 ms, with the
+ // slots that explain it, so a hitch is attributed instead of guessed.
+ // Seconds per time stamp counter tick, measured against the performance counter over 20 ms at startup.
++#ifdef _WIN32
+ const double tsc_seconds = [] {
+   LARGE_INTEGER freq, q0, q1; QueryPerformanceFrequency(&freq);
+   QueryPerformanceCounter(&q0); const uint64_t t0 = __rdtsc();
+@@ -756,12 +780,15 @@
+   QueryPerformanceCounter(&q1); const uint64_t t1 = __rdtsc();
+   return t1 > t0 ? (double)(q1.QuadPart - q0.QuadPart) / (double)freq.QuadPart / (double)(t1 - t0) : 0.0;
+ }();
++#else
++const double tsc_seconds = 1e-9; // portable monotonic nanoseconds
++#endif
+ static double g_sim_costs[SIM_COST_COUNT];
+ static double g_sim_costs_window[SIM_COST_COUNT];   // accumulated over the 60-frame log interval
+ static double g_sim_ms_window = 0, g_sim_ms_worst = 0;
+ static const char* const g_sim_cost_names[SIM_COST_COUNT] = {"disc", "ax", "jukebox", "exi", "texsnap", "queue", "observe", "record", "gxdecode"};   // record includes texsnap and observe; gxdecode includes record and queue
+ static double g_sim_frame_start = 0.0, g_last_sim_ms = 0.0;
+-static ULONG64 g_sim_frame_start_cycles = 0;   // this thread's cycle count at g_sim_frame_start (MELEE_SIM_TIMES)
++static uint64_t g_sim_frame_start_cycles = 0;   // this thread's cycle count at g_sim_frame_start (MELEE_SIM_TIMES)
+ void sim_cost_add(int slot, double seconds) { if (slot >= 0 && slot < SIM_COST_COUNT) { g_sim_costs[slot] += seconds; g_sim_costs_window[slot] += seconds; } }
+ // "sim: 3.1 ms/frame (worst 12.4) | observe 0.9 texsnap 0.4" for the periodic frame log.
+ static std::string sim_cost_line(uint32_t frames) {
+@@ -812,6 +839,7 @@
+ // before the deadline, then a short spin. Without the high resolution timer (Windows before 1803)
+ // a millisecond sleep stands in for it.
+ static void wait_for_tick(std::chrono::steady_clock::time_point deadline) {
++#ifdef _WIN32
+   static const HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, 0x2 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+   for (;;) {
+     const double remaining = std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
+@@ -825,6 +853,9 @@
+       YieldProcessor();
+     }
+   }
++#else
++  std::this_thread::sleep_until(deadline);
++#endif
+ }
+ 
+ void retrace() {
+@@ -876,7 +907,10 @@
+         current_scene(&major, &minor, &match_frame);
+         // Cycles this thread actually ran during the frame (waits and preemption by other processes
+         // excluded): separates the frame's own cost from contention.
+-        ULONG64 cycles = 0; QueryThreadCycleTime(GetCurrentThread(), &cycles);
++        uint64_t cycles = 0;
++#ifdef _WIN32
++        QueryThreadCycleTime(GetCurrentThread(), &cycles);
++#endif
+         const double cpu_ms = g_sim_frame_start_cycles ? (double)(cycles - g_sim_frame_start_cycles) * tsc_seconds * 1000.0 : 0.0;
+         std::fprintf(sim_times, "%u,%u,%u,%u,%.3f,%.3f", completed_frame, major, minor, match_frame, g_last_sim_ms, cpu_ms);
+         for (int i = 0; i < SIM_COST_COUNT; ++i) std::fprintf(sim_times, ",%.3f", g_sim_costs[i] * 1000.0);
+@@ -900,7 +934,11 @@
+   }
+   g_sim_frame_start = now_seconds();
+   static const bool sim_times_wanted = [] { const char* v = std::getenv("MELEE_SIM_TIMES"); return v && *v; }();
++#ifdef _WIN32
+   if (sim_times_wanted) QueryThreadCycleTime(GetCurrentThread(), &g_sim_frame_start_cycles);
++#else
++  (void)sim_times_wanted; // CPU-cycle profiling unavailable; report zero, not wall time.
++#endif
+   g_tick_timing = {g_frame_time, g_sim_frame_start, 0, -1};
+   if (native_retrace) {
+     native_retrace();
+--- a/port/runtime/host/host.h
++++ b/port/runtime/host/host.h
+@@ -1,6 +1,7 @@
+ // Host services used by the recompiled guest and the HLE layer.
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #pragma once
++#include <chrono>
+ #include <atomic>
+ #include <cstdint>
+ #include <functional>
+@@ -143,7 +144,15 @@
+ // Per-draw scopes run tens of thousands of times a frame, so they read the CPU time stamp counter
+ // (one instruction) instead of QueryPerformanceCounter; tsc_seconds is calibrated once at startup.
+ extern const double tsc_seconds;
+-struct SimCostScope { int slot; uint64_t t0; explicit SimCostScope(int s) : slot(s), t0(__rdtsc()) {} ~SimCostScope() { sim_cost_add(slot, (double)(__rdtsc() - t0) * tsc_seconds); } };
++inline uint64_t sim_cost_clock() {
++#ifdef _WIN32
++  return __rdtsc();
++#else
++  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
++      std::chrono::steady_clock::now().time_since_epoch()).count();
++#endif
++}
++struct SimCostScope { int slot; uint64_t t0; explicit SimCostScope(int s) : slot(s), t0(sim_cost_clock()) {} ~SimCostScope() { sim_cost_add(slot, (double)(sim_cost_clock() - t0) * tsc_seconds); } };
+ 
+ // ---- GX FIFO sink ----
+ void gx_write(uint32_t value, int bytes);  // write-gather pipe data
+--- a/port/runtime/ppc/ppc.h
++++ b/port/runtime/ppc/ppc.h
+@@ -8,7 +8,7 @@
+ #include <cstdint>
+ #include <cstring>
+ #if defined(__EMSCRIPTEN__) || !defined(_MSC_VER)
+-#if !defined(__EMSCRIPTEN__)
++#if defined(__x86_64__) || defined(__i386__)
+ // Native Linux still needs MXCSR and TSC intrinsics, unlike the WASM probe.
+ #include <immintrin.h>
+ #endif

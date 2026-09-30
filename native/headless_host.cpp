@@ -6,7 +6,7 @@
 #include "guest_symbols.h"
 #include "ax_ucode.h"
 #include "gecko_data.h"
-#include <openssl/evp.h>
+#include "wasm/compat/sha1.h"
 #include <chrono>
 #include <mutex>
 #include <cstdarg>
@@ -194,11 +194,10 @@ bool disc_has_vanilla_dol() {
   constexpr uint32_t dol_size = 0x4385E0u;
   std::vector<uint8_t> image(dol_size);
   if (!read_dol(0, image.data(), dol_size)) die("cannot read full Melee DOL");
-  // OpenSSL EVP replaces Windows BCrypt, with the same retail SHA-1 gate.
-  uint8_t digest[EVP_MAX_MD_SIZE]; unsigned length = 0;
+  // Shared portable retail SHA-1 gate on native and WASM.
+  const auto digest = wasm_compat::sha1(image.data(), image.size());
   const uint8_t expected[20] = {0x08,0xe0,0xbf,0x20,0x13,0x4d,0xfc,0xb2,0x60,0x69,0x96,0x71,0x00,0x45,0x27,0xb2,0xd6,0xbb,0x1a,0x45};
-  return EVP_Digest(image.data(), image.size(), digest, &length, EVP_sha1(), nullptr) == 1
-      && length == 20 && std::memcmp(digest, expected, 20) == 0;
+  return std::memcmp(digest.data(), expected, 20) == 0;
 }
 static void load_dol_from_disc() {
   const uint32_t dol_offset = dol_path.empty() ? disc_dol_offset() : 0;
