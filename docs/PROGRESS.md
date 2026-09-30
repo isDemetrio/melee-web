@@ -627,3 +627,32 @@ on the VPS from the JSONs the page produced. Full evidence, tables and every che
 **Next step.** Either accept the "desktop only" reading for the mobile row, or make the optimisation
 level selectable in `phase0-build.yml` and repeat the three runs at `-O1`; the second is the only path
 that turns the extrapolation above into a number.
+
+## The checkpoint trace does not inflate the measured frame times — a hypothesis tested and dropped (2026-09-30, night)
+
+The night consultation proposed that the device numbers might be measured by an instrument that costs
+what it measures: `native/headless_host.cpp` hashes about 40 MiB of RAM and ARAM after every retrace,
+`sim_ms` excludes that work, and the next frame starts with the cache it evicted. On the iPhone the
+wall clock was 24 s against 5.2 s of simulated frames, so the mechanism was plausible enough to test
+before trusting the numbers.
+
+Six trials on the native binary built from the served core's commit, alternating, 2400 frames each,
+same disc and same script, statistics from `scripts/phase0/frame_stats.py --in-match` (the 762 match
+frames):
+
+| trials | mode | in-match mean ms | mean of means | wall clock |
+| --- | --- | --- | --- | --- |
+| 1, 2, 3 | with `--state-trace` | 14.69 / 14.95 / 13.87 | **14.504** | 54 / 53 / 52 s |
+| 1, 2, 3 | without it | 15.24 / 14.37 / 14.25 | **14.622** | 53 / 54 / 52 s |
+
+**No measurable effect: the difference is −0.8%, in the direction opposite to the hypothesis, and the
+spread inside each series is ±5% — five times the difference.** The wall clock is the same to the
+second, and all three traced runs hash `c79c53b9…` and end at `mode=2 state=2 match_frame=762`, so
+the comparison is between two runs of the same simulation and not between two different ones. The gap
+between wall clock and simulated time is real, but it is not the checkpoint trace: the native harness
+shows the same gap (about 53 s of wall clock for about 11 s of frames) with and without it.
+**The device row stands as measured: no correction is owed to 3.0315 / 3.2442 / 3.0809 ms.**
+
+Caveat kept in the record: this ran the x86 binary on the VPS, not the WebAssembly module under
+JavaScriptCore, so it removes one candidate explanation without explaining the gap. Method, table and
+limits: `docs/HARNESS_OVERHEAD_EXPERIMENT.md`.
