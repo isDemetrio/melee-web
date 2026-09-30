@@ -1,0 +1,77 @@
+name: Phase 0 — Linux headless reference (offline)
+on:
+  workflow_dispatch:
+    inputs:
+      upload_binary:
+        description: 'Upload the built executable as a private artifact (game-derived; see docs/PHASE0_TASKS.md D3)'
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'patches/**'
+      - 'wasm/compat/**'
+      - 'scripts/apply_patches.sh'
+      - 'upstream/melee-unlocked'
+      - '.github/workflows/phase0-native-headless.yml'
+permissions:
+  contents: read
+concurrency:
+  group: native-headless-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Fetch and verify private retail DOL
+        env:
+          GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          test "$(git -C upstream/melee-unlocked rev-parse HEAD)" = 3aab7172db243c159afa76ecb2c564b3de8e4c0a
+          gh api repos/isDemetrio/melee-orig-dol/contents/main.dol \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/main.dol"
+          test "$(stat -c%s "$RUNNER_TEMP/main.dol")" = 4425184
+          echo "08e0bf20134dfcb260699671004527b2d6bb1a45  $RUNNER_TEMP/main.dol" | sha1sum -c -
+      - name: Apply patches and generate offline guest
+        run: |
+          scripts/apply_patches.sh
+          python3 upstream/melee-unlocked/port/recomp/recomp.py \
+            --dol "$RUNNER_TEMP/main.dol" --out "$RUNNER_TEMP/generated-native" --no-slippi
+      - name: Build Linux headless executable
+        run: |
+          cmake -S native -B "$RUNNER_TEMP/build-native" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ \
+            -DPORT_GEN="$RUNNER_TEMP/generated-native"
+          cmake --build "$RUNNER_TEMP/build-native" --target melee_core_headless native_fifo_test --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/build-native" --output-on-failure
+      - name: CLI and DOL smoke checks (no simulation without ISO)
+        run: |
+          set -euo pipefail
+          exe="$RUNNER_TEMP/build-native/melee_core_headless"
+          "$exe" --help
+          "$exe" --check-dol "$RUNNER_TEMP/main.dol"
+          if "$exe" --iso missing.iso --frames 0; then exit 1; fi
+          if "$exe" --hidden; then exit 1; fi
+          echo 'Build/CLI checks only. ISO boot, 2400-frame run and Windows parity remain unverified.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Repository hygiene
+        run: python3 scripts/check_no_game_data.py --all
+      # No binary/guest artifacts by default: these contain game code. Only Actions logs are
+      # retained. The exception is opt-in and one run at a time: the machine that edits this
+      # repository cannot compile, and CI has no disc image, so a private artifact is the only
+      # route by which the operator's own copy of the disc can produce a checkpoint trace.
+      # See docs/PHASE0_TASKS.md D3.
+      - name: Upload the reference executable (opt-in private artifact)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_binary }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: melee-core-headless
+          path: ${{ runner.temp }}/build-native/melee_core_headless
+          retention-days: 3
+          if-no-files-found: error

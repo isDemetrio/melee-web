@@ -1,0 +1,67 @@
+--- a/port/runtime/ppc/ppc.h
++++ b/port/runtime/ppc/ppc.h
+@@ -8,6 +8,10 @@
+ #include <cstdint>
+ #include <cstring>
+ #if defined(__EMSCRIPTEN__) || !defined(_MSC_VER)
++#if !defined(__EMSCRIPTEN__)
++// Native Linux still needs MXCSR and TSC intrinsics, unlike the WASM probe.
++#include <immintrin.h>
++#endif
+ #include "wasm/compat/fma.h"
+ #include "wasm/compat/intrin.h"
+ #else
+--- a/port/runtime/hle/hle_dvd.cpp
++++ b/port/runtime/hle/hle_dvd.cpp
+@@ -50,11 +50,21 @@
+ std::deque<AsyncRead> g_dvd_pending;    // in request order, waiting for their virtual completion time (sim thread only)
+ std::thread g_dvd_thread;
+ bool g_dvd_started = false;
++#ifdef MELEE_HEADLESS
++bool g_dvd_stopping = false;
++#endif
+
+ void dvd_worker() {
+   for (;;) {
+     AsyncRead r;
+-    { std::unique_lock<std::mutex> lk(g_dvd_mutex); g_dvd_cv.wait(lk, [] { return !g_dvd_queue.empty(); }); r = g_dvd_queue.front(); g_dvd_queue.pop_front(); }
++    { std::unique_lock<std::mutex> lk(g_dvd_mutex);
++#ifdef MELEE_HEADLESS
++      g_dvd_cv.wait(lk, [] { return g_dvd_stopping || !g_dvd_queue.empty(); });
++      if (g_dvd_queue.empty() && g_dvd_stopping) return;
++#else
++      g_dvd_cv.wait(lk, [] { return !g_dvd_queue.empty(); });
++#endif
++      r = g_dvd_queue.front(); g_dvd_queue.pop_front(); }
+     bool ok = r.file_info
+         ? host::disc_read_file(r.file_start, r.file_offset, host::ptr(r.addr, r.length), r.length)
+         : host::disc_read(r.disc_offset, host::ptr(r.addr, r.length), r.length);
+@@ -70,13 +80,27 @@
+   r.done = std::make_shared<std::atomic<bool>>(false);
+   g_dvd_pending.push_back(r);
+   std::lock_guard<std::mutex> lk(g_dvd_mutex);
+-  if (!g_dvd_started) { g_dvd_started = true; g_dvd_thread = std::thread(dvd_worker); g_dvd_thread.detach(); }
++  if (!g_dvd_started) {
++    g_dvd_started = true; g_dvd_thread = std::thread(dvd_worker);
++#ifndef MELEE_HEADLESS
++    g_dvd_thread.detach();
++#endif
++  }
+   g_dvd_queue.push_back(r);
+   g_dvd_cv.notify_one();
+ }
+ }  // namespace
+
+ namespace hle {
++#ifdef MELEE_HEADLESS
++// Linux returns through C++ static destruction instead of Windows ExitProcess.
++// Drain reads and join before destroying the worker's mutex/condition variables.
++void dvd_shutdown() {
++  { std::lock_guard<std::mutex> lk(g_dvd_mutex); g_dvd_stopping = true; }
++  g_dvd_cv.notify_all();
++  if (g_dvd_thread.joinable()) g_dvd_thread.join();
++}
++#endif
+ // Called from the simulation thread at every wait point.
+ void dvd_poll() {
+   while (!g_dvd_pending.empty()) {

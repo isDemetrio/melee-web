@@ -39,6 +39,11 @@ jobs:
       DOL_REPO: isDemetrio/melee-orig-dol
       DOL_SHA1: 08e0bf20134dfcb260699671004527b2d6bb1a45
       DOL_SIZE: '4425184'
+      GCT_BASE: '0x8065CC80'
+      # Measured 2026-09-30. The recompiler's output is identical with and without
+      # --gct-base: the code list carries 0 C0 caves, so there is nothing to translate at
+      # the real addresses. The flag is still passed because it is what the release build
+      # uses, and the job asserts the log no longer says the table was skipped.
       EXPECTED_TUS: '144'
       EXPECTED_FUNCTIONS: '20076'
       EXPECTED_IMAGE: 7883e197ff19
@@ -89,7 +94,15 @@ jobs:
           out="$RUNNER_TEMP/generated"
           mkdir -p "$out"
           python3 upstream/melee-unlocked/port/recomp/recomp.py \
-            --dol "$RUNNER_TEMP/dol/main.dol" --out "$out" | tee "$RUNNER_TEMP/recomp.log"
+            --dol "$RUNNER_TEMP/dol/main.dol" --gct-base "$GCT_BASE" \
+            --out "$out" | tee "$RUNNER_TEMP/recomp.log"
+          # The release build bakes the Slippi code table at this address (build.bat:26,
+          # README.md:119). Without the flag the recompiler says so in its own log, and C0
+          # caves are not translated at their real addresses.
+          if grep -q 'skipped: pass --gct-base' "$RUNNER_TEMP/recomp.log"; then
+            echo 'the recompiler skipped the code table: --gct-base did not take effect' >&2
+            exit 1
+          fi
           # The generated tree must not be inside the repository, whatever --out said.
           case "$(realpath "$out")" in
             "$(realpath "$GITHUB_WORKSPACE")"/*) echo 'generated tree inside the checkout' >&2; exit 1 ;;
@@ -123,6 +136,51 @@ jobs:
           set -euo pipefail
           git status --porcelain
           python3 scripts/check_no_game_data.py --all
+
+      - name: Read the pinned emsdk version
+        run: |
+          set -euo pipefail
+          version=$(tr -d '\n' < EMSDK_VERSION)
+          test -n "$version"
+          echo "EMSDK_VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+
+      - name: Compile a generated TU with emcc and with the host compiler (P0-01)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/generated"
+          # The smallest and the largest emitted TU: the first proves the toolchain works at
+          # all, the second is where a huge function would bite (PLAN_BREAKDOWN R3).
+          # guest_table.cpp is excluded: it is the dispatch table, not a guest function, and
+          # measuring it would report the wrong thing as "the biggest translation unit".
+          # awk, not `sort | head`: under `set -o pipefail` a `head` that closes the pipe
+          # makes sort die of SIGPIPE and fails the step (it did, on 2026-09-30).
+          smallest="$out/guest_000.cpp"
+          largest=$(find "$out" -maxdepth 1 -name 'guest_*.cpp' ! -name 'guest_table.cpp' \
+            -printf '%s %p\n' | awk '$1+0 > m { m = $1+0; p = $2 } END { print p }')
+          read -ra COMMON <<< "-std=c++17 -O2 -ffp-contract=off -fno-fast-math \
+            -Iwasm/compat -I. -I$out -Iupstream/melee-unlocked/port/runtime/ppc \
+            -Iupstream/melee-unlocked/port/runtime/hle"
+          for tu in "$smallest" "$largest"; do
+            name=$(basename "$tu" .cpp)
+            for cc in "em++ -fwasm-exceptions" "g++"; do
+              read -ra CMD <<< "$cc"
+              compiler="${CMD[0]}"
+              tag="${compiler%%+*}"
+              obj="$RUNNER_TEMP/$name.$tag.o"
+              /usr/bin/time -v -o "$RUNNER_TEMP/time-$name-$tag.txt" \
+                "${CMD[@]}" "${COMMON[@]}" -c "$tu" -o "$obj"
+              wall=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time-$name-$tag.txt")
+              rss=$(awk -F': ' '/Maximum resident set size/ {print $2}' "$RUNNER_TEMP/time-$name-$tag.txt")
+              bytes=$(stat -c%s "$obj")
+              echo "$compiler $name: wall=$wall rss=${rss}kB object=${bytes}B"
+              echo "$tag $name: wall=$wall rss_kb=$rss object_bytes=$bytes" \
+                >> "$RUNNER_TEMP/phase0-stats.txt"
+            done
+          done
 
       - uses: actions/upload-artifact@v4
         with:
