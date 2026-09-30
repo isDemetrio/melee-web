@@ -128,14 +128,24 @@ jobs:
           # works, and it fails with a precise message if a new arithmetic divergence
           # appears instead of only moving the exit status.
           python3 - <<'PY'
-          import os, pathlib, re
-          report = pathlib.Path('wasm-probe/fma-divergence.txt').read_text()
+          import os, pathlib
+          # Parse the main table explicitly -- its header, then its rows up to the blank
+          # line -- instead of scanning the whole report with a regex: the report now also
+          # prints per-path tables whose rows begin with the same kind names.
+          lines = pathlib.Path('wasm-probe/fma-divergence.txt').read_text().splitlines()
+          head = next(i for i, line in enumerate(lines)
+                      if line.startswith('divergence') and 'gate' in line)
           kinds = ('nan-vs-number', 'nan-sign', 'nan-payload', 'zero-sign', 'subnormal', 'value')
           totals = {}
-          for kind in kinds:
-              row = re.search(rf'^{re.escape(kind)}\s+\S+\s+(\d+)\b', report, re.M)
-              assert row, f'classification table has no {kind} row'
-              totals[kind] = int(row.group(1))
+          for line in lines[head + 1:]:
+              if not line.strip():
+                  break
+              cells = line.split()
+              assert len(cells) >= 3, f'malformed classification row: {line!r}'
+              assert cells[0] in kinds, f'unexpected row in the classification table: {line!r}'
+              totals[cells[0]] = int(cells[2])
+          missing = [kind for kind in kinds if kind not in totals]
+          assert not missing, f'classification table is missing rows: {missing}'
           arithmetic = {k: totals[k] for k in ('nan-vs-number', 'zero-sign', 'subnormal', 'value')}
           print('arithmetic parity (native reference): ' + ', '.join(f'{k}={v}' for k, v in arithmetic.items()))
           assert not any(arithmetic.values()), f'arithmetic divergence vs native: {arithmetic}'

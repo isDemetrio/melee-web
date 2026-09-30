@@ -4,8 +4,10 @@
 #include <cstring>
 
 // Correctly rounded FMA for the WASM build, with two deliberate guards: the sign of an
-// exact zero (below), and the sign of a NaN operand in the three wrappers that negate
-// an operand (at the end of this file).
+// exact zero (below), and NaN operands. The hardware does not compute with a NaN operand,
+// it returns the first one quieted and unnegated, and the WASM build must do the same:
+// `fma` below carries that guard, and the three negating wrappers carry their own because
+// they negate an operand before they call `fma`.
 //
 // The four FMA helpers in the pinned `port/runtime/ppc/ppc.h` must round once, over the
 // exact product, and must keep the sign of an exact zero. Emscripten's libc (musl) does
@@ -40,20 +42,64 @@
 //
 // What this does NOT do: `fma.c:54-55` also short-circuits every non-finite operand to
 // ordinary arithmetic, and the WASM specification leaves the sign and payload of a NaN
-// produced by arithmetic to the engine, so a NaN *result* of a non-finite operation stays
-// the platform's rather than the reference's. That difference is measured by the probe and
-// is parked as a policy question (`wasm/README.md`, `docs/OPEN_QUESTIONS.md` Q7); it is not
-// papered over here.
+// produced by arithmetic to the engine, so a NaN *result* of an operation that has no NaN
+// operand (`0 * inf`) stays the platform's rather than the reference's. NaN operands are a
+// different case and are handled below: the hardware returns the operand itself. The
+// no-NaN-operand difference is measured by the probe and is parked as a policy question
+// (`wasm/README.md`, `docs/OPEN_QUESTIONS.md` Q7); it is not papered over here.
 namespace wasm_compat {
 
+// The quiet bit: x86 quiets a signalling NaN operand and keeps its payload.
+inline double quiet(double v) {
+  uint64_t u;
+  std::memcpy(&u, &v, 8);
+  u |= 0x0008000000000000ull;
+  std::memcpy(&v, &u, 8);
+  return v;
+}
+
+// True when an operand is a NaN, with that operand quieted into `out`; operand order is
+// x86's priority (multiplicand, multiplier, addend). `x != x` is the portable NaN test and
+// is false for infinities, so an infinite operand keeps taking the arithmetic path.
+inline bool nan_operand(double x, double y, double z, double& out) {
+  if (x != x) { out = quiet(x); return true; }
+  if (y != y) { out = quiet(y); return true; }
+  if (z != z) { out = quiet(z); return true; }
+  return false;
+}
+
 inline double fma(double x, double y, double z) {
+  // x86's FMA does not compute with a NaN operand: the result is the first NaN operand,
+  // quieted and unnegated. musl's `fma.c:54-55` diverts every non-finite operand to
+  // ordinary WASM arithmetic instead, and the WASM specification leaves the sign and
+  // payload of a NaN that arithmetic produces to the engine, so without this guard the
+  // result is the engine's NaN rather than the operand the hardware would return.
+  //
+  // Measured in probe run 36672598366 (2026-09-30), where `fmadd` was the one operation
+  // still without this guard and the other three had just been fixed: 64 `nan-sign` and
+  // 716 `nan-payload` divergences were left, every one of them with a NaN operand. The
+  // first `nan-payload` of that run was
+  //
+  //     fmadd a=7ff0000000000000 c=0000000000000000 b=fff8000000001234
+  //     native=fff8000000001234   wasm=fff8000000000000
+  //
+  // -- `inf * 0 + NaN` returning the invalid-operation default NaN instead of the NaN
+  // operand. The first `nan-sign` was `fmadds a=fff8000000001234 c=7ff8000000000000
+  // b=0000000000000000`, native `fff8000000000000` against wasm `7ff8000000000000`: two
+  // NaN operands, and `NaN * NaN` lost the multiplicand's sign.
+  //
+  // This removes a divergence the shim invented. It is not the Q7 decision: what stays
+  // with Q7 is the NaN bit pattern the platform's *own* arithmetic produces when no
+  // operand is a NaN (`0 * inf` and the like), which this guard deliberately leaves alone.
+  double nan;
+  if (nan_operand(x, y, z, nan)) return nan;
   // `z == 0.0` is true for -0.0 as well. With a nonzero addend the call is libc's fma,
   // so the hot path pays this one compare and nothing else.
   if (z == 0.0) {
     // A zero factor makes the exact product a signed zero: the exact sum is the IEEE
     // sum of that zero and z, and ordinary addition already gives it the right sign.
-    // `x == 0.0` is false for NaN, so NaN and infinite factors keep taking this path
-    // and are propagated by the arithmetic itself.
+    // `x == 0.0` is false for NaN, so an infinite factor keeps taking this path and is
+    // propagated by the arithmetic itself.
     if (x == 0.0 || y == 0.0) return x * y + z;
     // Otherwise the exact product is nonzero, so the exact sum is that product and the
     // correctly rounded product is the correctly rounded fused result, sign of an
@@ -87,24 +133,11 @@ inline double fma(double x, double y, double z) {
 // What it does not claim: the NaN bits a *non-finite* operation produces when no operand is
 // a NaN (0*inf and the like) remain the engine's, and so do the payload bits a NaN result
 // carries through the arithmetic paths. Those are Q7 and are left alone.
-inline double quiet(double v) {
-  uint64_t u;
-  std::memcpy(&u, &v, 8);
-  u |= 0x0008000000000000ull;  // the quiet bit: x86 quiets a signalling NaN operand
-  std::memcpy(&v, &u, 8);
-  return v;
-}
-
-// True when an operand is a NaN, with that operand quieted into `out`; operand order is
-// x86's priority. `x != x` is the portable NaN test and is false for infinities, so an
-// infinite operand keeps taking the arithmetic path.
-inline bool nan_operand(double x, double y, double z, double& out) {
-  if (x != x) { out = quiet(x); return true; }
-  if (y != y) { out = quiet(y); return true; }
-  if (z != z) { out = quiet(z); return true; }
-  return false;
-}
-
+//
+// These three keep their own copy of the guard even though `fma` above now has one, because
+// they negate an operand *before* calling it: `fma(-a, c, -b)` would hand `fma` an already
+// flipped NaN, and the guard would faithfully return the wrong sign. Checking the operands
+// as the port received them is the only way to return what the instruction returns.
 inline double fmsub(double a, double c, double b) {
   double nan;
   if (nan_operand(a, c, b, nan)) return nan;

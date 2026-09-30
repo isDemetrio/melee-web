@@ -1,6 +1,8 @@
 // Guards the WASM FMA shim against the musl fma.c zero-addend shortcut, which loses the
-// sign of an exact zero (wasm/compat/fma.h). Runs under Node from ctest in the WASM
-// build only, through the patched ppc.h, so it exercises the code path the port uses.
+// sign of an exact zero, and against a NaN operand reaching the engine's arithmetic instead
+// of being returned the way the hardware returns it (wasm/compat/fma.h). Runs under Node
+// from ctest in the WASM build only, through the patched ppc.h, so it exercises the code
+// path the port uses.
 //
 // Every expected pattern here was confirmed against the platform's correctly rounded
 // fma before it was written; the probe's corpus comparison against the native x86
@@ -100,6 +102,27 @@ int main() {
          ppc::fnmadd(from_bits(kQNanA), from_bits(kQNanB), from_bits(kSNanB)), kQNanA);
   expect("fnmadd(1, NaN, 1) returns the multiplier",
          ppc::fnmadd(1.0, from_bits(kQNanB), 1.0), kQNanB);
+
+  // The same rule for `fmadd`, which reaches `wasm_compat::fma` with no wrapper in between.
+  // That operation had no guard at all, and the probe measured what it cost: 64 `nan-sign`
+  // and 716 `nan-payload` divergences in run 36672598366, every one of them with a NaN
+  // operand, while the three guarded wrappers contributed none. The two patterns below are
+  // that run's own first examples of each class, turned into expectations.
+  constexpr uint64_t kPosInf = 0x7ff0000000000000ull;
+  constexpr uint64_t kQNanZero = 0x7ff8000000000000ull;  // quiet NaN, positive, payload 0
+  expect("fmadd(inf, 0, NaN) returns the NaN operand",
+         ppc::fmadd(from_bits(kPosInf), 0.0, from_bits(kQNanB)), kQNanB);
+  expect("fmadd(NaN, NaN, +0) returns the first operand",
+         ppc::fmadd(from_bits(kQNanB), from_bits(kQNanZero), 0.0), kQNanB);
+  expect("fmadd(NaN, 5, +0) is not swallowed by the zero-addend path",
+         ppc::fmadd(from_bits(kQNanA), 5.0, 0.0), kQNanA);
+  expect("fmadd(1, sNaN, 1) quiets the operand and keeps its sign",
+         ppc::fmadd(1.0, from_bits(kSNanB), 1.0), kQNanA);
+  expect("fmadd(NaN, NaN, 1) returns the first operand",
+         ppc::fmadd(from_bits(kQNanA), from_bits(kQNanB), 1.0), kQNanA);
+  // What is deliberately not asserted here: what `ppc::fs` does to a NaN's payload. The
+  // double->single step is the engine's, not the shim's, and the probe's per-path table is
+  // what measures it (all four single paths, against the native reference).
 
   if (failures) {
     std::printf("\n%d expectation(s) failed\n", failures);

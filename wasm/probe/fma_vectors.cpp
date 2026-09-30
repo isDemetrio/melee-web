@@ -205,7 +205,7 @@ struct Example { bool seen; uint64_t i; unsigned path; Triple in; uint64_t nativ
 
 static void print_example(const char* label, const Example& e) {
   if (!e.seen) return;
-  std::printf("first %-13s triple %7llu %-7s a=%016llx c=%016llx b=%016llx "
+  std::printf("first %-20s triple %7llu %-7s a=%016llx c=%016llx b=%016llx "
               "native=%016llx wasm=%016llx\n",label,(unsigned long long)e.i,kPathNames[e.path],
               (unsigned long long)e.in.a,(unsigned long long)e.in.c,(unsigned long long)e.in.b,
               (unsigned long long)e.native,(unsigned long long)e.wasm);
@@ -218,7 +218,13 @@ static int compare(const char* native_path, const char* wasm_path, bool allow_na
   Sha256 native_hash, wasm_hash;
   uint64_t results[kInputs]{}, divergent[kInputs]{}, count[kKinds][kInputs]{};
   uint64_t total_divergent=0, violations=0;
-  Example first[kKinds]{}, first_violation{};
+  // Per path as well as per kind: a count concentrated on one operation points at the
+  // shim's arithmetic for that operation, while the same count on all four single paths
+  // and none on the doubles points at the double->single rounding step instead. Without
+  // this view the two are indistinguishable in the table above.
+  uint64_t path_results[kPaths]{}, path_nan[kPaths]{}, path_divergent[kPaths]{};
+  uint64_t by_path[kKinds][kPaths]{};
+  Example first[kKinds]{}, first_violation{}, first_path[kKinds][kPaths]{};
   for (uint64_t i=0;i<kTriples;++i) {
     const Triple t=corpus.next(i);
     const Triple fed_single={t.a,bits(ppc::f25(ppc::bits_to_double(t.c))),t.b};
@@ -228,12 +234,15 @@ static int compare(const char* native_path, const char* wasm_path, bool allow_na
       native_hash.put64(n); wasm_hash.put64(w);
       const Triple& in = k<4 ? t : fed_single;
       const Input ic=input_class(in);
-      ++results[ic];
+      ++results[ic]; ++path_results[k];
+      if (is_nan(n)) ++path_nan[k];
       if (n==w) continue;
       const Kind kind=classify(n,w,in);
       ++total_divergent; ++divergent[ic]; ++count[kind][ic];
+      ++path_divergent[k]; ++by_path[kind][k];
       const Example e{true,i,k,in,n,w};
       if (!first[kind].seen) first[kind]=e;
+      if (!first_path[kind][k].seen) first_path[kind][k]=e;
       if (!exempt(kind,ic,allow_nan_payload)) {
         ++violations;
         if (!first_violation.seen) first_violation=e;
@@ -264,7 +273,30 @@ static int compare(const char* native_path, const char* wasm_path, bool allow_na
     std::puts("");
   }
   std::puts("");
+  std::printf("%-9s %9s %11s %9s\n","path","results","nan-results","divergent");
+  for (unsigned p=0;p<kPaths;++p)
+    std::printf("%-9s %9llu %11llu %9llu\n",kPathNames[p],
+                (unsigned long long)path_results[p],(unsigned long long)path_nan[p],
+                (unsigned long long)path_divergent[p]);
+  std::printf("\ndivergence by path\n%-13s","divergence");
+  for (unsigned p=0;p<kPaths;++p) std::printf(" %8s",kPathNames[p]);
+  std::puts("");
+  for (unsigned k=0;k<kKinds;++k) {
+    uint64_t sum=0;
+    for (unsigned p=0;p<kPaths;++p) sum+=by_path[k][p];
+    if (!sum) continue;  // only the kinds that actually occurred
+    std::printf("%-13s",kKindNames[k]);
+    for (unsigned p=0;p<kPaths;++p) std::printf(" %8llu",(unsigned long long)by_path[k][p]);
+    std::puts("");
+  }
+  std::puts("");
   for (unsigned k=0;k<kKinds;++k) print_example(kKindNames[k],first[k]);
+  for (unsigned k=0;k<kKinds;++k)
+    for (unsigned p=0;p<kPaths;++p) {
+      if (!first_path[k][p].seen) continue;
+      const std::string label=std::string(kKindNames[k])+"/"+kPathNames[p];
+      print_example(label.c_str(),first_path[k][p]);
+    }
   print_example("violation",first_violation);
   const char* permitted=allow_nan_payload
       ? "NaN payload/quiet-bit differences on non-ordinary inputs"
