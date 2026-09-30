@@ -7,3 +7,12 @@ compatibility_date = "2026-09-01"
 [[r2_buckets]]
 binding = "ASSETS_R2"
 bucket_name = "melee-web-assets"
+
+# Phase 0 spike only. The whole Melee disc image and its chunk manifest, in a private bucket
+# served by /phase0/disc and /phase0/disc-chunks (functions/phase0/[[path]].ts). Private means
+# no public r2.dev access: the only route to it is that Function, behind Access like the rest
+# of the site. Delete this block and the bucket when Phase 0 ends
+# (docs/PHASE0_DEPLOY_PLAN.md, section 6).
+[[r2_buckets]]
+binding = "PHASE0_DISC"
+bucket_name = "melee-phase0-disc"
