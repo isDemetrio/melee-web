@@ -22,6 +22,9 @@ static void usage() {
             "  --check-dol PATH validates the DOL without claiming to run the game.\n"
             "Requires a --no-slippi translation. CSV trace defaults to stdout.");
 }
+// ppc.h declares the entry points but not the dispatch table initialiser; upstream forward
+// declares it the same way in port/app/main.cpp:646 and port/tests/native_parity.cpp:32.
+namespace ppc { void init_dispatch(); }
 namespace hle { void dvd_shutdown(); }
 int main(int argc, char** argv) {
   struct DvdShutdown { ~DvdShutdown() { hle::dvd_shutdown(); } } shutdown;
