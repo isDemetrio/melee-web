@@ -18,7 +18,7 @@ static uint64_t number(const std::string& text) {
 static void usage() {
   std::puts("melee_core_headless --iso PATH [--dol PATH] --frames N [--script PATH]\n"
             "  [--headless] [--fast] [--time-base N] [--volume 0]\n"
-            "  [--state-trace PATH|-] [--state-digest PATH] [--card-dir PATH]\n"
+            "  [--state-trace PATH|-] [--state-digest PATH] [--card-dir PATH] [--sim-times PATH]\n"
             "  --check-dol PATH validates the DOL without claiming to run the game.\n"
             "Requires a --no-slippi translation. CSV trace defaults to stdout.");
 }
@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
       else if (a == "--fast") o.fast = true;
       else if (a == "--state-trace") o.state_trace = next();
       else if (a == "--state-digest") o.state_digest = next();
+      else if (a == "--sim-times") host::sim_times_path = next();
       else if (a == "--card-dir") o.card_dir = next();
       else if (a == "--volume") {
         if (number(next()) != 0) throw std::runtime_error("headless output supports only --volume 0");
@@ -80,6 +81,9 @@ int main(int argc, char** argv) {
       std::puts("DOL SHA-1 verified; no simulation was run.");
       return 0;
     }
+    // Before the ISO checks: this is a misuse of the option itself, so it must be reported
+    // even when the ISO path is wrong or missing.
+    if (!host::sim_times_path.empty() && !o.fast) throw std::runtime_error("--sim-times requires --fast");
     if (o.iso.empty() || !o.frames) throw std::runtime_error("--iso and positive --frames required; a DOL alone has no game assets/FST");
     if (o.state_trace == o.state_digest && !o.state_digest.empty()) throw std::runtime_error("trace and digest must use different paths");
     // TODO(portability): default recomp.py output needs a real Slippi EXI port.
