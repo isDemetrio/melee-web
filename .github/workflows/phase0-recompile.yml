@@ -124,6 +124,47 @@ jobs:
           git status --porcelain
           python3 scripts/check_no_game_data.py --all
 
+      - name: Read the pinned emsdk version
+        run: |
+          set -euo pipefail
+          version=$(tr -d '\n' < EMSDK_VERSION)
+          test -n "$version"
+          echo "EMSDK_VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+
+      - name: Compile a generated TU with emcc and with the host compiler (P0-01)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/generated"
+          # The smallest and the largest emitted TU: the first proves the toolchain works at
+          # all, the second is where a huge function would bite (PLAN_BREAKDOWN R3).
+          smallest="$out/guest_000.cpp"
+          largest=$(find "$out" -maxdepth 1 -name 'guest_*.cpp' -printf '%s %p\n' \
+            | sort -rn | head -1 | cut -d' ' -f2-)
+          read -ra COMMON <<< "-std=c++17 -O2 -ffp-contract=off -fno-fast-math \
+            -Iwasm/compat -I. -I$out -Iupstream/melee-unlocked/port/runtime/ppc \
+            -Iupstream/melee-unlocked/port/runtime/hle"
+          for tu in "$smallest" "$largest"; do
+            name=$(basename "$tu" .cpp)
+            for cc in "em++ -fwasm-exceptions" "g++"; do
+              read -ra CMD <<< "$cc"
+              compiler="${CMD[0]}"
+              tag="${compiler%%+*}"
+              obj="$RUNNER_TEMP/$name.$tag.o"
+              /usr/bin/time -v -o "$RUNNER_TEMP/time-$name-$tag.txt" \
+                "${CMD[@]}" "${COMMON[@]}" -c "$tu" -o "$obj"
+              wall=$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$RUNNER_TEMP/time-$name-$tag.txt")
+              rss=$(awk -F': ' '/Maximum resident set size/ {print $2}' "$RUNNER_TEMP/time-$name-$tag.txt")
+              bytes=$(stat -c%s "$obj")
+              echo "$compiler $name: wall=$wall rss=${rss}kB object=${bytes}B"
+              echo "$tag $name: wall=$wall rss_kb=$rss object_bytes=$bytes" \
+                >> "$RUNNER_TEMP/phase0-stats.txt"
+            done
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: phase0-stats
