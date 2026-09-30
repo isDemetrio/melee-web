@@ -400,3 +400,39 @@ not sufficient, because Slippi's rollback can resimulate up to 7 frames in one t
 on this VPS the mobile target is ~10x away, and `docs/PHASE0_DEVICE_PLAN.md` says to expect a
 NO-GO. Two things keep that provisional: this is a shared 2-vCPU VPS rather than a phone's big
 core, and no measurement has been taken on a device yet.
+
+## The spike page is served, and the web module is measured — 2026-09-30, evening
+
+The first half of `docs/PHASE0_DEPLOY_PLAN.md` §6 step 2 is done, and one of its open
+questions is closed by reading a log instead of deducing.
+
+- `phase0-build.yml` was dispatched on `main` with `upload_spike=true`: run **36753728272**,
+  job **7m18s** (17:45:56 → 17:53:14), every step success — including the 144 release guest
+  TUs, the WASM core link, the spike page build and the synthetic-disc Chromium test.
+- Artifact `melee-spike-dist`: 4,669,739 bytes compressed, expires 2026-10-03. It holds
+  `spike-core/melee_core_web.wasm` at **16,323,255 bytes** — this is the **web** module at
+  `-Oz`, the number `docs/PHASE0_DEPLOY_PLAN.md` §0.3 recorded as unverified. It is **81.3%
+  smaller** than the `-O1` web module (87,118,045 bytes) and **under** the 25 MiB Pages
+  per-file limit, so size is no longer what blocks a deployment.
+- `spike-core/core.json` = `{"commit":"4fba3a080af6f205cc6107ada7baefeb0315cae0","opt":"-Oz"}`.
+  The commit is `main`'s head, so the core served to the device is the `-Oz` build that
+  already reproduced the native trace bit for bit.
+- The artifact was downloaded **outside the checkout** to
+  `/home/hermes/incoming/phase0/spike-dist` and served by
+  `.hermes/cache/scratch/spike-serve/serve_spike.py` on `127.0.0.1:8091`, verified from the
+  VPS with `curl` rather than assumed:
+
+| Request | Result |
+| --- | --- |
+| `HEAD /spike.html` | `200`, `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`, `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: no-store` |
+| `HEAD /disc.iso` with `Range: bytes=0-5` | `206`, `Content-Range: bytes 0-5/1459978240` |
+| `HEAD /spike-core/melee_core_web.wasm` | `200`, `Content-Type: application/wasm`, `Content-Length: 16323255` |
+
+Not verified here: **HTTPS on the tailnet**. `tailscale serve --bg 8091` has not been run, so
+the isolation headers above are only effective if the page is reached over a secure context.
+Over plain `http://` on a tailnet IP the browser ignores them, `cross_origin_isolated` stays
+false and the clock is coarser than the ≤ 0.1 ms the verdict needs
+(`docs/PHASE0_DEVICE_PLAN.md` §0.3, §6).
+
+Also still open from §6: PR 3 (the `/phase0/disc` Function), PR 4 (the OPFS page), PR 5 (the
+deploy step), and the operator's decision O1.

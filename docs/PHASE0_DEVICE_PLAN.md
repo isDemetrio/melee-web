@@ -29,6 +29,11 @@ il resto.
    un'inferenza, non una misura) oppure un dato iOS; non un GO completo. **Decisione
    dell'operatore:** accettare l'iPhone come sostituto della riga Android, oppure trattare questo
    test come "riga iOS" e procurarsi un Android dopo.
+   **Risposta dell'operatore (2026-09-30):** ha a disposizione **solo un iPhone**, quindi il test
+   si fa su quello e vale come **riga iOS** (informativa per la spec). La riga Android resta
+   aperta: un NO-GO sull'iPhone chiude il mobile come inferenza forte, un GO sull'iPhone **non**
+   chiude la riga Android. Il piano procede, e il verdetto della sezione 6 si legge con questa
+   riserva.
 3. **Il server così com'è non dà l'isolamento cross-origin, quindi l'orologio sarà grossolano.**
    `/home/hermes/.hermes/cache/scratch/spike-serve/serve_spike.py` manda gli header COOP/COEP
    (le due intestazioni HTTP che chiedono al browser di "isolare" la pagina), ma serve in
