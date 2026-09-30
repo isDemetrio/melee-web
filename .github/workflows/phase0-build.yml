@@ -1,6 +1,11 @@
 name: Phase 0 — WASM core
 on:
   workflow_dispatch:
+    inputs:
+      upload_module:
+        description: 'Upload the linked Node module as a private artifact (game-derived; see docs/PHASE0_TASKS.md D3)'
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'wasm/**'
@@ -91,4 +96,19 @@ jobs:
           fi
       - name: Repository hygiene
         run: python3 scripts/check_no_game_data.py --all
-      # No guest-derived build products or caches are uploaded.
+      # Same narrow exception as the native workflow, and for the same reason: the machine that
+      # edits this repository cannot compile, and no CI runner has the disc image, so an
+      # opt-in private artifact is the only route by which the linked module can be run against
+      # the operator's own disc. Off for every pull request, off by default, three days.
+      # See docs/PHASE0_TASKS.md D3.
+      - name: Upload the Node module (opt-in private artifact)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_module }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: melee-core-wasm-node
+          path: |
+            ${{ runner.temp }}/wasm/melee_core_node.js
+            ${{ runner.temp }}/wasm/melee_core_node.wasm
+          retention-days: 3
+          if-no-files-found: error
+      # Otherwise no guest-derived build products or caches are uploaded: only Actions logs.

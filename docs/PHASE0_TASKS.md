@@ -348,7 +348,10 @@ operator's own machine against the operator's own disc is the only route to a na
 checkpoint trace before D1 is answered. Nothing is committed, nothing is public, and the
 switch is one input. **Reversal: set the input back to false, or delete the artifact** — no
 other part of the repository depends on it. The full disc image is *not* uploaded by this
-decision; that remains D1 and stays the operator's call.
+decision; that remains D1 and stays the operator's call. **Extended the same day to the WASM
+Node module** (`phase0-build.yml`, input `upload_module`, same off-by-default, three-day,
+private-only shape), for exactly the same reason: now that the core links, the module is the
+only route by which the operator's own disc can produce a WASM checkpoint trace for P0-09.
 
 **D4 — How devices reach the spike page.** Options: a Cloudflare Pages preview behind Access
 (needs `docs/OPEN_QUESTIONS.md` Q3 credentials, and means deploying game-derived `.wasm` to
