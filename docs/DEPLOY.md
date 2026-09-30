@@ -124,3 +124,44 @@ CI has not verified is never published.
   core) is not written yet. `web/src/types.ts` types the manifest; nothing fetches it.
 - The Pages Functions bundle and their tests are green in CI; the deployed behaviour with a
   real Access JWT, a real TURN key and a real R2 binding is untested.
+
+## 6. The Phase 0 spike preview (a separate Pages branch)
+
+The Phase 0 spike page is published as a **preview** of the same Pages project, on the branch
+`phase0-spike`, so it gets its own address and inherits nothing from the production shell (no
+service worker, no site data). It is not the product: `docs/PHASE0_DEPLOY_PLAN.md` section 3 says
+why, and section 5 PR 5 is the change that added the step.
+
+From the CI:
+
+    gh workflow run phase0-build.yml --ref main \
+      -f upload_spike=true -f deploy_spike=true
+
+The step is the last one in `phase0-build.yml`, and it:
+
+- **skips with a warning** when `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (repository
+  secrets) or `CF_PAGES_PROJECT` (repository variable, `melee-web`) are missing, so the job stays
+  green without an account — the same shape as the `deploy` job of `ci.yml`;
+- **removes `sw.js`** from the spike dist: a service worker registered by an earlier visit keeps
+  serving the cached shell;
+- **appends a `/spike-core/*` rule to the dist `_headers`** that detaches `Cache-Control` and sets
+  `no-store`. The module keeps a fixed file name while the site-wide rule for `*.wasm` is
+  `immutable`, so a phone that cached the previous module would run the old core while `core.json`
+  announces the new commit;
+- publishes with the existing `scripts/deploy.sh --branch phase0-spike --dist-dir …`, and writes
+  the preview address into the run summary.
+
+Three things this cannot settle on its own:
+
+- **The decision (O1).** The dist contains the game-derived module. Publishing it, even behind
+  Access, is a step the operator decides: the dispatch input and the credentials are the two locks,
+  not a permission. Do not set those credentials before O1 is answered.
+- **The header rules.** Whether Pages merges two matching `_headers` rules or lets the later one win
+  is unverified. After the first deploy, check
+  `curl -sI https://phase0-spike.<project>.pages.dev/spike-core/melee_core_web.wasm`: it must not
+  show `immutable`. Same for `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` on
+  `spike.html`, and `Content-Type: application/wasm` on the module.
+- **The address format.** `https://phase0-spike.<project>.pages.dev` is expected, not verified; the
+  run summary carries whatever wrangler reports.
+
+None of this has ever run against a real account.
