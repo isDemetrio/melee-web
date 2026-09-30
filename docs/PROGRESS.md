@@ -200,3 +200,40 @@ which P0-08 and P0-09 — the 2400-checkpoint comparison, the first go/no-go cri
 run at all. D2: runner size, only if the full guest build fails on a standard runner. D3:
 whether game-derived build products may be cached. D4/D5: how devices reach the spike page and
 which devices. All six are written out in `docs/PHASE0_TASKS.md` §4 with the cost of waiting.
+
+## The first native run — 2026-09-30, on the operator's VPS
+
+This is the first time the game has been executed in this project. The binary was built in CI
+(`phase0-native-headless`, run 36702692761, 158 ninja targets, `native_fifo` 1/1 passed),
+carried to the VPS as a private artifact, and run there against the operator's own disc, which
+is where the only copy of it is.
+
+**It boots and it simulates.** `scripts/phase0/run_checkpoints.sh`, 2400 frames requested,
+`--fast --time-base 1 --volume 0`, `vs_match.txt`, fresh card directory:
+
+- disc verified first: 1,459,978,240 bytes, SHA-1 `d4e70c064cc714ba8400a849cf299dbd1aa326fc`
+- **exit status 0, wall clock 50 s** for 2400 frames on this 2-vCPU VPS, with the process
+  `nice`d — roughly 21 ms of simulation per frame *on the weakest machine in the project*
+- **2401 rows** in the trace (header plus 2400 retraces), header
+  `retrace,cpu,ram,aram,events`, all 2400 `cpu` and `ram` hashes distinct: the guest is doing
+  work every frame, not repeating a state
+- `aram` has 177 distinct values, so audio DMA is moving
+- `events` is zero except for 360 rows carrying `0000000100000000` and 5 carrying
+  `0000000000000001`
+
+**Run-to-run stability, which the specification accepts in place of a Windows reference
+(`docs/SPEC_PIANO.md` step 1) since no Windows build is available:** two independent runs of the
+same binary, each with its own fresh card directory, produced traces identical **bit for bit**,
+both SHA-1 `138cfc3b55afcbe9f6b293b4dcb4336c467d1797`.
+
+**What this does not establish, and it matters more than what it does.** There is no evidence
+that a *match* started. The script `vs_match.txt` assumes Slippi boot timing, this translation
+is built `--no-slippi`, and the trace alone cannot tell a menu from a match — exactly the risk
+`docs/PHASE0_TASKS.md` P0-08 records. The 360 frames carrying an event mask are consistent with
+a match-start hook firing, and 360 frames at 60 Hz is six seconds, but consistent is not
+demonstrated. Until the scene is logged at the end of the run, "2400 checkpoints" means 2400
+deterministic frames of *something*, and the next session must not describe it as a match.
+
+**Consequences.** P0-08's first half is done and its numbers exist. The native-vs-WASM
+comparison (P0-09) still needs a WASM core, which does not exist yet (P0-04…P0-07), and the
+cross-platform criterion still needs D1 if it is ever to run in CI rather than here.
