@@ -165,3 +165,15 @@ Three things this cannot settle on its own:
   run summary carries whatever wrangler reports.
 
 None of this has ever run against a real account.
+
+**Verified while writing this** (on the VPS, 2026-09-30):
+
+    CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… CF_PAGES_PROJECT=melee-web \
+      scripts/deploy.sh --dry-run --branch phase0-spike --dist-dir /home/hermes/incoming/phase0/spike-dist
+
+prints the command it would run and exits 0, so a dist outside `web/dist` is accepted — the
+open question `docs/PHASE0_DEPLOY_PLAN.md` section 5 left to the first dispatch. One caveat
+found while doing it: `scripts/deploy.sh` tests `[ -d "$repo_dir/.git" ]`, and in a git
+**worktree** `.git` is a file, so a dry run from a worktree is refused with
+`not a git checkout`. In CI (`actions/checkout`) `.git` is a directory and the check passes;
+locally, pass `--repo-dir` pointing at the main checkout.
