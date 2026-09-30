@@ -18,6 +18,7 @@ on:
     paths:
       - 'patches/**'
       - 'scripts/apply_patches.sh'
+      - 'scripts/phase0/fetch_and_recompile.sh'
       - 'scripts/check_no_game_data.py'
       - 'upstream/melee-unlocked'
       - 'docs/UPSTREAM_PIN.md'
@@ -53,61 +54,10 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Assert the upstream pin has not drifted
-        run: |
-          set -euo pipefail
-          expected=$(grep -oE '[0-9a-f]{40}' docs/UPSTREAM_PIN.md | head -1)
-          actual=$(git -C upstream/melee-unlocked rev-parse HEAD)
-          test "$expected" = "$actual" || { echo "pin drift: $expected vs $actual" >&2; exit 1; }
-
-      - name: Fetch main.dol from the private repository
+      - name: Fetch, verify, patch and recompile (shared pipeline)
         env:
           GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo 'DOL_REPO_TOKEN is not set: the DOL cannot be fetched, so nothing below is measured.' >&2
-            exit 1
-          fi
-          mkdir -p "$RUNNER_TEMP/dol"
-          # Raw media type: the API hands back the file's bytes, so no base64 round trip and
-          # no token in a clone URL.
-          gh api "repos/$DOL_REPO/contents/main.dol" -H 'Accept: application/vnd.github.raw' \
-            > "$RUNNER_TEMP/dol/main.dol"
-
-      - name: Verify the DOL before it is used
-        run: |
-          set -euo pipefail
-          size=$(stat -c%s "$RUNNER_TEMP/dol/main.dol")
-          digest=$(sha1sum "$RUNNER_TEMP/dol/main.dol" | cut -d' ' -f1)
-          echo "size:   $size (expected $DOL_SIZE)"
-          echo "sha1:   $digest"
-          test "$size" = "$DOL_SIZE" || { echo 'wrong size: not the v1.02 DOL' >&2; exit 1; }
-          test "$digest" = "$DOL_SHA1" || { echo 'wrong DOL: refusing to recompile it' >&2; exit 1; }
-
-      - name: Apply the port patch series
-        run: scripts/apply_patches.sh
-
-      - name: Run the recompiler
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/generated"
-          mkdir -p "$out"
-          python3 upstream/melee-unlocked/port/recomp/recomp.py \
-            --dol "$RUNNER_TEMP/dol/main.dol" --gct-base "$GCT_BASE" \
-            --out "$out" | tee "$RUNNER_TEMP/recomp.log"
-          # The release build bakes the Slippi code table at this address (build.bat:26,
-          # README.md:119). Without the flag the recompiler says so in its own log, and C0
-          # caves are not translated at their real addresses.
-          if grep -q 'skipped: pass --gct-base' "$RUNNER_TEMP/recomp.log"; then
-            echo 'the recompiler skipped the code table: --gct-base did not take effect' >&2
-            exit 1
-          fi
-          # The generated tree must not be inside the repository, whatever --out said.
-          case "$(realpath "$out")" in
-            "$(realpath "$GITHUB_WORKSPACE")"/*) echo 'generated tree inside the checkout' >&2; exit 1 ;;
-          esac
-          test -f "$out/guest_sources.cmake"
+        run: scripts/phase0/fetch_and_recompile.sh release "$RUNNER_TEMP/generated"
 
       - name: Assert the measured output, not a plausible one
         run: |

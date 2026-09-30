@@ -1,0 +1,89 @@
+--- a/port/runtime/hle/hle_dvd.cpp
++++ b/port/runtime/hle/hle_dvd.cpp
+@@ -48,6 +48,7 @@
+ std::condition_variable g_dvd_cv, g_dvd_done_cv;
+ std::deque<AsyncRead> g_dvd_queue;      // for the worker
+ std::deque<AsyncRead> g_dvd_pending;    // in request order, waiting for their virtual completion time (sim thread only)
++#ifndef MELEE_SINGLE_THREAD
+ std::thread g_dvd_thread;
+ bool g_dvd_started = false;
+ #ifdef MELEE_HEADLESS
+@@ -73,12 +74,20 @@
+     g_dvd_done_cv.notify_all();
+   }
+ }
++#endif
+ void start_read(AsyncRead r) {
+   host::wr32(r.block + 0x08, DVD_COMMAND_READ);
+   host::wr32(r.block + 0x0C, DVD_STATE_BUSY);
+   r.ready_tb = host::cpu->tb + host::TB_PER_FRAME / 4;
+   r.done = std::make_shared<std::atomic<bool>>(false);
+   g_dvd_pending.push_back(r);
++#ifdef MELEE_SINGLE_THREAD
++  const bool ok = r.file_info
++      ? host::disc_read_file(r.file_start, r.file_offset, host::ptr(r.addr, r.length), r.length)
++      : host::disc_read(r.disc_offset, host::ptr(r.addr, r.length), r.length);
++  if (!ok) host::die("disc read failed: offset %08X length %X to %08X", r.disc_offset, r.length, r.addr);
++  r.done->store(true, std::memory_order_release);
++#else
+   std::lock_guard<std::mutex> lk(g_dvd_mutex);
+   if (!g_dvd_started) {
+     g_dvd_started = true; g_dvd_thread = std::thread(dvd_worker);
+@@ -88,6 +97,7 @@
+   }
+   g_dvd_queue.push_back(r);
+   g_dvd_cv.notify_one();
++#endif
+ }
+ }  // namespace
+ 
+@@ -96,9 +106,11 @@
+ // Linux returns through C++ static destruction instead of Windows ExitProcess.
+ // Drain reads and join before destroying the worker's mutex/condition variables.
+ void dvd_shutdown() {
++#ifndef MELEE_SINGLE_THREAD
+   { std::lock_guard<std::mutex> lk(g_dvd_mutex); g_dvd_stopping = true; }
+   g_dvd_cv.notify_all();
+   if (g_dvd_thread.joinable()) g_dvd_thread.join();
++#endif
+ }
+ #endif
+ // Called from the simulation thread at every wait point.
+--- a/port/runtime/host/host.cpp
++++ b/port/runtime/host/host.cpp
+@@ -126,6 +126,7 @@
+   if (g_log_file) { std::fwrite(batch.data(), 1, batch.size(), g_log_file); std::fflush(g_log_file); }
+ }
+ static void log_enqueue(const char* data, size_t len) {
++#ifndef MELEE_SINGLE_THREAD
+   static std::once_flag started;
+   std::call_once(started, [] {
+     std::thread([] {
+@@ -136,8 +137,13 @@
+     }).detach();
+     std::atexit([] { log_flush(); });
+   });
++#endif
+   { std::lock_guard<std::mutex> lock(g_log_mutex); g_log_pending.append(data, len); }
++#ifdef MELEE_SINGLE_THREAD
++  log_drain(true);
++#else
+   g_log_cv.notify_one();
++#endif
+ }
+ void log_flush() { log_drain(false); }
+ 
+--- a/port/runtime/hle/exi_slippi.cpp
++++ b/port/runtime/hle/exi_slippi.cpp
+@@ -419,7 +419,11 @@
+     if (name.size() > 5 && name.compare(name.size() - 5, 5, ".diff") == 0) name.resize(name.size() - 5);
+     names.push_back(name);
+   }
++#ifdef MELEE_SINGLE_THREAD
++  for (const auto& n : names) load_game_file(n);
++#else
+   std::thread([names] { for (const auto& n : names) load_game_file(n); }).detach();
++#endif
+ }
+ 
+ // The same bytes the EXI file commands serve, for the Source Port's system-file layer. Built

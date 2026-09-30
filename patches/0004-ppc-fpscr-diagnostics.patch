@@ -1,0 +1,37 @@
+--- a/port/runtime/ppc/ppc_runtime.cpp
++++ b/port/runtime/ppc/ppc_runtime.cpp
+@@ -227,13 +227,23 @@
+   // Melee only uses sc for cache maintenance from OS code; nothing to do.
+ }
+ 
++uint64_t fpscr_nondefault_rn_requests = 0;
++uint64_t fpscr_ni_requests = 0;
+ void update_mxcsr(Context& c) {
++#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+   unsigned csr = _mm_getcsr() & ~(0x6000u | 0x8000u | 0x0040u);
+   unsigned rn = c.fpscr & 3;                      // PPC RN: 0 nearest,1 zero,2 +inf,3 -inf
+   static const unsigned x86_rc[4] = {0x0000, 0x6000, 0x4000, 0x2000};
+   csr |= x86_rc[rn];
+   if (c.fpscr & 4) csr |= 0x8000u | 0x0040u;      // NI -> FTZ | DAZ, as Jit64 does
+   _mm_setcsr(csr);
++#else
++  // Observation only: WASM cannot change the hardware rounding/FTZ mode.
++  if ((c.fpscr & 3) && ++fpscr_nondefault_rn_requests == 1)
++    host::log("FPSCR: nonzero RN requested (%u); not emulated", c.fpscr & 3);
++  if ((c.fpscr & 4) && ++fpscr_ni_requests == 1)
++    host::log("FPSCR: NI requested; not emulated");
++#endif
+ }
+ 
+ void dcbz(Context& c, uint8_t* m, uint32_t ea) {
+--- a/port/runtime/ppc/ppc.h
++++ b/port/runtime/ppc/ppc.h
+@@ -332,3 +332,8 @@
+ inline uint32_t double_to_float_bits(double d) { float f = (float)d; uint32_t u; std::memcpy(&u, &f, 4); return u; }
+ 
+ }  // namespace ppc
++
++namespace ppc {
++// Non-x86 requests observed by update_mxcsr; zero on x86 (MXCSR applied).
++extern uint64_t fpscr_nondefault_rn_requests, fpscr_ni_requests;
++}

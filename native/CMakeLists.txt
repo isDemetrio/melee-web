@@ -17,25 +17,23 @@ if(NOT PPC_HEADER MATCHES "Native Linux still needs MXCSR")
 endif()
 include("${PORT_GEN}/guest_sources.cmake")
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+set(MELEE_GEN "${PORT_GEN}")
+include("${CMAKE_CURRENT_LIST_DIR}/core_sources.cmake")
+option(MELEE_SINGLE_THREAD "Run host workers inline (WASM parity configuration)" OFF)
 
-add_executable(melee_core_headless
-  headless_main.cpp headless_host.cpp headless_input.cpp headless_fifo.cpp headless_services.cpp
-  ${GUEST_SOURCES} "${PORT_GEN}/function_names.cpp" "${PORT_GEN}/gecko_data.cpp"
-  "${PORT}/runtime/ppc/ppc_runtime.cpp" "${PORT}/runtime/ppc/interp.cpp"
-  "${PORT}/runtime/hle/hle_os.cpp" "${PORT}/runtime/hle/hle_dvd.cpp"
-  "${PORT}/runtime/hle/hle_pad.cpp" "${PORT}/runtime/hle/hle_card.cpp"
-  "${PORT}/runtime/hle/hle_stubs.cpp" "${PORT}/runtime/hle/audio_core.cpp"
-  "${PORT}/runtime/hle/ax_ucode.cpp")
+add_executable(melee_core_headless ${MELEE_HEADLESS_SOURCES} ${MELEE_SIM_SOURCES}
+  ${GUEST_SOURCES} "${PORT_GEN}/function_names.cpp" "${PORT_GEN}/gecko_data.cpp")
 target_compile_features(melee_core_headless PRIVATE cxx_std_17)
-target_include_directories(melee_core_headless PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}" "${REPO}" "${REPO}/wasm/compat" "${PORT_GEN}"
-  "${PORT}/runtime/ppc" "${PORT}/runtime/hle" "${PORT}/runtime/host")
+target_include_directories(melee_core_headless PRIVATE ${MELEE_CORE_INCLUDES})
 # No fast math or implicit contraction: translated instructions select rounding explicitly.
 # -O1 keeps the 144+ large generated TUs affordable on CI; no LTO.
 target_compile_options(melee_core_headless PRIVATE -O1 -ffp-contract=off -fno-fast-math)
 target_compile_definitions(melee_core_headless PRIVATE _FILE_OFFSET_BITS=64 MELEE_HEADLESS=1)
-target_link_libraries(melee_core_headless PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(melee_core_headless PRIVATE Threads::Threads)
+target_link_options(melee_core_headless PRIVATE -Wl,--no-undefined)
+if(MELEE_SINGLE_THREAD)
+  target_compile_definitions(melee_core_headless PRIVATE MELEE_SINGLE_THREAD=1)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
