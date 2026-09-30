@@ -7,8 +7,8 @@ the CI checkout only.
 
 | Patch | Upstream files touched | Reason | Applied by | Verified by |
 | --- | --- | --- | --- | --- |
-| `0001-ppc-portable-fma-and-intrinsics.patch` | `port/runtime/ppc/ppc.h` | Portable intrinsic shim and single-rounding FMA family for Emscripten/non-MSVC, routed through `wasm/compat/fma.h`, whose `fma` is `std::fma` plus the guard for musl `fma.c`'s zero-addend shortcut (see below) and whose `fmsub`/`fnmadd`/`fnmsub` refuse to negate a NaN operand (see "The NaN-sign class" below); MSVC branch unchanged | `scripts/apply_patches.sh` (CI only) | Local `git apply --check`; `wasm/probe/fma_shim_test.cpp` and the corpus comparison in the WASM probe |
-| `0001-ppc-portable-fma-and-intrinsics.patch` | `port/runtime/gx/gx_texture.h` | Explicit `<stddef.h>` for the public `size_t` parameter; avoid reliance on MSVC transitive includes | `scripts/apply_patches.sh` (CI only) | Local `git apply --check`; texture snapshot test pending CI |
+| `0001-ppc-portable-fma-and-intrinsics.patch` | `port/runtime/ppc/ppc.h` | Portable intrinsic shim and single-rounding FMA family for Emscripten/non-MSVC, routed through `wasm/compat/fma.h`: `fma` is `std::fma` plus the guard for musl `fma.c`'s zero-addend shortcut and the guard that returns a NaN operand quieted and unnegated, and `fmsub`/`fnmadd`/`fnmsub` carry their own copy of the NaN guard because they negate an operand before calling `fma` (see below); MSVC branch unchanged | `scripts/apply_patches.sh` (CI only) | Local `git apply --check`; `wasm/probe/fma_shim_test.cpp` and the corpus comparison in the WASM probe (run 36677219860: 0 divergences in 8 000 000 results) |
+| `0001-ppc-portable-fma-and-intrinsics.patch` | `port/runtime/gx/gx_texture.h` | Explicit `<stddef.h>` for the public `size_t` parameter; avoid reliance on MSVC transitive includes | `scripts/apply_patches.sh` (CI only) | Local `git apply --check`; `ctest` in the WASM probe builds and runs `texture_snapshot_test` under Node |
 
 ## Why the FMA family goes through `wasm/compat/fma.h`
 
@@ -58,13 +58,38 @@ fnmadd a=7ff8000000000001 c=0000000000000000 b=0000000000000000
 
 Every one of the 18 680 had a NaN operand and not one had an ordinary operand, so this was
 not the engine's NaN latitude: it was this patch's own sign flip, and a divergence the
-reference does not have. `wasm/compat/fma.h` now returns the first NaN operand quieted and
+reference does not have. `wasm/compat/fma.h` returns the first NaN operand quieted and
 unnegated (x86's priority: multiplicand, multiplier, addend) instead of negating it, for
-those three wrappers only. `fmadd` passes its operands through untouched and is unaffected.
+those three wrappers.
+
+### Correction: `fmadd` was affected too, and the first fix was incomplete
+
+An earlier version of this file said "`fmadd` passes its operands through untouched and is
+unaffected". **The next probe run refuted that.** Run 36672598366 measured `nan-sign` 18 680
+→ 64 and `nan-payload` 1 464 → 716, and the first example of each class was on an `fmadd`
+path:
+
+```
+fmadds a=fff8000000001234 c=7ff8000000000000 b=0000000000000000
+       native=fff8000000000000  wasm=7ff8000000000000     (nan-sign)
+fmadd  a=7ff0000000000000 c=0000000000000000 b=fff8000000001234
+       native=fff8000000001234  wasm=fff8000000000000     (nan-payload)
+```
+
+`fmadd` is `wasm_compat::fma` with no wrapper in between, and that function had no NaN guard:
+a NaN operand went into the engine's arithmetic and came back as the engine's NaN. Two
+symptoms in one defect — `NaN * NaN` losing the multiplicand's sign, and `inf * 0 + NaN`
+returning the invalid-operation default NaN instead of the NaN operand.
+
+`fma` now carries the same guard. The three wrappers keep their own, because they negate an
+operand *before* calling `fma`: a guard inside `fma` would see an already flipped sign.
+Measured in run 36677219860: `nan-sign` 0, `nan-payload` 0, 8 000 000 results with
+identical digests, and the strict gate passing with no exemption. The x86 NaN priority order
+is now a measurement rather than an expectation: 51 656 NaN-operand results, multi-NaN cases
+included, match the reference bit for bit.
 
 This is not the Q7 decision. Q7 asks whether NaN bits that come from the *platform's own*
-arithmetic may differ; this change removes divergences our shim invented, and every option in
-Q7 requires them gone. Status: written, `git apply --check` clean, unit-tested in
-`wasm/probe/fma_shim_test.cpp`; the corpus comparison that must show `nan-sign 0` is the
-next probe run.
+arithmetic may differ; these changes remove divergences our shim invented, and every option
+in Q7 required them gone. The Q7 question is now moot for this corpus: nothing diverges, so
+there is nothing to exempt. `docs/OPEN_QUESTIONS.md` Q7 records that.
 

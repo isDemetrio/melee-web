@@ -4,22 +4,35 @@ These are decisions the agent cannot take alone: they need the operator's own ac
 hardware, files, or a judgement call about scope. Each entry says what is blocked until
 it is answered.
 
-## Q1 — The game disc (blocks Phase 0 entirely)
+## Q1 — The game disc — **ANSWERED 2026-09-30**
 
-Nothing that compiles the game can start without `main.dol`, extracted from the
-operator's own NTSC-U 1.02 (GALE01) ISO.
+The operator supplied the disc image. Both artifacts are verified against independent
+public sources, not against our own expectations:
 
-- Expected SHA-1 of the ISO: `d4e70c064cc714ba8400a849cf299dbd1aa326fc`,
-  size 1,459,978,240 bytes.
-- What is needed: a link the build machine can fetch, or the file itself uploaded to a
-  private location.
-- **Blocked until answered**: `scripts/extract_dol.py` runs, the recompiler runs, Phase 0.
+| Artifact | Size (bytes) | SHA-1 | Where it is |
+| --- | --- | --- | --- |
+| Disc image (ISO) | 1,459,978,240 | `d4e70c064cc714ba8400a849cf299dbd1aa326fc` | `/home/hermes/incoming/melee-ntsc102.iso` (VPS, not in any repo) |
+| `main.dol` | 4,425,184 | `08e0bf20134dfcb260699671004527b2d6bb1a45` | `github.com/isDemetrio/melee-orig-dol` (private) |
 
-## Q2 — Where the DOL lives for CI
+The ISO SHA-1 is the Redump entry for *Super Smash Bros. Melee (USA) (En,Ja) (v1.02)* and
+the value `999sian/melee-pc` requires; the DOL SHA-1 is what `doldecomp/melee` documents for
+GALE01 1.02. Extraction: DOL offset read from the disc header's own field at `0x420`
+(`0x1e800`), range truncated at the end of the last section (`0x4385e0`), disc magic
+`c2339f3d` confirmed at `0x1C`.
 
-GitHub Actions secrets are capped at 48 KB; `main.dol` is roughly 4.5 MB. The
-specification (`docs/SPEC_PIANO.md`, deploy pipeline item 4) says the game build must not
-run in Actions at all for this reason.
+**The ISO stays out of the repositories** (1.36 GB, and the client build needs it for
+assets, not for code generation).
+
+## Q2 — Where the DOL lives for CI — **ANSWERED 2026-09-30**
+
+Option 1 of the three below: a **separate private repository**, `isDemetrio/melee-orig-dol`,
+holding `main.dol` and a README with its provenance and both hashes. Verified after the
+push: remote blob `54ebe2fbcd23c3031f2cb0948ccd9e7350407897`, 4,425,184 bytes, identical to
+the local `git hash-object`.
+
+Still open inside Q2: the credential the build job uses to read that repository, and the
+machine the game build runs on. Both need the operator (a token, or a Codespaces
+authorisation) and are recorded in the Phase 0 section of `docs/PROGRESS.md`.
 
 Options, in order of preference:
 
@@ -64,29 +77,40 @@ is a submodule), and `scripts/check_no_game_data.py` rejects those paths. Noting
 it is relevant to how much the upstream can be relied on as a clean base, and it is not the
 agent's call whether to raise it upstream.
 
-## Q7 — Policy for NaN bit differences in FMA (decide after the next probe run)
+## Q7 — Policy for NaN bit differences in FMA — **closed by measurement, no decision needed**
 
-The WASM probe measured that native x86 FMA and the WASM `std::fma` path are not
-bit-identical over its 8,000,000-result corpus (`wasm/README.md`, "Finding"). The
-classified run 36647200912 says the differences are **confined to NaN bit patterns**:
-18,680 `nan-sign` and 1,464 `nan-payload` results, every one of them with a NaN operand
-(`nan-in`), while `value`, `subnormal` and `nan-vs-number` are 0. The 120 `zero-sign`
-divergences in that run were not latitude but a defect in the pinned musl `fma.c`, fixed
-in our shim (`wasm/compat/fma.h`) and expected to be 0 in the next run.
+**Status: not blocking anything any more.** Run 36677219860 (2026-09-30 06:15 UTC) measured
+8,000,000 results with **0 divergences** between the native x86-intrinsic build and the WASM
+build: `nan-sign` 0, `nan-payload` 0, `zero-sign` 0, `subnormal` 0, `value` 0,
+`nan-vs-number` 0, identical digests on both sides, strict gate passing with no exemption.
 
-Root cause, read in the toolchain source rather than inferred: musl's `fma.c:54-55` sends
-every non-finite operand to ordinary WASM arithmetic (`return x*y + z`), and the WASM
-specification leaves the sign and payload of a NaN produced by arithmetic to the engine.
-The patch additionally negates an operand before the call for `fnmadd`/`fnmsub`, which the
-x86 instruction does not do to a NaN operand. So the residual is the platform's NaN bits,
-not arithmetic.
+What happened to the question. It was opened when the probe's first classified runs showed
+`zero-sign` and then NaN-class divergences, and the residual was attributed to the platform:
+the WASM specification does leave the sign and payload of a NaN produced by arithmetic to
+the engine. That attribution was wrong both times it was used. The `zero-sign` class was
+musl's `fma.c` zero-addend shortcut; the NaN classes were this shim's own behaviour —
+negating a NaN operand in the three wrappers, and then `fmadd` simply having no NaN guard
+while its three sibling wrappers did. With a guard on all four operations, nothing diverges,
+including NaN payloads, on a corpus that feeds 51,656 NaN operands
+(`wasm/README.md`, "Finding"; `docs/PORT_CHANGES.md`, "The NaN-sign class").
 
-Why it still matters: a NaN *sign* is observable through an integer sign test on a stored
-float and through division; a NaN *payload* is observable only if a NaN reaches state that
-is compared or checksummed. Whether the game ever feeds NaN into these four operations is
-**not measured** and needs the running build (Q1).
+So there is nothing to exempt, and the four options below are recorded as the reasoning that
+was superseded, not as choices still open. The `--allow-nan-payload-differences` switch
+still exists in the probe and is unused in CI; the gate is strict.
 
-Options:
+What is *not* settled by this, and stays open as a later question rather than as Q7:
+
+- browser-to-browser determinism: the peers are engines, not this one Node build. The
+  WASM-x86 vs WASM-arm64 comparison is the measurement that speaks to it, and ARM's default
+  NaN is positive, so NaN sign is a candidate there (`wasm/README.md`, next measurements 2).
+- whether the guards cost anything on the hot path: the benchmark shows native 3.06 ns/op
+  against WASM 21.26 ns/op for a dependent `fmadd` chain, with no threshold and no baseline
+  from before the guards, so it does not say. `docs/PROGRESS.md`, "Measured numbers".
+- whether the game ever feeds NaN into these four operations: still unmeasured, still needs
+  the running build (Q1). It no longer decides a policy, but it would say how much of the
+  corpus's NaN density resembles gameplay.
+
+The original options, kept for the record:
 
 1. **Keep bit-exact** and make the runtime canonicalize NaN results of the FP helpers on
    every platform. Costs a compare per FP op on the hot path and makes the port
@@ -98,11 +122,8 @@ Options:
    and unnegated, and the x86 invalid-operation default NaN for `0*inf`. Deterministic on
    every engine, closest to the native reference, and it costs the same kind of per-op
    check as option 1 — but it pins x86 NaN bits into the port's contract on purpose.
+   **This is what was implemented** (options 1 and 3 differ only in what a NaN result with
+   no NaN operand does, and that case measures 0 divergent), and it is why the question is
+   closed rather than deferred.
 4. **Defer** until the WASM-x86 vs WASM-arm64 comparison exists, since browsers,
    not native Dolphin, are the netcode peers.
-
-- **Blocked until answered**: the default of the probe gate stays strict, so the WASM
-  probe job is red for this reason alone (the CI and Pages Functions workflows are green).
-  Nothing else is blocked before Phase 3, but `main` cannot be merged while a workflow is
-  red. Nothing was decided unilaterally here: the fix that was applied is the one upstream
-  musl and Emscripten already ship.
