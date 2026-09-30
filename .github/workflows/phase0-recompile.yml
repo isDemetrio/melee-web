@@ -39,6 +39,10 @@ jobs:
       DOL_REPO: isDemetrio/melee-orig-dol
       DOL_SHA1: 08e0bf20134dfcb260699671004527b2d6bb1a45
       DOL_SIZE: '4425184'
+      GCT_BASE: '0x8065CC80'
+      # Measured without --gct-base on 2026-09-30. P0-02 switches the recompiler to the
+      # release configuration, so the first run after that prints the new values and this
+      # line is updated to them; until then the job fails loudly on the difference.
       EXPECTED_TUS: '144'
       EXPECTED_FUNCTIONS: '20076'
       EXPECTED_IMAGE: 7883e197ff19
@@ -89,7 +93,15 @@ jobs:
           out="$RUNNER_TEMP/generated"
           mkdir -p "$out"
           python3 upstream/melee-unlocked/port/recomp/recomp.py \
-            --dol "$RUNNER_TEMP/dol/main.dol" --out "$out" | tee "$RUNNER_TEMP/recomp.log"
+            --dol "$RUNNER_TEMP/dol/main.dol" --gct-base "$GCT_BASE" \
+            --out "$out" | tee "$RUNNER_TEMP/recomp.log"
+          # The release build bakes the Slippi code table at this address (build.bat:26,
+          # README.md:119). Without the flag the recompiler says so in its own log, and C0
+          # caves are not translated at their real addresses.
+          if grep -q 'skipped: pass --gct-base' "$RUNNER_TEMP/recomp.log"; then
+            echo 'the recompiler skipped the code table: --gct-base did not take effect' >&2
+            exit 1
+          fi
           # The generated tree must not be inside the repository, whatever --out said.
           case "$(realpath "$out")" in
             "$(realpath "$GITHUB_WORKSPACE")"/*) echo 'generated tree inside the checkout' >&2; exit 1 ;;
@@ -141,9 +153,11 @@ jobs:
           out="$RUNNER_TEMP/generated"
           # The smallest and the largest emitted TU: the first proves the toolchain works at
           # all, the second is where a huge function would bite (PLAN_BREAKDOWN R3).
+          # guest_table.cpp is excluded: it is the dispatch table, not a guest function, and
+          # measuring it would report the wrong thing as "the biggest translation unit".
           smallest="$out/guest_000.cpp"
-          largest=$(find "$out" -maxdepth 1 -name 'guest_*.cpp' -printf '%s %p\n' \
-            | sort -rn | head -1 | cut -d' ' -f2-)
+          largest=$(find "$out" -maxdepth 1 -name 'guest_*.cpp' ! -name 'guest_table.cpp' \
+            -printf '%s %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
           read -ra COMMON <<< "-std=c++17 -O2 -ffp-contract=off -fno-fast-math \
             -Iwasm/compat -I. -I$out -Iupstream/melee-unlocked/port/runtime/ppc \
             -Iupstream/melee-unlocked/port/runtime/hle"
