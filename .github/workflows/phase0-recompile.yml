@@ -100,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/generated"
-          tus=$(ls "$out"/guest_*.cpp | grep -vc guest_table.cpp)
+          tus=$(find "$out" -maxdepth 1 -name 'guest_*.cpp' ! -name 'guest_table.cpp' | wc -l)
           funcs=$(grep -h -c '^void f_' "$out"/guest_*.cpp | awk '{s+=$1} END {print s}')
           image=$(grep -oE 'image [0-9a-f]{12}' "$RUNNER_TEMP/recomp.log" | awk '{print $2}')
           echo "translation units: $tus"
