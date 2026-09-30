@@ -17,6 +17,12 @@
  * down press a button while the player is on a controller, which is the exact bug that comment
  * upstream was written to fix.
  *
+ * The touch overlay is a third source and it is treated as a pad, not as a fourth kind of input:
+ * with it switched on it replaces the keyboard for the same reason a physical pad does, and a
+ * real controller still wins over it, because a pad is the better device and the game screen
+ * says so on screen ("a physical controller is the recommended way to play; the overlay is the
+ * fallback"). With the overlay off — the default — nothing here changes.
+ *
  * The poll is per simulation tick: `poll()` is called once per tick by whatever owns the loop,
  * and it never blocks or awaits. Today nothing owns a loop — there is no simulation, so nothing
  * imports this module yet and it is exercised by its unit tests alone. Wiring it to the worker
@@ -27,6 +33,7 @@
 import { PAD_STATUS_BYTES, padStatusBytes, type PadState } from './pad.js';
 import { KeyboardSource, attachKeyboard, type KeyboardTarget, type KeyBindings } from './keyboard.js';
 import { GamepadReader } from './gamepad.js';
+import type { TouchControls } from './touch.js';
 
 export interface InputOptions {
   /** Override the keyboard bindings (a remap). Defaults to the port's own defaults. */
@@ -42,12 +49,18 @@ export interface InputOptions {
 /**
  * Which device drove the last poll. The settings screen shows this, and a test asserts on it
  * instead of inferring the source from the shape of the state.
+ *
+ * `touch` is the overlay, and it is reported as its own source rather than as `gamepad`: the two
+ * are different devices with different limits (the overlay has no analog trigger), and a
+ * diagnostic that cannot tell them apart is not worth showing.
  */
-export type InputSource = 'keyboard' | 'gamepad' | 'none';
+export type InputSource = 'keyboard' | 'gamepad' | 'touch' | 'none';
 
 export class InputController {
   readonly keyboard: KeyboardSource;
   readonly gamepads: GamepadReader;
+  /** The touch overlay, when the page has one. Null on a page without it. */
+  readonly touch: TouchControls | null;
 
   private lastSource: InputSource = 'none';
   private detachKeyboardWiring: (() => void) | null = null;
@@ -56,9 +69,11 @@ export class InputController {
   constructor(
     private readonly options: InputOptions = {},
     gamepads?: GamepadReader,
+    touch?: TouchControls | null,
   ) {
     this.keyboard = new KeyboardSource(options.bindings);
     this.gamepads = gamepads ?? new GamepadReader(undefined, options);
+    this.touch = touch ?? null;
   }
 
   /** Bytes of one PADStatus, for a caller sizing a buffer. */
@@ -78,17 +93,22 @@ export class InputController {
   /**
    * One tick's state for the local player's port.
    *
-   * With a pad connected the pad's state is returned whole. Otherwise the keyboard's is, and
-   * that state always reports a present pad (`err: 0`), because upstream's keyboard state does
-   * (`PadState kb{}; kb.err = 0;`). `err: -1` therefore means "this player has no input device
-   * that produces a port" — a phone with no controller and the keyboard detached — which is a
-   * real state and has to reach the guest as an empty port, not as a pad at rest.
+   * With a pad connected the pad's state is returned whole. Then the touch overlay, when it is
+   * switched on. Otherwise the keyboard's is, and that state always reports a present pad
+   * (`err: 0`), because upstream's keyboard state does (`PadState kb{}; kb.err = 0;`). `err: -1`
+   * therefore means "this player has no input device that produces a port" — a phone with no
+   * controller and the keyboard detached — which is a real state and has to reach the guest as
+   * an empty port, not as a pad at rest.
    */
   poll(): PadState {
     const pad = this.gamepads.read(this.options);
     if (pad.err === 0) {
       this.lastSource = 'gamepad';
       return pad;
+    }
+    if (this.touch?.enabled) {
+      this.lastSource = 'touch';
+      return this.touch.read();
     }
     if (this.keyboardDetached) {
       this.lastSource = 'none';

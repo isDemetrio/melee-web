@@ -3,6 +3,7 @@ import { InputController } from '../../src/input/controller.js';
 import { GamepadReader, type GamepadLike } from '../../src/input/gamepad.js';
 import { PAD, PAD_STATUS_BYTES, padStatusBytes } from '../../src/input/pad.js';
 import { DEFAULT_KEY_BINDINGS, type KeyEventLike } from '../../src/input/keyboard.js';
+import { TouchControls } from '../../src/input/touch.js';
 
 /** A reader that reports exactly the pad a test hands it, or nothing at all. */
 function readerFor(pads: readonly (GamepadLike | null)[]): GamepadReader {
@@ -147,5 +148,61 @@ describe('InputController', () => {
     input.detachKeyboard();
     expect(input.isKeyboardDetached).toBe(true);
     expect(input.poll().err).toBe(-1);
+  });
+
+  it('lets the overlay drive the port once it is switched on, replacing the keyboard', () => {
+    // The overlay is a pad, so it replaces the keyboard exactly as a physical pad does
+    // (window.cpp:1063-1068). A key held while the player drags the stick must not press a
+    // button: that is the bug this rule exists to prevent.
+    const touch = new TouchControls();
+    touch.setEnabled(true);
+    touch.press(1, 'B');
+    const input = new InputController({}, NO_GAMEPADS, touch);
+    input.keyboard.handleKeyDown({ code: 'KeyZ' }); // A, on the keyboard
+
+    const state = input.poll();
+    expect(input.source).toBe('touch');
+    expect(state.button).toBe(PAD.B);
+    // The overlay is a pad, so the port is present even with nothing pressed.
+    expect(state.err).toBe(0);
+  });
+
+  it('leaves the keyboard alone while the overlay is off', () => {
+    const touch = new TouchControls();
+    touch.press(1, 'B'); // refused: the overlay is off
+    const input = new InputController({}, NO_GAMEPADS, touch);
+    input.keyboard.handleKeyDown({ code: 'KeyZ' });
+
+    const state = input.poll();
+    expect(input.source).toBe('keyboard');
+    expect(state.button).toBe(PAD.A);
+  });
+
+  it('prefers a physical pad over the overlay', () => {
+    // A controller is the better device and the game screen says so; the overlay is the
+    // fallback, so it must not shadow a pad that is actually connected.
+    const touch = new TouchControls();
+    touch.setEnabled(true);
+    touch.press(1, 'B');
+    const input = new InputController({}, readerFor([padWithButton(PAD.X)]), touch);
+
+    const state = input.poll();
+    expect(input.source).toBe('gamepad');
+    expect(state.button).toBe(PAD.X);
+  });
+
+  it('drives the port from the overlay when the keyboard has been detached', () => {
+    // A phone that never had a keyboard: the overlay is checked before the detached keyboard,
+    // or the port would report itself empty while the player is holding a button.
+    const touch = new TouchControls();
+    touch.setEnabled(true);
+    touch.press(1, 'Start');
+    const input = new InputController({}, NO_GAMEPADS, touch);
+    input.detachKeyboard();
+
+    const state = input.poll();
+    expect(input.source).toBe('touch');
+    expect(state.button).toBe(PAD.Start);
+    expect(state.err).toBe(0);
   });
 });
