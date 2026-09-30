@@ -19,6 +19,10 @@ on:
           - '-O2'
           - '-O3'
         default: '-Oz'
+      deploy_spike:
+        description: 'Publish the spike page as a Cloudflare Pages preview (needs CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and CF_PAGES_PROJECT; skips with a warning without them). The dist carries the game-derived module, so this also needs the operator decision O1.'
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'web/spike.html'
@@ -88,7 +92,10 @@ jobs:
           # dispatches at different levels would produce two indistinguishable downloads. The
           # default keeps the documented name (docs/PHASE0_TASKS.md D3); other levels get a suffix.
           suffix=""
-          if [ "$MELEE_OPT" != "-Oz" ]; then suffix="-$MELEE_OPT"; fi
+          # The level already starts with a dash: stripping it keeps the artifact name
+          # melee-core-wasm-node-O1 rather than ...-node--O1, which is what the first dispatch
+          # produced.
+          if [ "$MELEE_OPT" != "-Oz" ]; then suffix="-${MELEE_OPT#-}"; fi
           {
             echo "NODE_ARTIFACT=melee-core-wasm-node$suffix"
             echo "SPIKE_ARTIFACT=melee-spike-dist$suffix"
@@ -207,3 +214,39 @@ jobs:
           path: ${{ runner.temp }}/spike-dist
           retention-days: 3
           if-no-files-found: error
+      # The preview is the only thing in this repository that would put the game-derived module on
+      # the public internet, so it is off by default, it needs its own dispatch input, and it skips
+      # with a warning instead of failing the job when the credentials are absent (the same shape
+      # as the deploy job in ci.yml). It also needs the operator's decision O1
+      # (docs/PHASE0_DEPLOY_PLAN.md section 3): with credentials set, dispatching this input
+      # publishes the module, so the credentials are the second lock, not the first.
+      - name: Publish the spike preview (opt-in, needs Cloudflare credentials)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_spike }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -n "${CF_PAGES_PROJECT:-}" ] || missing="$missing CF_PAGES_PROJECT"
+          if [ -n "$missing" ]; then
+            echo "deploy skipped: not set:$missing" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "  Credentials and project variable: docs/PHASE0_DEPLOY_PLAN.md section 3 (O5), docs/DEPLOY.md." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # The shell's service worker must not travel with the spike preview: one registered by an
+          # earlier visit keeps serving the cached shell, and the page would then be the wrong one.
+          rm -f "$RUNNER_TEMP/spike-dist/sw.js"
+          # /spike-core/* must not inherit the site-wide immutable rule for *.wasm. The module keeps
+          # a fixed file name, so a cached copy outlives a rebuild and a phone would run the previous
+          # core while core.json announces the new commit (deploy plan section 0, first defect).
+          # Whether Pages merges two matching rules or lets the later one win is unverified; the `!`
+          # line detaches the header either way. Verify after the first deploy with
+          # curl -sI .../spike-core/melee_core_web.wasm: it must not show `immutable`.
+          printf '\n/spike-core/*\n  ! Cache-Control\n  Cache-Control: no-store\n' >> "$RUNNER_TEMP/spike-dist/_headers"
+          scripts/deploy.sh --branch phase0-spike --dist-dir "$RUNNER_TEMP/spike-dist" | tee "$RUNNER_TEMP/deploy.log"
+          url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' "$RUNNER_TEMP/deploy.log" | tail -1)
+          echo "spike preview: ${url:-not reported by wrangler}" | tee -a "$GITHUB_STEP_SUMMARY"

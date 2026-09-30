@@ -95,19 +95,24 @@ nothing here is a GO.
 Information that is not a criterion: `p = 5.64 ms ≤ 16.67 ms`, so on this device the game would hold
 60 Hz **without** rollback.
 
-## 6. The optimisation lever — an extrapolation, not a measurement
+## 6. The optimisation lever — measured, and closed by size (2026-09-30, later the same night)
 
-The served core is `-Oz`. `docs/PROGRESS.md` measured `-Oz` as ~6% slower than `-O1` on the VPS
-(28.92 vs 27.34 ms in-match mean, same script, run `36743835141`). Applying that ratio here:
+The served core is `-Oz`. `docs/PROGRESS.md` measured `-Oz` as ~6% slower than `-O1` on the VPS, which
+made the optimisation level the first lever to test. It has since been tested, and the answer is in
+`docs/OPT_LEVEL_EXPERIMENT.md`:
 
-- worst run: 3.2442 / 1.058 = **3.066 ms** → with `q`, 3.086 ms: still outside the GO line;
-- best run: 3.0315 / 1.058 = **2.865 ms** → with `q`, 2.885 ms: inside.
+- `-O1` reproduces the native trace on all 2400 checkpoints — two runs, `c79c53b9…`,
+  `identical: 2400 retraces` — and is about **7% faster** on the VPS (26.9 ms mean of means against
+  28.9 ms for the three `-Oz` runs of the same day);
+- but the module grows from 16,323,255 to **85,658,030 bytes**, `within_pages_limit: false`, i.e.
+  3.3x over the 25 MiB limit for a single file on Cloudflare Pages. The bytes are in the `code`
+  section (99.1% of the file), so there is no symbol or debug section to strip.
 
-So the lever can cross the line but not reliably, and the 6% was measured on a 2-vCPU VPS under Node,
-not on JavaScriptCore. To settle it: rebuild the web core at `-O1` and repeat the three runs. The
-workflow has **no input for the optimisation level** (`phase0-build.yml` exposes only `upload_module`
-and `upload_spike`), so this needs a code change, and per the repository rules the rebuilt core must
-first reproduce the same 2400 checkpoints — which both levels already did on the VPS (`c79c53b9…`).
+**So the lever moves the line and cannot be shipped.** Applying the measured 7% to these three runs:
+worst 3.2442 / 1.07 = **3.03 ms** (still outside the 3 ms line, and the ratio is a VPS proxy under
+Node, not JavaScriptCore); best 3.0315 / 1.07 = **2.83 ms** (inside). The route that remains, if the
+mobile row ever needs it, is a level per file — the hot translation units at `-O2`/`-O3` and the rest
+at `-Oz` — measured with the same method (2400 checkpoints, bytes, `within_pages_limit`).
 
 ## 7. What this does not establish
 
@@ -116,7 +121,8 @@ first reproduce the same 2400 checkpoints — which both levels already did on t
   mid-range Android row this is the **iOS row**, not the spec's go/no-go.
 - **No graphics, no audio, no input, no network.** The core ran headless with a scripted input
   sequence; the cost of rendering will add to these numbers, and the rollback was deduced, not run.
-- **The `-Oz` level only.** The verdict is the verdict of this build.
+- **The `-Oz` level only.** The verdict is the verdict of this build. `-O1` is bit-exact and about 7%
+  faster but 5.2x larger, so it cannot be published to Cloudflare Pages: section 6.
 - **Short runs.** Three runs of ~24 s each, not a long session: the thermal behaviour over half an
   hour is not measured, and run 2 shows that heat is already visible at this scale.
 - **Where the times came from.** The trace proves the game ran correctly and identically; the device
@@ -129,3 +135,35 @@ Outside the repository, as required (`docs/AGENT_RULES.md` rule 1 — the trace 
 - `/home/hermes/incoming/phase0/devices/iphone-safari/` — the three JSON files exactly as received,
   plus `run{1,2,3}_trace.csv` and `run{1,2,3}_sim_times.csv` extracted from them.
 - Native reference used for C5: `/home/hermes/incoming/phase0/f0d76a2816ec/runs/native-1/trace.csv`.
+
+## 9. What this predicts for the mid-range Android (M2) — an estimate, with its sources
+
+The spec's deciding row is a mid-range Android ("es. Snapdragon 7 series", `docs/SPEC_PIANO.md`).
+Nothing here measures one: the arithmetic below is a **prediction**, and it is written down because it
+changes the order of the work, not because it is a result.
+
+Geekbench 6 single-core, as published:
+
+| SoC | single-core | source |
+| --- | --- | --- |
+| Apple A18 Pro (this device) | 3,408–3,539 | cputronic comparison page; a `browser.geekbench.com` result page |
+| Snapdragon 7 Gen 4 | 1,325 | cputronic comparison page |
+| Tensor G4 (Pixel 9 Pro), for scale | 1,948 | Tom's Guide benchmark table |
+| Snapdragon 8 Gen 3 (Galaxy S24 Ultra), for scale | 2,300 | Tom's Guide benchmark table |
+
+The ratio is **about 2.6x**. Applied to this device's 3.0315–3.2442 ms in-match mean, a Snapdragon
+7-series class phone is predicted at **roughly 7.9–8.4 ms per frame** — past the spec's NO-GO
+threshold of 6 ms, where the spec stops the project instead of narrowing its scope.
+
+Three reasons to read that as an order of magnitude and not a number: Geekbench's single-core test is
+not this workload (a single-threaded interpreter inside a browser engine, where WebAssembly tiering
+and the memory subsystem matter as much as the core); these runs show +6.6% of thermal drift inside
+one of them, and a phone under sustained load throttles; and V8 and JavaScriptCore do not tier up the
+same way.
+
+**What it changes is the order of the work.** The "desktop only" band reads like a marginal miss —
+0.26 ms, 9% — and invites compiler tuning. If M2 lands near 8 ms rather than 3.2 ms, the gap is not 9%
+and no flag closes it: it would take structural work (keeping GX and audio work out of the measured
+window, or recompiler codegen), and the spec's own answer would be to stop. **The next measurement
+that matters is M2, on the operator's mid-range Android, and it comes before further optimisation.**
+This estimate is a reason to measure early, not a substitute for measuring.
