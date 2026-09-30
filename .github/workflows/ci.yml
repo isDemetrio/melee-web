@@ -45,6 +45,11 @@ jobs:
       - name: Unit tests for the hygiene gate
         run: python -m unittest discover -s scripts/tests -v
 
+      - name: Deploy and upload guards
+        # Every case ends in a refusal or a dry run: this proves the scripts that can
+        # publish something fail closed, without any Cloudflare credentials.
+        run: bash scripts/tests/test_deploy_guard.sh
+
       - name: Validate workflow files
         run: |
           set -euo pipefail
@@ -140,3 +145,50 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           if-no-files-found: ignore
+
+  deploy:
+    name: Cloudflare Pages (skips without credentials)
+    runs-on: ubuntu-latest
+    # After the shell and the browser tests, and in the same workflow: a separate
+    # deploy.yml could not depend on another workflow's jobs, and duplicating the build
+    # there would publish a shell CI has not verified.
+    needs: [web, e2e]
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT || secrets.CF_PAGES_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Cloudflare credentials
+        id: credentials
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing+=(CLOUDFLARE_API_TOKEN)
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing+=(CLOUDFLARE_ACCOUNT_ID)
+          [ -n "$CF_PAGES_PROJECT" ] || missing+=(CF_PAGES_PROJECT)
+          if ((${#missing[@]})); then
+            echo "::notice::deploy skipped: no Cloudflare credentials (${missing[*]}); docs/OPEN_QUESTIONS.md Q3"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.credentials.outputs.enabled == 'true'
+        with:
+          node-version: '20'
+
+      - name: Build the shell that gets deployed
+        if: steps.credentials.outputs.enabled == 'true'
+        working-directory: web
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          npx tsc --noEmit
+          npx vite build
+
+      - name: Deploy
+        if: steps.credentials.outputs.enabled == 'true'
+        run: bash scripts/deploy.sh --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
