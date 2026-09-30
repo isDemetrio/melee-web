@@ -139,3 +139,31 @@ artifact upload or real-disc browser run has been performed by S6. No public dep
 the ~87 MB WASM exceeds Pages' 25 MiB per-file limit. S7's planned `upload_wasm=true`
 command must use `upload_spike=true` in this repository. Rebuild the native reference at
 the spike's commit before claiming same-commit browser parity.
+
+**Status 2026-09-30 evening.** `upload_spike` has now been used: run `36753728272` on `main`
+(`workflow_dispatch`, job 7m18s) uploaded `melee-spike-dist` (4,669,739 bytes compressed,
+expires 2026-10-03). It contains `spike-core/melee_core_web.wasm` at **16,323,255 bytes** —
+the **web** module at `-Oz`, which is the number `docs/PHASE0_DEPLOY_PLAN.md` §0.3 listed as
+unverified — and `spike-core/core.json` = `{"commit":"4fba3a080af6f205cc6107ada7baefeb0315cae0","opt":"-Oz"}`.
+So the reason Q8 gives for "no public deployment" (an ~87 MB module over Pages' 25 MiB
+per-file limit) **no longer holds**: the module is now under the limit. What still stops a
+deployment is O1 in `docs/PHASE0_DEPLOY_PLAN.md` — the operator's legal judgement on
+publishing game-derived code — not the size.
+
+## Q9 — Which device measures Phase 0 — **ANSWERED 2026-09-30**
+
+`docs/SPEC_PIANO.md` step 8 and `docs/PHASE0_TASKS.md` D5 want a mid-range Android: without
+that row there is no go/no-go, and `docs/PHASE0_DEVICE_PLAN.md` §0.2 says so explicitly.
+
+**Answer: only an iPhone is available.** The measurement therefore proceeds on iPhone Safari
+and counts as the **iOS row** (`docs/PHASE0_DEVICE_PLAN.md` M3, informative), not as the
+Android row. What that does and does not settle:
+
+- a **NO-GO on the iPhone** closes the mobile target by strong inference (a recent iPhone is
+  usually faster than a mid-range Android) — an inference, not a measurement;
+- a **GO on the iPhone does not** close the Android row, and the spec's go/no-go stays open;
+- M1 (Chrome on a desktop) is still wanted and is unaffected: it is the easiest end of the
+  chain and the desktop row of the verdict.
+
+**Not blocking**: the tailnet test path (D in `docs/PHASE0_DEPLOY_PLAN.md` §2) needs no
+Cloudflare credentials, so the iPhone run can start before Q3/O1 are answered.
