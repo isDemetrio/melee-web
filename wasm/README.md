@@ -57,12 +57,13 @@ precision, followed by the same four `fs(op(a,f25(c),b))` paths used by
 `port/recomp/emit.py:603-610`. Each result contributes eight bytes, least
 significant first, for 64,000,000 hashed bytes. No formatting conversions, NaN
 canonicalization, sign removal, filtering or tolerance are permitted. The FMA patch
-routes the four operations through `wasm_compat::fma`, a `std::fma` call with the guard
-described under "The zero-sign class" below, and uses `fma(a,c,b)`,
-`fma(a,c,-b)`, `fma(-a,c,-b)` and `fma(-a,c,b)`; negation is applied before the one rounded
-operation, preserving the intrinsic operation's zero behavior rather than negating an
-already-rounded result. NaN propagation can still differ; that is evidence the gate must
-expose.
+routes the four operations through `wasm_compat::fma` (a `std::fma` call with the guard
+described under "The zero-sign class" below) and `wasm_compat::fmsub`/`fnmadd`/`fnmsub`
+(single-rounding calls with a negated operand, which return a NaN operand unnegated --
+"The NaN-sign class"). Negation is applied before the one rounded operation, preserving
+the intrinsic operation's zero behavior rather than negating an already-rounded result.
+NaN bits that the platform's own arithmetic produces can still differ; that is evidence
+the gate must expose.
 
 The gate is `fma_vectors --compare native.bin wasm.bin`, run by the native
 binary after both dumps exist. It regenerates the corpus with integer code only,
@@ -103,23 +104,30 @@ to make it green.
 
 ## Finding: native and WASM FMA results are not bit-identical (2026-09-29)
 
-**Measured, classified** (run 36647200912, 2026-09-29 23:50 UTC, emsdk 4.0.23, Node 22):
-8,000,000 results, 20,264 divergent. `sha256 native 6b79b92a3bc1fb1699853e1c8c671d37aaf64f82378bcb9d393387480f66afc9`,
-`sha256 wasm 70f729cf8488ddbee27a31712643f49c1d79c640d0ff65ce793e97e2873b0d1e`.
+**Latest classified run** (36661984096, 2026-09-30 02:55 UTC, emsdk 4.0.23, Node 22):
+8,000,000 results, 20,144 divergent.
+`sha256 native 6b79b92a3bc1fb1699853e1c8c671d37aaf64f82378bcb9d393387480f66afc9`,
+`sha256 wasm 0d7570bed4af32253bf80e74616d9abc9b1eb92c097c1c994670b2374911dbcb`.
 
 | divergence | gate | total | ordinary | subnormal-in | inf-in | nan-in |
 | --- | --- | --- | --- | --- | --- | --- |
 | nan-vs-number | FAIL | 0 | 0 | 0 | 0 | 0 |
 | nan-sign | FAIL | 18680 | 0 | 0 | 0 | 18680 |
 | nan-payload | FAIL | 1464 | 0 | 0 | 0 | 1464 |
-| zero-sign | FAIL | 120 | 24 | 96 | 0 | 0 |
+| zero-sign | FAIL | 0 | 0 | 0 | 0 | 0 |
 | subnormal | FAIL | 0 | 0 | 0 | 0 | 0 |
 | value | FAIL | 0 | 0 | 0 | 0 | 0 |
 
+`zero-sign` is 0 in this run: the musl `fma.c` defect is fixed in the shim, measured, not
+asserted (it was 120 in run 36647200912, 24 of them with ordinary operands). The NaN classes
+remain, and `nan-sign` was then still our own negation -- see "The NaN-sign class" below.
+
+The first classified run (36647200912, 2026-09-29 23:50 UTC) had the same shape with
+`zero-sign 120` and `sha256 wasm 70f729cf8488ddbee27a31712643f49c1d79c640d0ff65ce793e97e2873b0d1e`.
+
 **No numeric value differs and no subnormal result differs.** Every divergence is either
-NaN propagation or the sign of an exact zero. `zero-sign` was a defect in the toolchain,
-not latitude, and is fixed in the shim — see the next section. The NaN classes are the
-platform's NaN bits and are parked (`docs/OPEN_QUESTIONS.md` Q7).
+NaN propagation or the sign of an exact zero.
+
 
 **What it means for determinism.** The netcode peers are browsers only (Slippi
 Dolphin matchmaking is out of scope for v1.0, `docs/SPEC_PIANO.md`), so the native
@@ -143,9 +151,12 @@ through ordinary WASM arithmetic, whose NaN sign and payload the WASM spec leave
 nondeterministic, after the patch has already negated the operand. The measured table
 confirms the part that matters for the fix: every NaN-class divergence has a NaN
 *operand* (`nan-in`), and not one `inf-in` case diverged, which is what a shortcut on
-non-finite operands plus an operand negation produces. Which NaN operand x86 returns,
-and in which order, is still an expectation: it needs a shim that emulates the
-reference's rule, and that is a decision, not a measurement (Q7).
+non-finite operands plus an operand negation produces.
+
+The first half of that expectation is now a measurement: `nan-sign` was the shim's own
+negation (below), and the probe run that must show `nan-sign 0` is pending. The NaN bits a
+non-finite operation produces with no NaN operand (the `nan-payload` cell) are still the
+platform's, and whether that may differ from the reference is still Q7.
 
 ### The zero-sign class: a defect in musl's `fma`, fixed in the shim
 
@@ -173,14 +184,34 @@ Evidence, kept apart on purpose:
 - verified locally, without a compiler: every expected bit pattern in
   `wasm/probe/fma_shim_test.cpp` against the platform's correctly rounded `math.fma`
   (CPython 3.14.7);
-- **pending**: the corpus comparison after the fix must show `zero-sign 0`. Until that
-  run exists, the guard is written and unit-tested, not proven on the corpus.
+- **measured after the fix**: `zero-sign 0` in run 36661984096, with `nan-vs-number`,
+  `subnormal` and `value` still 0.
+
+### The NaN-sign class: our own negation, fixed in the shim
+
+`nan-sign` was not the engine's NaN latitude either. `fmsub`, `fnmadd` and `fnmsub` are
+written as one `fma` call with a negated operand, and negating a NaN operand flips the sign
+of the NaN that comes back. The x86 instructions these wrappers stand in for do not do that.
+The probe's first `nan-sign` example in run 36661984096:
+
+```
+fnmadd a=7ff8000000000001 c=0000000000000000 b=0000000000000000
+       native=7ff8000000000001  wasm=fff8000000000001
+```
+
+All 18 680 had a NaN operand and none had an ordinary one. `wasm/compat/fma.h` now returns
+the first NaN operand quieted and unnegated -- x86's priority, multiplicand then multiplier
+then addend -- for those three wrappers only. `docs/PORT_CHANGES.md`, "The NaN-sign class",
+records the same. Status: written and unit-tested; the run that must show `nan-sign 0` is
+pending, and it is the same run that would refute the priority order if the expectation is
+wrong.
+
 
 **Next measurements, in order.**
 
-1. Done for the pre-fix tree: run 36647200912, table above. Rerun after the shim
-   guard and record the table again; `zero-sign` must be 0 while `nan-vs-number`,
-   `subnormal` and `value` stay 0.
+1. Done for the pre-fix tree: run 36647200912, table above. Done again after the shim
+   guard: run 36661984096, `zero-sign 0` with `nan-vs-number`, `subnormal` and `value`
+   still 0. Pending: the run after the NaN-operand guard, which must show `nan-sign 0`.
 2. Run the same WASM binary on an arm64 runner and compare WASM-x86 against
    WASM-arm64 dumps. That, not native-vs-WASM, is the browser-to-browser netcode
    question; ARM's default NaN is positive, so NaN sign is a candidate there too.

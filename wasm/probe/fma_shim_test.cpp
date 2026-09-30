@@ -4,7 +4,10 @@
 //
 // Every expected pattern here was confirmed against the platform's correctly rounded
 // fma before it was written; the probe's corpus comparison against the native x86
-// intrinsics is the measurement that matters, this is the cheap regression net.
+// intrinsics is the measurement that matters, this is the cheap regression net. The
+// NaN-operand block at the end is the exception to "confirmed against math.fma": its
+// reference is the native intrinsic build, and its patterns come from the probe run
+// that measured them (see the comment there).
 #include "ppc.h"
 #include "wasm/compat/fma.h"
 #include <cstdint>
@@ -71,6 +74,32 @@ int main() {
   expect("fmsub(3, 4, 5) = 7", ppc::fmsub(3.0, 4.0, 5.0), bits(7.0));
   expect("fnmadd(3, 4, 5) = -17", ppc::fnmadd(3.0, 4.0, 5.0), bits(-17.0));
   expect("fnmsub(3, 4, 5) = -7", ppc::fnmsub(3.0, 4.0, 5.0), bits(-7.0));
+
+  // The NaN-operand rule of the three negated wrappers. The reference is the native x86
+  // intrinsic build in the same CI run: `fnmadd(NaN, 0, 0)` was measured there as
+  // 7ff8000000000001 -- the first of the 18 680 nan-sign divergences that the negating
+  // shim produced (probe run 36661984096). The rule these pin is "the first NaN operand,
+  // quieted, unnegated"; the probe's corpus comparison re-measures every one of these
+  // bit patterns against the hardware, so this is the regression net and not the proof.
+  constexpr uint64_t kQNanA = 0x7ff8000000000001ull;     // quiet NaN, positive, payload 1
+  constexpr uint64_t kQNanB = 0xfff8000000001234ull;     // quiet NaN, negative, payload 0x1234
+  constexpr uint64_t kSNanB = 0x7ff0000000000001ull;     // signalling NaN, positive
+  expect("fnmadd(NaN, 0, 0) keeps the operand's sign",
+         ppc::fnmadd(from_bits(kQNanA), 0.0, 0.0), kQNanA);
+  expect("fnmsub(NaN, 0, 0) keeps the operand's sign",
+         ppc::fnmsub(from_bits(kQNanA), 0.0, 0.0), kQNanA);
+  expect("fmsub(1, 1, NaN) returns the addend, unnegated",
+         ppc::fmsub(1.0, 1.0, from_bits(kQNanB)), kQNanB);
+  expect("fnmadd(1, 1, NaN) returns the addend, unnegated",
+         ppc::fnmadd(1.0, 1.0, from_bits(kQNanB)), kQNanB);
+  expect("fnmsub(1, 1, NaN) returns the addend, unnegated",
+         ppc::fnmsub(1.0, 1.0, from_bits(kQNanB)), kQNanB);
+  expect("fnmsub(1, 1, sNaN) quiets the operand and keeps its sign",
+         ppc::fnmsub(1.0, 1.0, from_bits(kSNanB)), kQNanA);
+  expect("fnmadd(NaN, NaN, NaN) returns the first operand",
+         ppc::fnmadd(from_bits(kQNanA), from_bits(kQNanB), from_bits(kSNanB)), kQNanA);
+  expect("fnmadd(1, NaN, 1) returns the multiplier",
+         ppc::fnmadd(1.0, from_bits(kQNanB), 1.0), kQNanB);
 
   if (failures) {
     std::printf("\n%d expectation(s) failed\n", failures);

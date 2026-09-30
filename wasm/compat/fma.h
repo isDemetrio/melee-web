@@ -1,7 +1,11 @@
 #pragma once
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
-// Correctly rounded FMA for the WASM build, with one deliberate guard.
+// Correctly rounded FMA for the WASM build, with two deliberate guards: the sign of an
+// exact zero (below), and the sign of a NaN operand in the three wrappers that negate
+// an operand (at the end of this file).
 //
 // The four FMA helpers in the pinned `port/runtime/ppc/ppc.h` must round once, over the
 // exact product, and must keep the sign of an exact zero. Emscripten's libc (musl) does
@@ -36,9 +40,10 @@
 //
 // What this does NOT do: `fma.c:54-55` also short-circuits every non-finite operand to
 // ordinary arithmetic, and the WASM specification leaves the sign and payload of a NaN
-// produced by arithmetic to the engine, so NaN results stay the platform's rather than
-// the reference's. That difference is measured by the probe and is parked as a policy
-// question (`wasm/README.md`, `docs/OPEN_QUESTIONS.md` Q7); it is not papered over here.
+// produced by arithmetic to the engine, so a NaN *result* of a non-finite operation stays
+// the platform's rather than the reference's. That difference is measured by the probe and
+// is parked as a policy question (`wasm/README.md`, `docs/OPEN_QUESTIONS.md` Q7); it is not
+// papered over here.
 namespace wasm_compat {
 
 inline double fma(double x, double y, double z) {
@@ -56,6 +61,66 @@ inline double fma(double x, double y, double z) {
     return x * y;
   }
   return std::fma(x, y, z);
+}
+
+// ---- the sign of a NaN operand, in the three wrappers that negate one ----
+//
+// `fmsub(a,c,b)` is `a*c - b`, `fnmadd(a,c,b)` is `-(a*c) - b` and `fnmsub(a,c,b)` is
+// `-(a*c) + b`. Each is written as one `fma` call with a negated operand, which is exact
+// for the value -- the negation is applied to the product term before the single rounding,
+// not to an already-rounded result -- but the negation is a sign operation, and applying it
+// to a NaN *operand* changes the result: the NaN that comes back out carries the flipped
+// sign. The x86 instructions these wrappers stand in for do not do that.
+//
+// Measured, WASM probe run 36661984096 (2026-09-30), the first of 18,680 `nan-sign`
+// divergences in that run:
+//
+//     fnmadd a=7ff8000000000001 c=0000000000000000 b=0000000000000000
+//     native=7ff8000000000001   wasm=fff8000000000001
+//
+// Every one of those 18,680 had a NaN operand and none had an ordinary one, so this was not
+// the platform's NaN latitude: it was our own negation, and it is a divergence the reference
+// does not have. The guard below removes it by returning the NaN operand the way the
+// hardware does -- quieted, unnegated, first NaN in operand order, which is x86's priority
+// (multiplicand, multiplier, addend).
+//
+// What it does not claim: the NaN bits a *non-finite* operation produces when no operand is
+// a NaN (0*inf and the like) remain the engine's, and so do the payload bits a NaN result
+// carries through the arithmetic paths. Those are Q7 and are left alone.
+inline double quiet(double v) {
+  uint64_t u;
+  std::memcpy(&u, &v, 8);
+  u |= 0x0008000000000000ull;  // the quiet bit: x86 quiets a signalling NaN operand
+  std::memcpy(&v, &u, 8);
+  return v;
+}
+
+// True when an operand is a NaN, with that operand quieted into `out`; operand order is
+// x86's priority. `x != x` is the portable NaN test and is false for infinities, so an
+// infinite operand keeps taking the arithmetic path.
+inline bool nan_operand(double x, double y, double z, double& out) {
+  if (x != x) { out = quiet(x); return true; }
+  if (y != y) { out = quiet(y); return true; }
+  if (z != z) { out = quiet(z); return true; }
+  return false;
+}
+
+inline double fmsub(double a, double c, double b) {
+  double nan;
+  if (nan_operand(a, c, b, nan)) return nan;
+  return fma(a, c, -b);
+}
+
+inline double fnmadd(double a, double c, double b) {
+  double nan;
+  if (nan_operand(a, c, b, nan)) return nan;
+  return fma(-a, c, -b);
+}
+
+inline double fnmsub(double a, double c, double b) {
+  double nan;
+  if (nan_operand(a, c, b, nan)) return nan;
+  return fma(-a, c, b);
 }
 
 }  // namespace wasm_compat
