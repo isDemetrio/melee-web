@@ -656,3 +656,46 @@ shows the same gap (about 53 s of wall clock for about 11 s of frames) with and 
 Caveat kept in the record: this ran the x86 binary on the VPS, not the WebAssembly module under
 JavaScriptCore, so it removes one candidate explanation without explaining the gap. Method, table and
 limits: `docs/HARNESS_OVERHEAD_EXPERIMENT.md`.
+
+## PR 4, step 1 — the disc cache verifies every piece before it writes one (2026-10-01, night)
+
+`docs/NIGHT_HANDOFF.md` ordered PR 4 (`docs/PHASE0_DEPLOY_PLAN.md` section 5) as four small steps.
+This is the first: the module that decides what a verified disc is. Nothing is wired into the
+spike page yet — the OPFS worker, the new JSON fields and the page button are the steps after it.
+
+**New.** `web/src/spike/disc-cache.ts`, `web/tests/unit/disc-cache.test.ts` (28 tests),
+`web/tests/unit/fakes/discFixtures.ts`.
+
+The rules the module enforces, and why each one exists:
+
+| Rule | Why it exists |
+| --- | --- |
+| The manifest is validated before anything else: total size, piece size, piece count (it must be the ceiling of the division), both digest formats, and a piece no bigger than 32 MiB | one piece is held in memory at a time, and a document that disagrees with itself is refused before a 1.36 GB download instead of after it |
+| The cache's identity is the SHA-256 of the manifest's validated fields | a different disc, or the same disc cut differently, cannot read the old bytes |
+| A download re-reads and **re-hashes** every stored piece, and truncates the file at the first piece that is missing, short or corrupt | length alone certifies nothing: a piece of the right length can hold the wrong bytes |
+| Each piece is asked for with an exact `Range`, and `206`, `Content-Range`, body length and SHA-256 are all checked **before** a byte is written | a `200`, an HTML page, a wrong `Content-Range`, a short body and a body longer than requested are each refused |
+| Free space is demanded before the download starts: the missing bytes plus an 8 MiB margin | `estimate()` reports without reserving anything, and `persist()` may be denied |
+
+**Measured.**
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36785570437` (PR CI) | **success** | **245 unit tests across 18 files** (was 217 across 17: +28, exactly the new file), 4.43 s; typecheck and build clean; 10 shell Chromium tests pass (5.6 s); deploy skipped without credentials |
+| `36785570607` (Phase 0 — WASM core) | **success** | job 12 m 13 s (22:26:27 → 22:38:40 UTC); the spike page typechecks and builds with the new module in its graph, and the synthetic-disc Chromium test still passes (740 ms) |
+| `36785529423` (push CI) | **success** | same commit |
+
+Local convenience check, **not evidence**: `npm install` is forbidden on this VPS
+(`docs/AGENT_RULES.md` rule 3), so the same test file was executed under Node 22 type stripping
+with a local stand-in for vitest's globals — 28 passed, 0 failed. The runs above are the authority.
+
+**Not in this step.** The dedicated OPFS worker (the browser implementation of `DiscStore`), the
+`disc_source` / `storage_persisted` / `core_load_ms` fields, the download button in
+`web/spike.html`, and the Chromium tests in `web/tests/spike/spike.spec.ts`. The plan's known
+defects that belong to those steps are untouched here: the spike fixture is still too small to
+exercise a resume, a private window is still incompatible with a persistent cache, and removing
+`sw.js` from the deploy still does not unregister a service worker that is already registered.
+
+**Next step.** The OPFS worker: one `createSyncAccessHandle()`, sequential download, at most one
+piece in memory, `flush()` after every piece, `close()` in `finally`, the `File` returned after the
+close, and downloads, deletions and runs serialised even across tabs. Then the JSON fields, then
+the button in the page.
