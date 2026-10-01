@@ -124,6 +124,42 @@ jobs:
           SECONDS=0
           cmake --build "$RUNNER_TEMP/wasm" --target guest runtime_core melee_core_wasm sha1_test --parallel "$BUILD_JOBS"
           echo "offline_compile_link_seconds=$SECONDS" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Post-process the shipped modules with wasm-opt
+        run: |
+          # Emscripten already runs Binaryen at link, and a second pass still pays: measured on the
+          # -Oz node module it is 7.1% smaller (16,323,657 -> 15,162,083 bytes) and 4.6% faster
+          # in-match on the reference machine, with all 2400 checkpoints still identical
+          # (docs/WASM_OPT_EXPERIMENT.md). Both the size and the speed matter here: Pages allows
+          # 26,214,400 bytes per file and -O1 was closed at 85,658,030.
+          #
+          # The feature list is explicit on purpose. `--all-features` produces a module that Node
+          # and V8 reject at instantiation ("unknown import kind 0x7f"), and nothing in the build
+          # notices until something tries to load it. So the flags stay spelled out, and the
+          # compile check below is part of the step rather than a nicety.
+          #
+          # The level is -O2, not -O3: the pass is the JS build of Binaryen here, and -O3 on a
+          # 16 MB module took minutes of runner time for no measured gain.
+          npm install -g binaryen@132.0.0
+          for module in "$RUNNER_TEMP/wasm/melee_core_node.wasm" "$RUNNER_TEMP/wasm/melee_core_web.wasm"; do
+            before=$(stat -c%s "$module")
+            wasm-opt --enable-bulk-memory --enable-mutable-globals \
+              --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
+              -O2 "$module" -o "$module.opt"
+            mv "$module.opt" "$module"
+            echo "wasm-opt: $(basename "$module") $before -> $(stat -c%s "$module") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          # The loader finds its module by name beside the .js, so a module that no longer
+          # instantiates would ship a page that dies on load with no other symptom. Compile both
+          # with the engine that will run them; the Node smoke test later in this job then runs the
+          # node module for real.
+          node -e '
+            const fs = require("fs");
+            const files = process.argv.slice(1);
+            Promise.all(files.map(f => WebAssembly.compile(fs.readFileSync(f))
+              .then(() => console.log(f.split("/").pop() + ": compiles"))
+              .catch(e => { console.error(f.split("/").pop() + ": " + e.message); process.exit(1); })))
+              .catch(() => process.exit(1));
+          ' "$RUNNER_TEMP/wasm/melee_core_node.wasm" "$RUNNER_TEMP/wasm/melee_core_web.wasm"
       - name: Compile all 144 release guest TUs with emcc (P0-04)
         run: |
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/wasm-release" -G Ninja \
