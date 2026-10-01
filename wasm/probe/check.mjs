@@ -13,9 +13,13 @@
 //   launchOptions: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] }
 //
 // Two flags, and `--enable-unsafe-webgpu` is the one both failing configurations lacked. Run
-// 36909581289 confirms it: with both flags, this workflow gets `google swiftshader` as the adapter
-// and a device, in both launch configurations below. That run also left the second question open —
-// see webgpu_probe.html, "THE ORDER IS THE MEASUREMENT".
+// 36909581289 confirms it: with both flags this workflow gets `google swiftshader` as the adapter
+// and a device, in both launch configurations below. What that run also showed, and run 36910340139
+// reproduced with the module not involved at all, is a device that is destroyed at the first task
+// boundary after GPU work: the readback of a texture the page had just cleared came back [0,0,0,0]
+// and `device.lost` reported "destroyed: Device was destroyed.". `webgpu_probe.html` carries the
+// two hypotheses that run could not separate — collection and an idle page — and its `timeline`,
+// `frames` and `visibility` fields are what separate them.
 //
 // The two configurations are the one variable the two harnesses still differ by: Playwright
 // launches the `chromium-headless-shell` build for `headless: true` unless a channel is named
@@ -122,14 +126,16 @@ function shortfalls(result) {
 }
 
 /**
- * What one configuration answered about the module's effect on the device — the measurement
- * webgpu_probe.html was reordered for, printed rather than asserted: the expected value is what is
- * being measured, and a difference is a finding about this harness, not a failed probe.
+ * What one configuration answered around the device it lost — the measurement webgpu_probe.html
+ * was written for, printed rather than asserted: the expected values here are what is being
+ * measured, and a difference is a finding about this harness, not a failed probe.
  */
 function diagnostics(result) {
   if (result.failed_to_open) return [];
   return [
     `order: ${JSON.stringify(result.order)}`,
+    `timeline: ${JSON.stringify(result.timeline)}`,
+    `frames painted: ${JSON.stringify(result.frames)}; visibility: ${JSON.stringify(result.visibility)}`,
     `adapter: ${JSON.stringify(result.adapter)}; device: ${JSON.stringify(result.device)}`,
     `readback before the module: ${JSON.stringify(result.readback_before_module)}`,
     `readback after the module: ${JSON.stringify(result.readback_after_module)} (expected ${JSON.stringify(BLUE)})`,

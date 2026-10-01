@@ -23,6 +23,9 @@
     <script type="module">
       const out = document.getElementById('out');
       const result = {
+        timeline: [],
+        visibility: [],
+        frames: 0,
         order: [],
         cxx: null,
         cxx_lines: [],
@@ -34,7 +37,34 @@
         device_lost: null,
         error: null,
       };
-      const step = (name) => result.order.push(name);
+
+      const t0 = performance.now();
+      const mark = (name) => result.timeline.push(`${(performance.now() - t0).toFixed(1)}ms ${name}`);
+      const step = (name) => {
+        result.order.push(name);
+        mark(name);
+      };
+
+      // Two things the run of 36910340139 could not separate, and this run separates them.
+      //
+      // (1) GARBAGE COLLECTION. Nothing in this page's global scope holds the adapter, the device
+      //     or the readback buffer; `web/tests/spike/render.spec.ts` was fixed once by rooting
+      //     exactly those objects in the worker's global scope. Here they are rooted in
+      //     `window.__gpu` before anything else happens.
+      // (2) THE PAGE GOING IDLE. That run read a texture it had just cleared back as [0,0,0,0]
+      //     and then lost the device ("destroyed: Device was destroyed.") on the canvas configure,
+      //     with the module not involved at all — the GPU work ran first and the module never
+      //     loaded. The render tests in `web/tests/spike/render.spec.ts` do get a red pixel back
+      //     in this same CI browser, from a worker. A page with nothing to paint is suspended in
+      //     headless Chromium, so this page keeps painting for the whole run: the rAF loop below
+      //     counts frames, and `frames` in the result says whether the page was ever alive.
+      let painting = true;
+      const paint = () => {
+        result.frames += 1;
+        if (painting) requestAnimationFrame(paint);
+      };
+      requestAnimationFrame(paint);
+      result.visibility.push(document.visibilityState);
 
       /**
        * Clear a 4x4 texture to `colour` and read pixel (0, 0) back off the GPU. A colour that
@@ -67,15 +97,6 @@
         return pixel;
       }
 
-      // THE ORDER IS THE MEASUREMENT. Run 36909581289 ran the C++ module first and the GPU half
-      // second, and the GPU half answered "device present" while reading a texture it had just
-      // cleared back as [0,0,0,0], then threw "A valid external Instance reference no longer
-      // exists." on the canvas configure. The module is built -sEXIT_RUNTIME=1, so it calls exit()
-      // at the end of main(), and that same error string is what run 36898914442 saw when the
-      // device died in the worker. So the GPU work now happens BEFORE the module is loaded, and a
-      // second readback happens AFTER it: if the first is the clear colour and the second is not,
-      // the module's exit is what invalidates the instance, and that is a fact about this harness
-      // rather than a guess about Chromium.
       try {
         if (typeof navigator.gpu === 'undefined') {
           result.adapter = 'no navigator.gpu';
@@ -91,10 +112,12 @@
               ? `${adapter.info.vendor ?? '?'} ${adapter.info.architecture ?? '?'}`
               : 'present';
             const device = await adapter.requestDevice();
+            window.__gpu = { adapter, device }; // (1) rooted for the whole run
             result.device = device !== null && device !== undefined;
-            // Dawn's own reason for losing the device, if it is lost before the end of the run.
+            // Dawn's own reason for losing the device, with the moment it happened.
             device.lost.then((info) => {
               result.device_lost = `${info.reason}: ${info.message}`;
+              mark(`device lost: ${info.reason}: ${info.message}`);
             });
 
             step('readback_before_module');
@@ -142,11 +165,15 @@
       } catch (error) {
         if (result.adapter === null) result.adapter = `error: ${error}`;
         result.error = String(error);
+        mark(`error: ${error}`);
       }
 
+      painting = false;
+      result.visibility.push(document.visibilityState);
       // One turn of the event loop, so that a `device.lost` that fired during the run is in the
       // result before the check reads it.
       await new Promise((resolve) => setTimeout(resolve, 100));
+      mark('done');
       out.textContent = JSON.stringify(result, null, 2);
       window.__probe = result;
     </script>
