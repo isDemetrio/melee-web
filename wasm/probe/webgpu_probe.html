@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WebGPU probe</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; }
+      canvas { border: 1px solid #888; image-rendering: pixelated; width: 64px; height: 64px; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>WebGPU probe</h1>
+    <p>
+      Two questions, both answered into <code>window.__probe</code> for the CI check to read:
+      does this browser expose a usable WebGPU adapter, device and readback (<code>adapter</code>,
+      <code>device</code>, <code>round_trip</code>, <code>readback</code>), and can the pinned
+      Emscripten build and run a WebGPU translation unit (<code>cxx</code>)? The canvas is
+      configured, cleared and submitted, and what its commit did to the device is recorded in
+      <code>canvas_commit</code> rather than required — see the worker's header.
+    </p>
+    <canvas id="probe" width="64" height="64"></canvas>
+    <pre id="out">running</pre>
+
+    <script type="module">
+      // The two halves run in the two realms they belong to. The browser half is a worker
+      // (webgpu_probe_worker.js): three runs of this probe lost the device at the first task
+      // boundary on the page's main thread, while this repository's own CI readback -- in a worker,
+      // in this same browser, with these same two launch flags -- gets the colour back. The C++
+      // half is the page's, because it is a module load and nothing else.
+      //
+      // Run 36912403273 is why the worker's readback is not simply trusted either: it answered
+      // [0,0,0,0] from a copy WebGPU had rejected, because a rejected copy raises a validation
+      // error and a validation error is silent. The worker's header carries the whole finding; this
+      // page only collects what the worker answered.
+      const out = document.getElementById('out');
+      const result = {
+        timeline: [],
+        realm: null,
+        cxx: null,
+        cxx_lines: [],
+        adapter: null,
+        device: null,
+        round_trip: null,
+        readback: null,
+        canvas: null,
+        canvas_commit: null,
+        errors: [],
+        device_lost: null,
+        error: null,
+      };
+
+      const loadedMs = performance.now();
+      const mark = (event) => result.timeline.push(`${(performance.now() - loadedMs).toFixed(1)}ms ${event}`);
+
+      // 1. The browser half, in a worker, with the page's canvas transferred to it.
+      try {
+        const worker = new Worker('./webgpu_probe_worker.js', { type: 'module' });
+        const canvas = document.getElementById('probe');
+        const answer = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('the worker did not answer within 60 s')), 60000);
+          worker.onmessage = (event) => {
+            clearTimeout(timer);
+            resolve(event.data);
+          };
+          worker.onerror = (event) => {
+            clearTimeout(timer);
+            reject(new Error(`worker error: ${event.message}`));
+          };
+          const offscreen = canvas.transferControlToOffscreen();
+          worker.postMessage({ canvas: offscreen }, [offscreen]);
+        });
+        Object.assign(result, answer);
+        mark('worker answered');
+      } catch (error) {
+        result.error = `worker: ${error}`;
+        mark(`error: ${error}`);
+      }
+
+      // 2. The C++ half: a module load, and the line it prints through `print`. A module that
+      //    failed to compile or link is not here to load at all, so a load failure is itself a
+      //    result and not a crash.
+      try {
+        const factory = (await import('./webgpu_probe.mjs')).default;
+        await factory({ print: (line) => result.cxx_lines.push(line) });
+        result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
+      } catch (error) {
+        result.cxx = false;
+        result.error = result.error ? `${result.error}; cxx: ${error}` : `cxx: ${error}`;
+      }
+      mark('module loaded');
+
+      out.textContent = JSON.stringify(result, null, 2);
+      window.__probe = result;
+    </script>
+  </body>
+</html>
