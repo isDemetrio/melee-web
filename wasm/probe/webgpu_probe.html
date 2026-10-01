@@ -13,167 +13,73 @@
     <h1>WebGPU probe</h1>
     <p>
       Two questions, both answered into <code>window.__probe</code> for the CI check to read:
-      does this browser expose a usable WebGPU adapter and device (<code>adapter</code>,
-      <code>device</code>), and can the pinned Emscripten build and run a WebGPU translation unit
-      (<code>cxx</code>)?
+      does this browser expose a usable WebGPU adapter, device and readback (<code>adapter</code>,
+      <code>device</code>, <code>readback</code>), and can the pinned Emscripten build and run a
+      WebGPU translation unit (<code>cxx</code>)?
     </p>
     <canvas id="probe" width="64" height="64"></canvas>
     <pre id="out">running</pre>
 
     <script type="module">
+      // The two halves run in the two realms they belong to. The browser half is a worker
+      // (webgpu_probe_worker.js): three runs of this probe lost the device at the first task
+      // boundary on the page's main thread, while this repository's own CI readback -- in a worker,
+      // in this same browser, with these same two launch flags -- gets the colour back. The C++
+      // half is the page's, because it is a module load and nothing else.
       const out = document.getElementById('out');
       const result = {
         timeline: [],
-        visibility: [],
-        frames: 0,
-        order: [],
+        realm: null,
         cxx: null,
         cxx_lines: [],
         adapter: null,
         device: null,
-        readback_before_module: null,
+        readback: null,
         canvas: null,
-        readback_after_module: null,
         device_lost: null,
         error: null,
       };
 
-      const t0 = performance.now();
-      const mark = (name) => result.timeline.push(`${(performance.now() - t0).toFixed(1)}ms ${name}`);
-      const step = (name) => {
-        result.order.push(name);
-        mark(name);
-      };
+      const loadedMs = performance.now();
+      const mark = (event) => result.timeline.push(`${(performance.now() - loadedMs).toFixed(1)}ms ${event}`);
 
-      // Two things the run of 36910340139 could not separate, and this run separates them.
-      //
-      // (1) GARBAGE COLLECTION. Nothing in this page's global scope holds the adapter, the device
-      //     or the readback buffer; `web/tests/spike/render.spec.ts` was fixed once by rooting
-      //     exactly those objects in the worker's global scope. Here they are rooted in
-      //     `window.__gpu` before anything else happens.
-      // (2) THE PAGE GOING IDLE. That run read a texture it had just cleared back as [0,0,0,0]
-      //     and then lost the device ("destroyed: Device was destroyed.") on the canvas configure,
-      //     with the module not involved at all — the GPU work ran first and the module never
-      //     loaded. The render tests in `web/tests/spike/render.spec.ts` do get a red pixel back
-      //     in this same CI browser, from a worker. A page with nothing to paint is suspended in
-      //     headless Chromium, so this page keeps painting for the whole run: the rAF loop below
-      //     counts frames, and `frames` in the result says whether the page was ever alive.
-      let painting = true;
-      const paint = () => {
-        result.frames += 1;
-        if (painting) requestAnimationFrame(paint);
-      };
-      requestAnimationFrame(paint);
-      result.visibility.push(document.visibilityState);
-
-      /**
-       * Clear a 4x4 texture to `colour` and read pixel (0, 0) back off the GPU. A colour that
-       * comes out of the GPU is the only evidence that a device exists and is executing commands.
-       */
-      async function clearAndRead(device, colour) {
-        const size = 4;
-        const texture = device.createTexture({
-          size: [size, size],
-          format: 'rgba8unorm',
-          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-        });
-        const buffer = device.createBuffer({
-          size: 256,
-          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-        });
-        const encoder = device.createCommandEncoder();
-        const pass = encoder.beginRenderPass({
-          colorAttachments: [
-            { view: texture.createView(), clearValue: colour, loadOp: 'clear', storeOp: 'store' },
-          ],
-        });
-        pass.end();
-        encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: 256 }, [size, size]);
-        device.queue.submit([encoder.finish()]);
-        await buffer.mapAsync(GPUMapMode.READ);
-        const bytes = new Uint8Array(buffer.getMappedRange().slice(0, 4));
-        const pixel = [bytes[0], bytes[1], bytes[2], bytes[3]];
-        buffer.unmap();
-        return pixel;
-      }
-
+      // 1. The browser half, in a worker, with the page's canvas transferred to it.
       try {
-        if (typeof navigator.gpu === 'undefined') {
-          result.adapter = 'no navigator.gpu';
-        } else {
-          // The fallback adapter is asked for explicitly: the CI runner renders in software.
-          const adapter =
-            (await navigator.gpu.requestAdapter()) ??
-            (await navigator.gpu.requestAdapter({ forceFallbackAdapter: true }));
-          if (!adapter) {
-            result.adapter = 'null (no adapter, hardware or fallback)';
-          } else {
-            result.adapter = adapter.info
-              ? `${adapter.info.vendor ?? '?'} ${adapter.info.architecture ?? '?'}`
-              : 'present';
-            const device = await adapter.requestDevice();
-            window.__gpu = { adapter, device }; // (1) rooted for the whole run
-            result.device = device !== null && device !== undefined;
-            // Dawn's own reason for losing the device, with the moment it happened.
-            device.lost.then((info) => {
-              result.device_lost = `${info.reason}: ${info.message}`;
-              mark(`device lost: ${info.reason}: ${info.message}`);
-            });
-
-            step('readback_before_module');
-            result.readback_before_module = await clearAndRead(device, { r: 1, g: 0, b: 0, a: 1 });
-
-            // The path the renderer actually needs: a canvas configured for WebGPU, cleared.
-            step('canvas');
-            const canvas = document.getElementById('probe');
-            const context = canvas.getContext('webgpu');
-            context.configure({
-              device,
-              format: navigator.gpu.getPreferredCanvasFormat(),
-              alphaMode: 'opaque',
-            });
-            const canvasEncoder = device.createCommandEncoder();
-            const canvasPass = canvasEncoder.beginRenderPass({
-              colorAttachments: [
-                {
-                  view: context.getCurrentTexture().createView(),
-                  clearValue: { r: 0, g: 1, b: 0, a: 1 },
-                  loadOp: 'clear',
-                  storeOp: 'store',
-                },
-              ],
-            });
-            canvasPass.end();
-            device.queue.submit([canvasEncoder.finish()]);
-            await device.queue.onSubmittedWorkDone();
-            result.canvas = 'configured and cleared';
-
-            step('cxx');
-            try {
-              const factory = (await import('./webgpu_probe.mjs')).default;
-              await factory({ print: (line) => result.cxx_lines.push(line) });
-              result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
-            } catch (error) {
-              result.cxx = false;
-              result.error = `cxx: ${error}`;
-            }
-
-            step('readback_after_module');
-            result.readback_after_module = await clearAndRead(device, { r: 0, g: 0, b: 1, a: 1 });
-          }
-        }
+        const worker = new Worker('./webgpu_probe_worker.js', { type: 'module' });
+        const canvas = document.getElementById('probe');
+        const answer = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('the worker did not answer within 60 s')), 60000);
+          worker.onmessage = (event) => {
+            clearTimeout(timer);
+            resolve(event.data);
+          };
+          worker.onerror = (event) => {
+            clearTimeout(timer);
+            reject(new Error(`worker error: ${event.message}`));
+          };
+          const offscreen = canvas.transferControlToOffscreen();
+          worker.postMessage({ canvas: offscreen }, [offscreen]);
+        });
+        Object.assign(result, answer);
+        mark('worker answered');
       } catch (error) {
-        if (result.adapter === null) result.adapter = `error: ${error}`;
-        result.error = String(error);
+        result.error = `worker: ${error}`;
         mark(`error: ${error}`);
       }
 
-      painting = false;
-      result.visibility.push(document.visibilityState);
-      // One turn of the event loop, so that a `device.lost` that fired during the run is in the
-      // result before the check reads it.
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      mark('done');
+      // 2. The C++ half: a module load, and the line it prints through `print`. A module that
+      //    failed to compile or link is not here to load at all, so a load failure is itself a
+      //    result and not a crash.
+      try {
+        const factory = (await import('./webgpu_probe.mjs')).default;
+        await factory({ print: (line) => result.cxx_lines.push(line) });
+        result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
+      } catch (error) {
+        result.cxx = false;
+        result.error = result.error ? `${result.error}; cxx: ${error}` : `cxx: ${error}`;
+      }
+      mark('module loaded');
+
       out.textContent = JSON.stringify(result, null, 2);
       window.__probe = result;
     </script>

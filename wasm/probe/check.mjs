@@ -2,30 +2,32 @@
 // file://), opens webgpu_probe.html in headless Chromium, reads window.__probe and fails on
 // anything that is not an answer.
 //
-// WHY THERE IS MORE THAN ONE LAUNCH CONFIGURATION. Four runs of this workflow answered "null (no
-// adapter, hardware or fallback)": 36876533202 with `--enable-unsafe-swiftshader` alone, 36883720514
-// (the same commit, dispatched by hand), 36895365217 with the flag still there, and 36897513498
-// with no launch flags at all. The harness that works is the one this repository already runs:
-// `web/tests/spike/render.spec.ts` asks headless Chromium in CI for a device and gets one, and it
-// reads pixels back off the GPU (runs 36892349174, 36896537472, 36898914442, and 36901465493 — the
-// last on merged `main`), with
+// THE LAUNCH FLAGS. Four runs answered "null (no adapter, hardware or fallback)": 36876533202 with
+// `--enable-unsafe-swiftshader` alone, 36883720514 (the same commit, dispatched by hand), 36895365217
+// with the flag still there, and 36897513498 with no launch flags at all. The harness that works is
+// the one this repository already runs: `web/tests/spike/render.spec.ts` asks headless Chromium in CI
+// for a device and gets one, with
 //
 //   launchOptions: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] }
 //
 // Two flags, and `--enable-unsafe-webgpu` is the one both failing configurations lacked. Run
-// 36909581289 confirms it: with both flags this workflow gets `google swiftshader` as the adapter
-// and a device, in both launch configurations below. What that run also showed, and run 36910340139
-// reproduced with the module not involved at all, is a device that is destroyed at the first task
-// boundary after GPU work: the readback of a texture the page had just cleared came back [0,0,0,0]
-// and `device.lost` reported "destroyed: Device was destroyed.". `webgpu_probe.html` carries the
-// two hypotheses that run could not separate — collection and an idle page — and its `timeline`,
-// `frames` and `visibility` fields are what separate them.
+// 36909581289 confirms it: with both flags this workflow gets `google swiftshader` as the adapter and
+// a device, in both launch configurations below.
 //
-// The two configurations are the one variable the two harnesses still differ by: Playwright
-// launches the `chromium-headless-shell` build for `headless: true` unless a channel is named
-// (microsoft/playwright#33566), while `channel: 'chromium'` selects the new headless mode on the
-// full Chromium build. The check passes if any configuration answers everything, and it prints
-// every configuration's answer either way, so a failure is a measurement rather than a shrug.
+// THE REALM. With the flags fixed, runs 36909581289, 36910340139 and 36911030437 all lost the device
+// on the page's main thread at the first task boundary after GPU work -- a texture the page had just
+// cleared read back [0,0,0,0], `device.lost` said "destroyed: Device was destroyed." and the canvas
+// configure threw "A valid external Instance reference no longer exists."; run 36911030437's timeline
+// puts the death at 62 ms, 47 ms into the first await, with the objects rooted and the page painting
+// four frames. The browser half therefore runs in a worker (webgpu_probe_worker.js), which is where
+// this repository's own CI readback gets its colour back (runs 36892349174, 36896537472, 36898914442,
+// 36901465493). The probe answers in the realm the renderer runs in, or it answers nothing.
+//
+// The two configurations are the remaining variable: Playwright launches the `chromium-headless-shell`
+// build for `headless: true` unless a channel is named (microsoft/playwright#33566), while
+// `channel: 'chromium'` selects the new headless mode on the full Chromium build. The check passes if
+// any configuration answers everything, and it prints every configuration's answer either way, so a
+// failure is a measurement rather than a shrug.
 //
 // Run from anywhere: the served directory is derived from this file's own URL, so the workflow can
 // run it with the working directory set to wherever Playwright was installed.
@@ -69,10 +71,8 @@ const server = createServer(async (request, response) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
 
-/** The colour the page clears a texture to before the C++ module runs, and the one it reads back. */
+/** The colour the worker clears a texture to, and the one it reads back off the GPU. */
 const RED = [255, 0, 0, 255];
-/** The colour of the readback taken after the module has run and exited. */
-const BLUE = [0, 0, 255, 255];
 
 const CONFIGURATIONS = [
   {
@@ -117,28 +117,22 @@ function shortfalls(result) {
   }
   if (result.navigator_gpu !== true) missing.push('navigator.gpu is undefined in this browser');
   if (!result.device) missing.push(`no usable device (adapter: ${JSON.stringify(result.adapter)})`);
-  if (JSON.stringify(result.readback_before_module) !== JSON.stringify(RED)) {
-    missing.push(`the red clear came back as ${JSON.stringify(result.readback_before_module)}, expected ${JSON.stringify(RED)}`);
+  if (JSON.stringify(result.readback) !== JSON.stringify(RED)) {
+    missing.push(`the red clear came back as ${JSON.stringify(result.readback)}, expected ${JSON.stringify(RED)}`);
   }
   if (result.canvas !== 'configured and cleared') missing.push(`canvas: ${JSON.stringify(result.canvas)}`);
   if (result.pageErrors.length > 0) missing.push(`page errors: ${JSON.stringify(result.pageErrors)}`);
   return missing;
 }
 
-/**
- * What one configuration answered around the device it lost — the measurement webgpu_probe.html
- * was written for, printed rather than asserted: the expected values here are what is being
- * measured, and a difference is a finding about this harness, not a failed probe.
- */
+/** Everything the run measured, printed whether it passed or not. */
 function diagnostics(result) {
   if (result.failed_to_open) return [];
   return [
-    `order: ${JSON.stringify(result.order)}`,
+    `realm: ${JSON.stringify(result.realm)}`,
     `timeline: ${JSON.stringify(result.timeline)}`,
-    `frames painted: ${JSON.stringify(result.frames)}; visibility: ${JSON.stringify(result.visibility)}`,
     `adapter: ${JSON.stringify(result.adapter)}; device: ${JSON.stringify(result.device)}`,
-    `readback before the module: ${JSON.stringify(result.readback_before_module)}`,
-    `readback after the module: ${JSON.stringify(result.readback_after_module)} (expected ${JSON.stringify(BLUE)})`,
+    `readback: ${JSON.stringify(result.readback)}`,
     `canvas: ${JSON.stringify(result.canvas)}`,
     `device lost: ${JSON.stringify(result.device_lost)}`,
     `error: ${JSON.stringify(result.error)}`,
@@ -147,6 +141,7 @@ function diagnostics(result) {
 
 const results = [];
 for (const configuration of CONFIGURATIONS) {
+  console.log(`--- ${configuration.name}`);
   const result = await probeWith(configuration);
   results.push(result);
   console.log(JSON.stringify(result, null, 2));
@@ -170,4 +165,4 @@ if (!winner) {
 console.log('PROBE OK');
 console.log(`  configuration: ${winner.name}`);
 console.log(`  browser: ${winner.browser_version} (${winner.user_agent})`);
-console.log(`  adapter: ${winner.adapter}; readback: ${JSON.stringify(winner.readback_before_module)}; canvas: ${winner.canvas}`);
+console.log(`  realm: ${winner.realm}; adapter: ${winner.adapter}; readback: ${JSON.stringify(winner.readback)}; canvas: ${winner.canvas}`);

@@ -30,6 +30,9 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    # A harness that hangs answers nothing: run 36911030437 sat in the runner for seven minutes
+    # with its check finished at 168 ms, and was cancelled by hand.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Read emsdk pin
@@ -59,5 +62,6 @@ jobs:
           npm install playwright@latest
           npx playwright install --with-deps chromium
       - name: Run the probe in headless Chromium
+        timeout-minutes: 5
         working-directory: ${{ github.workspace }}
         run: node wasm/probe/check.mjs
