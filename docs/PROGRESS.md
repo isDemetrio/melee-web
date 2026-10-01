@@ -1042,3 +1042,68 @@ needs `cloudflared` and a real tunnel, which no runner has. Its output still pri
 
 **Next step.** Unchanged: the device rows. M1 and M2 first (M2 decides), then the OPFS run over the
 real host, which this fix is what makes possible over the device server. O1–O9 stay the operator's.
+
+## The native reference at the served core's commit, after the afternoon deploy — 2026-10-01
+
+`docs/PHASE0_DEPLOY_PLAN.md` §6 step 3: the core a device runs must be compared against a native
+reference built from the **same** commit (`docs/PHASE0_DEVICE_PLAN.md` §5, "Il commit del
+riferimento"). That step has now been done three times, each time because the page was deployed
+again: `4fba3a0`, `4a3f537`, and now `63511ce`.
+
+The afternoon deploy (`deploy_spike`, run `36868675226`, the clean copy of the commit from PR #37)
+published a core built at `63511ce6c5f4e39be07b9acc9b517b2010ca01db` — the module that carries both
+merged optimisations (`wasm-opt` post-link, PR #43; `-O2` on `ppc_runtime.cpp` and `interp.cpp`,
+PR #41). No native reference existed at that commit, and the next device run is on that published
+page.
+
+**How it was done.** Branch `ref/63511ce` at that commit (the same convention as `ref/4a3f537`),
+then `phase0-native-headless.yml` dispatched at it with `upload_binary=true`: run **`36879113234`**,
+**success** (14:47:25 → 14:58:36 UTC), artifact `melee-core-headless` 30,826,008 bytes, downloaded to
+`/home/hermes/incoming/phase0/reference-63511ce/` — outside the checkout, never `git add`ed — and run
+twice here against the operator's own disc, verified first (1,459,978,240 bytes, SHA-1
+`d4e70c064cc714ba8400a849cf299dbd1aa326fc`), with the default `parity_vs_onett.txt`.
+
+| Run | Wall clock | Trace SHA-1 | Final scene |
+| --- | --- | --- | --- |
+| `run-1` | 55 s | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762 (retraces=2400)` |
+| `run-2` | 53 s | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | same |
+
+`scripts/phase0/compare_checkpoints.py`, three pairs, each `identical: 2400 retraces`, exit 0:
+`run-1` vs `run-2`; `run-1` vs the `f0d76a28` reference (`…/f0d76a2816ec/runs/native-1/trace.csv`);
+`run-1` vs the `4a3f537` reference (`…/reference-4a3f537/run-1/trace.csv`). Both runs report
+`FPSCR requests: RN=0 NI=0`.
+
+**What that does and does not say.** Between `4a3f537` and `63511ce` no file under `native/`,
+`patches/` or `upstream/` changed at all: the nine files that did change are `ci.yml`,
+`phase0-build.yml`, four documents, `wasm/core/CMakeLists.txt` (the WASM build's own flags) and
+`serve_spike.py` with its tests. So the identical trace is the **expected** outcome and this run
+confirms it rather than discovering it. The value is the artifact, not the surprise: the device
+comparison on the published page now has an oracle at its own commit, so
+`scripts/phase0/go_no_go.py` needs no cross-commit annotation for it:
+
+```bash
+python3 scripts/phase0/go_no_go.py \
+  --reference /home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv \
+  --reference-commit 63511ce6c5f4e39be07b9acc9b517b2010ca01db \
+  --phone /home/hermes/incoming/phase0/devices/<the new rows>/*.json
+```
+
+The number to expect from the browser is still `c79c53b9…`, the trace PR 6 records for the iPhone row.
+The directory also carries the `runs/native-1/` layout that `docs/PHASE0_NEXT.md` S3 gives `$D`, so
+`/home/hermes/incoming/phase0/current.env` now points there and the §5 commands run unchanged.
+
+**Timing, context only** (`--sim-times`, this 2-vCPU VPS, `nice`d, `--fast`, nearest-rank): in-match
+762 rows mean **15.41 ms**, p95 19.51, p99 21.34, max 25.97; all 2400 rows mean 9.48, p95 18.87,
+p99 32.54, max 48.19 (retrace 1 is boot). The `4a3f537` native run measured 14.92 ms in-match on the
+same machine and the same simulation code: the difference is the noise of this VPS between runs.
+Neither number is a device number, and neither enters the verdict.
+
+**Not in this step.** No source change of any kind: this is an artifact plus this record. The tunnel
+script's test (PR #36) and the `web/vite.config.ts` comment (PR #42) belong to other branches and were
+left alone. `docs/PHASE0_REPORT.md` stays unwritten until the operator's rows exist, and the M2
+Android row (`docs/OPEN_QUESTIONS.md` Q9) is still unmeasured.
+
+**Next step.** Not the agent's, and unchanged: the renderer's first priority (the afternoon session's
+own handoff), the operator's device rows, and O1–O9. On the autonomous side, `docs/PHASE0_DEPLOY_PLAN.md`
+§6 has no `[subito]` step left that does not need a device or a credential — step 3 was the last one,
+and it is now done again at the commit the page actually serves.
