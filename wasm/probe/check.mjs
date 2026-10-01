@@ -1,10 +1,31 @@
 // The CI half of the WebGPU probe. Serves wasm/probe over HTTP (module scripts do not load from
-// file://), opens webgpu_probe.html in headless Chromium with the software adapter allowed, reads
-// window.__probe and fails on anything that is not an answer.
+// file://), opens webgpu_probe.html in headless Chromium, reads window.__probe and fails on
+// anything that is not an answer.
 //
-// `--enable-unsafe-swiftshader` is what makes a headless runner without a GPU able to answer at
-// all: Chrome otherwise refuses to hand out an adapter. The page asks for the fallback adapter
-// explicitly for the same reason.
+// WHY THERE IS MORE THAN ONE LAUNCH CONFIGURATION. Four runs of this workflow have answered "null
+// (no adapter, hardware or fallback)": 36876533202 with `--enable-unsafe-swiftshader` alone,
+// 36883720514 (the same commit, dispatched by hand), 36895365217 with the flag still there, and
+// 36897513498 with no launch flags at all. So the flag was never the whole story, and the
+// difference that matters is in the harness this repository already runs successfully:
+// `web/tests/spike/render.spec.ts` asks headless Chromium in CI for a device and gets one, and it
+// reads pixels back off the GPU (runs 36892349174, 36896537472, 36898914442, and 36901465493 —
+// the last on merged `main`). That file sets
+//
+//   launchOptions: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] }
+//
+// Two flags. This file had at most one of them, and `--enable-unsafe-webgpu` is the one both
+// failing configurations lacked, so it is the first thing tried here.
+//
+// The second configuration is the same flags on the other variable the two harnesses differ by:
+// Playwright launches the `chromium-headless-shell` build for `headless: true` unless a channel is
+// named (microsoft/playwright#33566), while `channel: 'chromium'` selects the new headless mode on
+// the full Chromium build. The spike tests use Playwright's default, so the first configuration is
+// the one expected to answer; the second is here so that the run says which of the two it is
+// instead of leaving it to be guessed a third time.
+//
+// The check passes if any configuration answers all three questions — a device, a red clear read
+// back off it, and a canvas configured for WebGPU — and it prints every configuration's answer
+// either way, so a failure is a measurement rather than a shrug.
 //
 // Run from anywhere: the served directory is derived from this file's own URL, so the workflow can
 // run it with the working directory set to wherever Playwright was installed.
@@ -48,43 +69,79 @@ const server = createServer(async (request, response) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
 
-// No launch flags: the spike tests use Playwright's defaults and do get an adapter, while
-// `--enable-unsafe-swiftshader` here produced "no adapter, hardware or fallback". The flag is
-// what differed, so it is gone: the runner's plain Chromium is the configuration that works.
-const browser = await chromium.launch();
-const page = await browser.newPage();
-const pageErrors = [];
-page.on('pageerror', (error) => pageErrors.push(String(error)));
+const CONFIGURATIONS = [
+  {
+    name: "Playwright default (chromium-headless-shell) + --enable-unsafe-swiftshader --enable-unsafe-webgpu",
+    launch: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] },
+  },
+  {
+    name: "channel chromium (new headless, full build) + --enable-unsafe-swiftshader --enable-unsafe-webgpu",
+    launch: { channel: 'chromium', args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] },
+  },
+];
 
-await page.goto(`http://127.0.0.1:${port}/webgpu_probe.html`);
-await page.waitForFunction(() => window.__probe !== undefined, null, { timeout: 60000 });
-const probe = await page.evaluate(() => window.__probe);
-await browser.close();
+/** Open the probe page in one launch configuration and return everything it answered. */
+async function probeWith(configuration) {
+  let browser;
+  try {
+    browser = await chromium.launch(configuration.launch);
+    const page = await browser.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(String(error)));
+    await page.goto(`http://127.0.0.1:${port}/webgpu_probe.html`);
+    await page.waitForFunction(() => window.__probe !== undefined, null, { timeout: 60000 });
+    const probe = await page.evaluate(() => window.__probe);
+    const environment = await page.evaluate(() => ({
+      navigator_gpu: typeof navigator.gpu !== 'undefined',
+      user_agent: navigator.userAgent,
+    }));
+    return { name: configuration.name, browser_version: browser.version(), ...environment, ...probe, pageErrors };
+  } catch (error) {
+    return { name: configuration.name, failed_to_open: String(error), pageErrors: [] };
+  } finally {
+    if (browser) await browser.close();
+  }
+}
+
+/** What one configuration did not answer. Empty means it answered everything. */
+function shortfalls(result) {
+  if (result.failed_to_open) return [`could not open the page: ${result.failed_to_open}`];
+  const missing = [];
+  if (result.cxx !== true) {
+    missing.push(`cxx: the Emscripten WebGPU unit did not report the toolchain ok (${JSON.stringify(result.cxx_lines)})`);
+  }
+  if (result.navigator_gpu !== true) missing.push('navigator.gpu is undefined in this browser');
+  if (!result.device) missing.push(`no usable device (adapter: ${JSON.stringify(result.adapter)})`);
+  if (JSON.stringify(result.readback) !== JSON.stringify([255, 0, 0, 255])) {
+    missing.push(`the red clear came back as ${JSON.stringify(result.readback)}, expected [255,0,0,255]`);
+  }
+  if (result.canvas !== 'configured and cleared') missing.push(`canvas: ${JSON.stringify(result.canvas)}`);
+  if (result.pageErrors.length > 0) missing.push(`page errors: ${JSON.stringify(result.pageErrors)}`);
+  return missing;
+}
+
+const results = [];
+for (const configuration of CONFIGURATIONS) {
+  const result = await probeWith(configuration);
+  results.push(result);
+  console.log(JSON.stringify(result, null, 2));
+}
 server.close();
 
-console.log(JSON.stringify(probe, null, 2));
-if (pageErrors.length > 0) {
-  console.error('page errors:', pageErrors);
+console.log('--- WebGPU probe: one line per launch configuration ---');
+for (const result of results) {
+  const missing = shortfalls(result);
+  console.log(`${missing.length === 0 ? 'OK  ' : 'FAIL'} ${result.name}`);
+  for (const reason of missing) console.log(`       - ${reason}`);
+}
+
+const winner = results.find((result) => shortfalls(result).length === 0);
+if (!winner) {
+  console.error('PROBE FAILED: no launch configuration gave this browser a usable WebGPU device');
   process.exit(1);
 }
 
-const failures = [];
-if (probe.cxx !== true) {
-  failures.push(`cxx: the Emscripten WebGPU unit did not report the toolchain ok (${JSON.stringify(probe.cxx_lines)})`);
-}
-if (!probe.device) {
-  failures.push(`device: no usable device (adapter: ${JSON.stringify(probe.adapter)})`);
-}
-if (JSON.stringify(probe.readback) !== JSON.stringify([255, 0, 0, 255])) {
-  failures.push(`readback: a red clear came back as ${JSON.stringify(probe.readback)}, expected [255,0,0,255]`);
-}
-if (probe.canvas !== 'configured and cleared') {
-  failures.push(`canvas: ${JSON.stringify(probe.canvas)}`);
-}
-
-if (failures.length > 0) {
-  console.error('PROBE FAILED');
-  for (const failure of failures) console.error(' -', failure);
-  process.exit(1);
-}
 console.log('PROBE OK');
+console.log(`  configuration: ${winner.name}`);
+console.log(`  browser: ${winner.browser_version} (${winner.user_agent})`);
+console.log(`  adapter: ${winner.adapter}; readback: ${JSON.stringify(winner.readback)}; canvas: ${winner.canvas}`);
