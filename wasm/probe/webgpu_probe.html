@@ -13,9 +13,9 @@
     <h1>WebGPU probe</h1>
     <p>
       Two questions, both answered into <code>window.__probe</code> for the CI check to read:
-      can the pinned Emscripten build and run a WebGPU translation unit (<code>cxx</code>), and
       does this browser expose a usable WebGPU adapter and device (<code>adapter</code>,
-      <code>device</code>)?
+      <code>device</code>), and can the pinned Emscripten build and run a WebGPU translation unit
+      (<code>cxx</code>)?
     </p>
     <canvas id="probe" width="64" height="64"></canvas>
     <pre id="out">running</pre>
@@ -23,34 +23,64 @@
     <script type="module">
       const out = document.getElementById('out');
       const result = {
+        order: [],
         cxx: null,
         cxx_lines: [],
         adapter: null,
         device: null,
-        readback: null,
+        readback_before_module: null,
         canvas: null,
+        readback_after_module: null,
+        device_lost: null,
         error: null,
       };
+      const step = (name) => result.order.push(name);
 
-      // 1. The C++ half. The module is built with -sMODULARIZE=1; the line it prints through
-      //    `print` is the toolchain's answer. A module that failed to compile or link is not here
-      //    to load at all, so a load failure is itself a result and not a crash.
-      try {
-        const factory = (await import('./webgpu_probe.mjs')).default;
-        await factory({ print: (line) => result.cxx_lines.push(line) });
-        result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
-      } catch (error) {
-        result.cxx = false;
-        result.error = `cxx: ${error}`;
+      /**
+       * Clear a 4x4 texture to `colour` and read pixel (0, 0) back off the GPU. A colour that
+       * comes out of the GPU is the only evidence that a device exists and is executing commands.
+       */
+      async function clearAndRead(device, colour) {
+        const size = 4;
+        const texture = device.createTexture({
+          size: [size, size],
+          format: 'rgba8unorm',
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        });
+        const buffer = device.createBuffer({
+          size: 256,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({
+          colorAttachments: [
+            { view: texture.createView(), clearValue: colour, loadOp: 'clear', storeOp: 'store' },
+          ],
+        });
+        pass.end();
+        encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: 256 }, [size, size]);
+        device.queue.submit([encoder.finish()]);
+        await buffer.mapAsync(GPUMapMode.READ);
+        const bytes = new Uint8Array(buffer.getMappedRange().slice(0, 4));
+        const pixel = [bytes[0], bytes[1], bytes[2], bytes[3]];
+        buffer.unmap();
+        return pixel;
       }
 
-      // 2. The browser half. `requestAdapter()` returning null is a real answer on a machine with
-      //    no WebGPU driver, which is why the fallback adapter is asked for explicitly before
-      //    concluding that WebGPU is unavailable: the CI runner renders in software.
-      if (typeof navigator.gpu === 'undefined') {
-        result.adapter = 'no navigator.gpu';
-      } else {
-        try {
+      // THE ORDER IS THE MEASUREMENT. Run 36909581289 ran the C++ module first and the GPU half
+      // second, and the GPU half answered "device present" while reading a texture it had just
+      // cleared back as [0,0,0,0], then threw "A valid external Instance reference no longer
+      // exists." on the canvas configure. The module is built -sEXIT_RUNTIME=1, so it calls exit()
+      // at the end of main(), and that same error string is what run 36898914442 saw when the
+      // device died in the worker. So the GPU work now happens BEFORE the module is loaded, and a
+      // second readback happens AFTER it: if the first is the clear colour and the second is not,
+      // the module's exit is what invalidates the instance, and that is a fact about this harness
+      // rather than a guess about Chromium.
+      try {
+        if (typeof navigator.gpu === 'undefined') {
+          result.adapter = 'no navigator.gpu';
+        } else {
+          // The fallback adapter is asked for explicitly: the CI runner renders in software.
           const adapter =
             (await navigator.gpu.requestAdapter()) ??
             (await navigator.gpu.requestAdapter({ forceFallbackAdapter: true }));
@@ -62,42 +92,16 @@
               : 'present';
             const device = await adapter.requestDevice();
             result.device = device !== null && device !== undefined;
+            // Dawn's own reason for losing the device, if it is lost before the end of the run.
+            device.lost.then((info) => {
+              result.device_lost = `${info.reason}: ${info.message}`;
+            });
 
-            // Clear a 4x4 texture to red and read the first pixel back: a colour that comes out
-            // of the GPU is the only evidence that a device exists and is executing commands.
-            const size = 4;
-            const texture = device.createTexture({
-              size: [size, size],
-              format: 'rgba8unorm',
-              usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-            });
-            const readback = device.createBuffer({
-              size: 256,
-              usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-            });
-            const encoder = device.createCommandEncoder();
-            const pass = encoder.beginRenderPass({
-              colorAttachments: [
-                {
-                  view: texture.createView(),
-                  clearValue: { r: 1, g: 0, b: 0, a: 1 },
-                  loadOp: 'clear',
-                  storeOp: 'store',
-                },
-              ],
-            });
-            pass.end();
-            encoder.copyTextureToBuffer({ texture }, { buffer: readback, bytesPerRow: 256 }, [
-              size,
-              size,
-            ]);
-            device.queue.submit([encoder.finish()]);
-            await readback.mapAsync(GPUMapMode.READ);
-            const pixel = new Uint8Array(readback.getMappedRange().slice(0, 4));
-            result.readback = [pixel[0], pixel[1], pixel[2], pixel[3]];
-            readback.unmap();
+            step('readback_before_module');
+            result.readback_before_module = await clearAndRead(device, { r: 1, g: 0, b: 0, a: 1 });
 
-            // And the path the renderer actually needs: a canvas configured for WebGPU, cleared.
+            // The path the renderer actually needs: a canvas configured for WebGPU, cleared.
+            step('canvas');
             const canvas = document.getElementById('probe');
             const context = canvas.getContext('webgpu');
             context.configure({
@@ -120,13 +124,29 @@
             device.queue.submit([canvasEncoder.finish()]);
             await device.queue.onSubmittedWorkDone();
             result.canvas = 'configured and cleared';
+
+            step('cxx');
+            try {
+              const factory = (await import('./webgpu_probe.mjs')).default;
+              await factory({ print: (line) => result.cxx_lines.push(line) });
+              result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
+            } catch (error) {
+              result.cxx = false;
+              result.error = `cxx: ${error}`;
+            }
+
+            step('readback_after_module');
+            result.readback_after_module = await clearAndRead(device, { r: 0, g: 0, b: 1, a: 1 });
           }
-        } catch (error) {
-          if (result.adapter === null) result.adapter = `error: ${error}`;
-          result.error = String(error);
         }
+      } catch (error) {
+        if (result.adapter === null) result.adapter = `error: ${error}`;
+        result.error = String(error);
       }
 
+      // One turn of the event loop, so that a `device.lost` that fired during the run is in the
+      // result before the check reads it.
+      await new Promise((resolve) => setTimeout(resolve, 100));
       out.textContent = JSON.stringify(result, null, 2);
       window.__probe = result;
     </script>
