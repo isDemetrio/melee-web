@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
  * The shell is served from Cloudflare Pages in production. Two things matter here:
  *
  * 1. COOP/COEP headers are required for SharedArrayBuffer, which the threaded WASM
- *    core needs. Production sets them in `_headers` at the repo root; the dev server
+ *    core needs. Production sets them in `web/public/_headers`, which Vite copies into the build; the dev server
  *    and `vite preview` set them here so a local run behaves like production.
  * 2. `worker.format = 'es'` because the simulation worker is an ES module worker.
  */
