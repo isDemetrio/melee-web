@@ -14,6 +14,13 @@ const CORE = '/spike-core/';
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 const lines: string[] = [];
 const log = (line: string): void => { lines.push(line); scope.postMessage({ type: 'log', line }); };
+/**
+ * When this worker started. `core_load_ms` is measured from here to the `core` message, so it
+ * covers the whole wait the operator actually has: the four fetches, the module's own download
+ * and compile, the runtime's initialisation, and the timer-resolution probe. It is not a
+ * simulation number and nothing about the run depends on it.
+ */
+const startedMs = performance.now();
 
 /** Smallest observable step of performance.now(): the resolution every sim_ms is quantised to. */
 function timerResolutionMs(): number {
@@ -39,7 +46,8 @@ scope.onmessage = async (event: MessageEvent<{ iso: File; frames: number }>) => 
     const factory = ((await import(/* @vite-ignore */ `${CORE}melee_core_web.js`)) as { default: CoreFactory }).default;
     const resolution = timerResolutionMs();
     const core = await factory({ print: log, printErr: log });
-    scope.postMessage({ type: 'core', commit: meta.commit, opt: meta.opt });
+    const coreLoadMs = performance.now() - startedMs;
+    scope.postMessage({ type: 'core', commit: meta.commit, opt: meta.opt, coreLoadMs });
     const fs = core.FS;
     fs.mkdir('/disc');
     fs.mount(fs.filesystems['WORKERFS'], { files: [iso] }, '/disc');
@@ -55,7 +63,7 @@ scope.onmessage = async (event: MessageEvent<{ iso: File; frames: number }>) => 
     const wallMs = performance.now() - started;
     const read = (path: string): string => { try { return fs.readFile(path, { encoding: 'utf8' }); } catch { return ''; } };
     scope.postMessage({
-      type: 'done', exitCode, wallMs, coreCommit: meta.commit, coreOpt: meta.opt,
+      type: 'done', exitCode, wallMs, coreCommit: meta.commit, coreOpt: meta.opt, coreLoadMs,
       timerResolutionMs: resolution, crossOriginIsolated: scope.crossOriginIsolated,
       finalScene: lines.find((line) => line.startsWith('final scene:')) ?? null,
       trace: read('/work/trace.csv'), simTimes: read('/work/sim_times.csv'),
