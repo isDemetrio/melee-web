@@ -447,6 +447,48 @@ per C7, `SPREAD_TOLERANCE = 0.15` e `MAX_PLAUSIBLE_MS = 1000.0` per C8, e `STATS
 confronto fra `stats_in_match` dichiarato e ricalcolato (C6). La sezione 6 non si calcola più a mano con i
 valori di C6: si esegue il comando, che elenca in `reasons` ogni controllo fallito.
 
+**Aggiornamento 2026-10-01 — i controlli C1–C8 sui JSON che non erano mai passati dal tool.** Questa
+sezione dice che i JSON si ricontrollano; finora erano passati da `scripts/phase0/go_no_go.py` solo i
+cinque JSON del telefono. Su questa macchina esistono altri due insiemi di corse, tenuti fuori dal
+checkout in `/home/hermes/incoming/phase0/devices/`: `firefox-linux-2026-10-01/run{1,2,3}.json` (tre
+corse) e `chrome-oneplus-2026-10-01-run1.json` (una). Tutti e quattro hanno `disc_source: opfs`,
+`core_commit 4a3f537…`, `core_opt -Oz`, 2400 frame, `exit_code 0`,
+`final_scene: mode=2 state=2 match_frame=762 (retraces=2400)`, `cross_origin_isolated: true`.
+Comando, con il riferimento di `current.env` (lo stesso commit che la pagina serve):
+
+```bash
+python3 scripts/phase0/go_no_go.py \
+  --reference /home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv \
+  --reference-commit 63511ce6c5f4e39be07b9acc9b517b2010ca01db \
+  --phone /home/hermes/incoming/phase0/devices/firefox-linux-2026-10-01/run1.json \
+           /home/hermes/incoming/phase0/devices/firefox-linux-2026-10-01/run2.json \
+           /home/hermes/incoming/phase0/devices/firefox-linux-2026-10-01/run3.json
+```
+
+| Insieme | corse | esito | numeri |
+| --- | --- | --- | --- |
+| Firefox | 3 | `VERDICT: NO-GO`, exit 1 | media peggiore **13,9379 ms**, p99 peggiore **16,96 ms**, `q` 0,02 ms |
+| Chrome | 1 | `VERDICT: INPUT-ERROR`, exit 2 | media 16,0602 ms, p99 19,335 ms, `q` 0,005 ms, ma una corsa sola: `phone: 1 run(s), but the criterion needs at least 3` |
+
+Il NO-GO non dipende dalla classe scelta: 13,94 ms supera anche la soglia desktop del tool
+(`desktop_mean_nogo_ms` 4,0). Quattro cose che il comando aggiunge ai numeri già noti:
+
+- **C5 superato su tutte e quattro.** Traccia identica al riferimento, **0 differenze su 2400 righe**,
+  SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; C3 accettato dalla regola del cross-commit (core
+  `4a3f537…` contro riferimento `63511ce…`), annotato in `reasons` come nella nota qui sopra.
+- **C7 sulla corsa 2 di Firefox: +82,5% fra i primi e gli ultimi 100 frame di partita**, oltre il 15%
+  che il tool tollera; annotato come nota, non come fallimento. Le altre due corse: −0,2% e +2,5%. È
+  lo stesso segnale della corsa 2 del telefono (+6,6%), molto più grande: la corsa rallenta mentre va.
+- **C8 su Firefox: scarto fra le tre medie 14,95%** contro il 15% di tolleranza — passa con 0,05 punti
+  di margine. Una quarta corsa può portarlo sopra, e allora la riga diventa **non decidibile**.
+- **Il Chrome non ha un verdetto, ha un `INPUT-ERROR`**: il criterio della sezione 6 vuole tre corse,
+  quindi per decidere quella riga ne mancano due.
+
+**Cosa questo aggiornamento non è.** Non è un verdetto su M1, M2 o M5: lo `user_agent` di tutte e
+quattro le corse è un `X11; Linux x86_64` (un browser in configurazione desktop), e questa sezione
+ricorda che device e tempi sono dichiarati, non provati. Vale come: i controlli di questa sezione
+girano anche su questi JSON, e la riga Chrome dice cosa manca per poterla decidere.
+
 ---
 
 ## 6. Il criterio go/no-go, con numeri
