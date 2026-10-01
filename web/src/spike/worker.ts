@@ -5,7 +5,7 @@
 // WebGPU device for it before the simulation starts and attaches the core's WebGPU backend
 // (wasm/render/gx_webgpu.cpp). Without a canvas, or when any of that fails, the run is exactly the
 // headless run it always was; the reason is reported, never thrown.
-import { fillCanvas, mark, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
+import { fillTarget, mark, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
 
 interface CoreFS {
   mkdir(path: string): void;
@@ -58,8 +58,11 @@ interface RunRequest {
   iso?: File;
   frames?: number;
   canvas?: OffscreenCanvas;
-  /** The render test (web/tests/spike/render.spec.ts): feed the decoder `copies` clearing XFB copies. */
-  selftest?: { argb: number; copies: number };
+  /**
+   * The render test (web/tests/spike/render.spec.ts): feed the decoder `copies` clearing XFB copies.
+   * `target: 'texture'` renders into an offscreen texture instead of a canvas (gpu.ts says why).
+   */
+  selftest?: { argb: number; copies: number; target?: 'canvas' | 'texture' };
 }
 
 /** What the renderer did, reported in the result; `null` when no canvas was handed in. */
@@ -68,8 +71,10 @@ interface RenderReport {
   reason: string;
   presented: number;
   lastClearArgb: number | null;
-  /** RGBA of canvas pixel (0, 0), read back off the GPU after the run. */
-  pixel: number[] | null;
+  /** What the backend copied into: the canvas, or an offscreen texture. */
+  target: 'canvas' | 'texture' | null;
+  /** RGBA of the target's pixel (0, 0), read back off the GPU after the run; null if it failed. */
+  readback: number[] | null;
   failure: string | null;
   errors: string[];
   /** Where a failing readback died (gpu.ts, `Diagnostic`), plus who held which object. */
@@ -101,7 +106,8 @@ async function report(core: MeleeCore, gpu: SpikeGpu | null, attached: { attache
     ...attached,
     presented: attached.attached && core._gx_webgpu_presented ? core._gx_webgpu_presented() : 0,
     lastClearArgb: gpu?.lastClearArgb ?? null,
-    pixel: pixel ? await pixel : null,
+    target: gpu ? (gpu.xfb ? 'texture' : 'canvas') : null,
+    readback: pixel ? await pixel : null,
     failure: gpu?.failure ?? null,
     errors: gpu?.errors ?? [],
     diagnostic: gpu ? {
@@ -130,7 +136,7 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     const resolution = timerResolutionMs();
     // The device is acquired before the core exists, so it can be handed in as a factory option:
     // the options object is the module's `Module`, where the backend looks for it.
-    const opening = canvas ? await openGpu(canvas) : null;
+    const opening = canvas ? await openGpu(canvas) : selftest?.target === 'texture' ? await openGpu(null) : null;
     const gpu = opening?.gpu ?? null;
     // Diagnostic probes (gpu.ts, `Diagnostic`): before the module exists, and once it does.
     if (gpu) await probe(gpu, 'after device, before core');
@@ -142,7 +148,7 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     if (gpu) mark(gpu, `attach returned ${attached?.attached}`);
     if (selftest) {
       // Sentinel, decoder, readback: one synchronous stretch, so all three see the same canvas texture.
-      if (gpu && attached?.attached) fillCanvas(gpu, SENTINEL);
+      if (gpu && attached?.attached) fillTarget(gpu, SENTINEL);
       const presented = core._gx_webgpu_selftest ? core._gx_webgpu_selftest(selftest.argb >>> 0, selftest.copies) : null;
       if (gpu) mark(gpu, `selftest returned ${presented}`);
       const pixel = gpu && attached?.attached ? readPixel(gpu) : null;

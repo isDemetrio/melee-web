@@ -1,7 +1,18 @@
 /**
- * The spike worker's WebGPU half: acquire a device for a transferred `OffscreenCanvas`, hand it to
- * the core's backend (`wasm/render/gx_webgpu.cpp` reads it as `Module.gxWebgpu`), and read a pixel
- * of what the backend presented back off the GPU.
+ * The spike worker's WebGPU half: acquire a device, give it an XFB target -- a transferred
+ * `OffscreenCanvas`, or a plain offscreen texture -- hand both to the core's backend
+ * (`wasm/render/gx_webgpu.cpp` reads them as `Module.gxWebgpu`), and read a pixel of what the
+ * backend wrote there back off the GPU.
+ *
+ * Why the texture target exists. In CI's headless Chromium the device does not survive the end of
+ * the first task that takes a canvas texture -- the task whose end commits the canvas frame. Run
+ * 36898914442's timeline: buffer round trips pass across several task boundaries while the canvas is
+ * configured but untouched; the task that first calls getCurrentTexture ends at about 167 ms, and at
+ * 167.7 ms the device is lost ("Device was destroyed.") and every pending map aborts ("A valid
+ * external Instance reference no longer exists."). Nothing in this repository destroys a device.
+ * The texture target is the same backend path with only the canvas commit removed, so CI can read
+ * the backend's output back; the canvas readback stays for devices that survive presenting
+ * (`?canvas` runs report it as `render.readback`).
  *
  * The device is acquired here, before the simulation starts, because the simulation is one
  * synchronous `callMain` and `requestAdapter` / `requestDevice` resolve only once the event loop
@@ -30,6 +41,7 @@ interface GpuCommandEncoder {
   finish(): unknown;
 }
 interface GpuDevice {
+  createTexture(descriptor: { size: number[]; format: string; usage: number }): GpuTexture;
   createBuffer(descriptor: { size: number; usage: number }): GpuBuffer;
   createCommandEncoder(): GpuCommandEncoder;
   queue: { submit(buffers: unknown[]): void; writeBuffer(buffer: GpuBuffer, offset: number, data: Uint8Array): void };
@@ -48,10 +60,12 @@ export interface SpikeGpu {
   /** Held only so they stay reachable; see `live` below. */
   gpu: Gpu;
   adapter: GpuAdapter;
-  canvas: OffscreenCanvas;
+  canvas: OffscreenCanvas | null;
   device: GpuDevice;
-  context: GpuCanvasContext;
-  /** The EFB's and the canvas's format: one format, so an XFB copy is a plain texture copy. */
+  /** The XFB target is exactly one of these: the canvas's current texture, or `xfb`. */
+  context: GpuCanvasContext | null;
+  xfb: GpuTexture | null;
+  /** The EFB's and the target's format: one format, so an XFB copy is a plain texture copy. */
   format: 'rgba8unorm';
   /** Written by the backend: the last clear colour (ARGB), and why it stopped if it did. */
   lastClearArgb?: number;
@@ -134,12 +148,16 @@ export interface GpuOpening { gpu: SpikeGpu | null; reason: string }
  */
 const live = { opened: new Set<SpikeGpu>(), mapping: new Set<GpuBuffer>() };
 
+/** The size of the texture target: the 640x480 the spike's canvas has. */
+const XFB_WIDTH = 640;
+const XFB_HEIGHT = 480;
+
 /**
- * A device configured on `canvas`, or the reason there is none. The fallback adapter is asked for
- * when there is no hardware one, because the CI runner renders in software
- * (`wasm/probe/webgpu_probe.html` makes the same two requests).
+ * A device with an XFB target -- `canvas` configured for WebGPU, or, with `null`, an offscreen
+ * 640x480 texture -- or the reason there is none. The fallback adapter is asked for when there is no
+ * hardware one, because the CI runner renders in software.
  */
-export async function openGpu(canvas: OffscreenCanvas): Promise<GpuOpening> {
+export async function openGpu(canvas: OffscreenCanvas | null): Promise<GpuOpening> {
   try {
     const gpu = (navigator as unknown as { gpu?: Gpu }).gpu;
     if (!gpu) return { gpu: null, reason: 'no navigator.gpu in this worker' };
@@ -149,16 +167,19 @@ export async function openGpu(canvas: OffscreenCanvas): Promise<GpuOpening> {
     const deviceMs = performance.now() - loadedMs;
     // Before the canvas is touched: separates the instance from the canvas (`Diagnostic`).
     const beforeCanvas = await roundTrip(device);
-    const context = (canvas as unknown as { getContext(id: 'webgpu'): GpuCanvasContext | null })
-      .getContext('webgpu');
-    if (!context) return { gpu: null, reason: 'the canvas has no webgpu context' };
-    // COPY_DST for the XFB copy into it, COPY_SRC for readPixel.
-    context.configure({
-      device, format: 'rgba8unorm', alphaMode: 'opaque',
-      usage: TEXTURE_RENDER_ATTACHMENT | TEXTURE_COPY_SRC | TEXTURE_COPY_DST,
-    });
+    // COPY_DST for the XFB copy into the target, COPY_SRC for readPixel.
+    const usage = TEXTURE_RENDER_ATTACHMENT | TEXTURE_COPY_SRC | TEXTURE_COPY_DST;
+    let context: GpuCanvasContext | null = null;
+    let xfb: GpuTexture | null = null;
+    if (canvas) {
+      context = (canvas as unknown as { getContext(id: 'webgpu'): GpuCanvasContext | null }).getContext('webgpu');
+      if (!context) return { gpu: null, reason: 'the canvas has no webgpu context' };
+      context.configure({ device, format: 'rgba8unorm', alphaMode: 'opaque', usage });
+    } else {
+      xfb = device.createTexture({ size: [XFB_WIDTH, XFB_HEIGHT], format: 'rgba8unorm', usage });
+    }
     const opened: SpikeGpu = {
-      gpu, adapter, canvas, device, context, format: 'rgba8unorm', errors: [],
+      gpu, adapter, canvas, device, context, xfb, format: 'rgba8unorm', errors: [],
       diagnostic: {
         timeline: [{ atMs: Math.round(deviceMs * 10) / 10, event: 'device created' }],
         probes: [{ stage: 'after device, before canvas', result: beforeCanvas }],
@@ -178,26 +199,34 @@ export async function openGpu(canvas: OffscreenCanvas): Promise<GpuOpening> {
   }
 }
 
+/** The XFB target the backend copies into: the offscreen texture, or the canvas's current texture. */
+function target(gpu: SpikeGpu): GpuTexture {
+  if (gpu.xfb) return gpu.xfb;
+  if (!gpu.context) throw new Error('no XFB target');
+  return gpu.context.getCurrentTexture();
+}
+
 /**
- * Clear the canvas's current texture to `rgba` (0-255 each). The test paints a sentinel first, so a
- * readback that is not the sentinel proves the backend wrote the canvas.
+ * Clear the XFB target to `rgba` (0-255 each). The test paints a sentinel first, so a readback that
+ * is not the sentinel proves the backend wrote the target.
  */
-export function fillCanvas(gpu: SpikeGpu, rgba: readonly number[]): void {
+export function fillTarget(gpu: SpikeGpu, rgba: readonly number[]): void {
   const [r = 0, g = 0, b = 0, a = 255] = rgba;
   const encoder = gpu.device.createCommandEncoder();
   encoder.beginRenderPass({ colorAttachments: [{
-    view: gpu.context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store',
+    view: target(gpu).createView(), loadOp: 'clear', storeOp: 'store',
     clearValue: { r: r / 255, g: g / 255, b: b / 255, a: a / 255 },
   }] }).end();
   gpu.device.queue.submit([encoder.finish()]);
 }
 
 /**
- * The RGBA bytes of the canvas pixel at (x, y), copied off the GPU.
+ * The RGBA bytes of the XFB target's pixel at (x, y), copied off the GPU.
  *
  * Call it in the same task as the work it checks -- straight after `callMain` returns, before any
  * `await` -- because a canvas's current texture is replaced once the worker's task ends and the
- * frame is committed. The copy is encoded synchronously, so only the mapping waits.
+ * frame is committed. The copy is encoded synchronously, so only the mapping waits. With a canvas
+ * target the mapping must also outlive that commit, which CI's Chromium does not allow (above).
  */
 export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] | null> {
   let buffer: GpuBuffer | null = null;
@@ -206,7 +235,7 @@ export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] |
     buffer = gpu.device.createBuffer({ size: 256, usage: BUFFER_COPY_DST | BUFFER_MAP_READ });
     live.mapping.add(buffer);
     const encoder = gpu.device.createCommandEncoder();
-    encoder.copyTextureToBuffer({ texture: gpu.context.getCurrentTexture(), origin: [x, y] },
+    encoder.copyTextureToBuffer({ texture: target(gpu), origin: [x, y] },
       { buffer, bytesPerRow: 256 }, [1, 1]);
     gpu.device.queue.submit([encoder.finish()]);
     mark(gpu, 'readback submitted');

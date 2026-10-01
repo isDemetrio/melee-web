@@ -35,14 +35,17 @@ function offscreenCanvas(wanted: boolean): OffscreenCanvas | undefined {
 /**
  * `?gx-selftest=AARRGGBB&copies=N`: no disc, no simulation. The worker feeds the core's FIFO decoder
  * N clearing XFB copies of that colour and reads the canvas back (wasm/render/gx_webgpu.cpp,
- * gx_webgpu_selftest). `&nocanvas` runs the same thing with no canvas at all, which must not fail.
- * The answer is written into #render as JSON for web/tests/spike/render.spec.ts.
+ * gx_webgpu_selftest). `&target=texture` renders into an offscreen texture instead of a canvas, which
+ * is what CI can read back (web/src/spike/gpu.ts says why). `&nocanvas` runs the same commands with
+ * no GPU at all, which must not fail. The answer is written into #render as JSON for
+ * web/tests/spike/render.spec.ts.
  */
 const selftestColour = parameters.get('gx-selftest');
 if (selftestColour !== null) {
   const argb = Number.parseInt(selftestColour, 16);
   const copies = Number(parameters.get('copies') ?? 2);
-  const canvas = offscreenCanvas(!parameters.has('nocanvas'));
+  const target = parameters.get('target') === 'texture' ? 'texture' : 'canvas';
+  const canvas = offscreenCanvas(target === 'canvas' && !parameters.has('nocanvas'));
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   renderOut.textContent = 'running';
   worker.onerror = (event) => { renderOut.textContent = JSON.stringify({ error: event.message }); };
@@ -52,7 +55,8 @@ if (selftestColour !== null) {
     worker.terminate();
     renderOut.textContent = JSON.stringify({ presented: data.presented, sentinel: data.sentinel, render: data.render });
   };
-  worker.postMessage({ selftest: { argb, copies }, canvas }, canvas ? [canvas] : []);
+  const selftest = { argb, copies, target: parameters.has('nocanvas') ? undefined : target };
+  worker.postMessage({ selftest, canvas }, canvas ? [canvas] : []);
 }
 /**
  * The disc cache, as the page sees it: one `DiscCache` over the OPFS worker. Building it spawns

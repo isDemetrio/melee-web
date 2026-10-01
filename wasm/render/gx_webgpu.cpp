@@ -10,6 +10,10 @@
 // native/headless_fifo.cpp), the clear covers the whole EFB rather than the source rectangle, Z is
 // not cleared, and half-scale, Y scale, gamma and copy formats are ignored. Those are priorities 2-5.
 //
+// The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
+// offscreen texture, which is how CI reads the backend's output back without committing a canvas
+// frame (web/src/spike/gpu.ts says why).
+//
 // Where the GPU objects live. The adapter, device and canvas context are JavaScript objects acquired
 // by the worker before the simulation starts (web/src/spike/gpu.ts) and reached here through
 // Module.gxWebgpu. C++ cannot acquire them itself: requestAdapter/requestDevice resolve only after
@@ -34,7 +38,7 @@
 // Creates the EFB texture. 1 when there is a device to render with, 0 when there is not.
 EM_JS(int, gxw_open, (int width, int height), {
   const gpu = Module["gxWebgpu"];
-  if (!gpu || !gpu.device || !gpu.context) return 0;
+  if (!gpu || !gpu.device || (!gpu.context && !gpu.xfb)) return 0;
   try {
     gpu.efb = gpu.device.createTexture({
       size: [width, height], format: gpu.format,
@@ -54,7 +58,7 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
   try {
     const encoder = gpu.device.createCommandEncoder();
     if (to_xfb) {
-      const target = gpu.context.getCurrentTexture();
+      const target = gpu.xfb ? gpu.xfb : gpu.context.getCurrentTexture();
       let w = src_w, h = src_h;
       if (src_x + w > gpu.efb.width) w = gpu.efb.width - src_x;
       if (src_y + h > gpu.efb.height) h = gpu.efb.height - src_y;
