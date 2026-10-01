@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One command for a device run: the spike page with its core, the disc, and an HTTPS address the
-# phone can open.
+# One command for a device run: the spike page with its core, the disc, its piece manifest, and an
+# HTTPS address the phone can open.
 #
 # Why a tunnel. Cross-origin isolation is a secure-context feature, so over plain HTTP on the
 # tailnet IP the page's COOP/COEP headers are ignored, `crossOriginIsolated` stays false, and
@@ -11,7 +11,13 @@
 # it exists only while this script runs.
 #
 # Usage:
-#   scripts/phase0/device_test_serve.sh [--dist DIR] [--iso FILE] [--port N] [--password PW]
+#   scripts/phase0/device_test_serve.sh [--dist DIR] [--iso FILE] [--chunks FILE] [--port N]
+#                                       [--password PW]
+#
+# --chunks is optional: it is the manifest `scripts/phase0/disc_chunks.py` writes, and serving it
+# is what lets the page's "Disc cache" section download the disc into OPFS from this origin. A
+# device run without it still works -- the disc comes from the file picker -- but the page then
+# reports its cache as unavailable, and the OPFS path stays untested.
 #
 # Then, on the phone, open the printed address and follow the run protocol in
 # docs/PHASE0_DEVICE_PLAN.md. Ctrl-C stops the server and the tunnel together.
@@ -19,6 +25,7 @@ set -euo pipefail
 
 dist=/home/hermes/incoming/phase0/spike-dist
 iso=/home/hermes/incoming/melee-ntsc102.iso
+chunks=/home/hermes/incoming/phase0/disc-chunks.json
 port=8092
 password=""
 
@@ -26,9 +33,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dist) dist=$2; shift 2 ;;
     --iso) iso=$2; shift 2 ;;
+    --chunks) chunks=$2; shift 2 ;;
     --port) port=$2; shift 2 ;;
     --password) password=$2; shift 2 ;;
-    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -39,6 +47,17 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ -f "$iso" ] || { echo "no disc image at $iso (pass --iso)" >&2; exit 2; }
 [ -f "$dist/spike-core/melee_core_web.wasm" ] || {
   echo "$dist has no spike-core/melee_core_web.wasm: that is the shell, not the spike build" >&2; exit 2; }
+
+# The manifest is optional on purpose: it is what the page's disc cache downloads the disc
+# against, but the M1/M2 procedure takes the disc from the file picker, so a missing manifest must
+# warn rather than stop a device run.
+chunks_arg=()
+if [ -f "$chunks" ]; then
+  chunks_arg=(--chunks "$chunks")
+else
+  echo "warning: no piece manifest at $chunks; the page will report its disc cache as unavailable" >&2
+  echo "         (write one with scripts/phase0/disc_chunks.py --out "$chunks")" >&2
+fi
 
 cloudflared=$(command -v cloudflared || echo "$HOME/.local/bin/cloudflared")
 [ -x "$cloudflared" ] || { echo "cloudflared not found; see docs/PHASE0_DEVICE_PLAN.md" >&2; exit 2; }
@@ -62,7 +81,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python3 "$here/serve_spike.py" --dist "$dist" --iso "$iso" \
+python3 "$here/serve_spike.py" --dist "$dist" --iso "$iso" ${chunks_arg[@]+"${chunks_arg[@]}"} \
   --host 127.0.0.1 --port "$port" --password "$password" > "$server_log" 2>&1 &
 server_pid=$!
 
@@ -103,16 +122,30 @@ for _ in $(seq 1 20); do
 done
 [ "$coop" = yes ] || echo "warning: no COOP header after 10s; cross-origin isolation will be false" >&2
 
+# The manifest is the one thing a device run needs only for the OPFS download, so it is checked
+# and reported rather than assumed: a page that cannot read it reports the cache as unavailable.
+manifest_line=""
+if [ ${#chunks_arg[@]} -gt 0 ]; then
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -u "fabri:$password" "$url/phase0/disc-chunks" 2>/dev/null || true)
+  if [ "$code" = 200 ]; then
+    manifest_line="  manifest     $url/phase0/disc-chunks"
+  else
+    echo "warning: /phase0/disc-chunks answered $code, not 200; the disc cache will be unavailable" >&2
+  fi
+fi
+
 cat <<EOF
 
   spike page   $url/spike.html
   disc         $url/disc.iso
-  user         fabri
+$manifest_line  user         fabri
   password     $password
 
   On the phone: open the page, let it take the disc from the server, run the three runs and send
   back the JSON. The protocol and the checks are in docs/PHASE0_DEVICE_PLAN.md, and the page
   reports cross_origin_isolated plus the timer resolution in that JSON.
+  With the manifest above, the page's "Disc cache" section can also download the disc into OPFS
+  from this origin: that is the only way to exercise the OPFS path before Cloudflare exists.
 
   Ctrl-C stops the server and the tunnel.
 EOF

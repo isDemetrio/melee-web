@@ -173,12 +173,26 @@ Annotare `commit`: servirà in sezione 5. **Servire un `dist` costruito da `main
 sul nome della macchina nella tailnet:
 
 ```bash
-python3 /home/hermes/.hermes/cache/scratch/spike-serve/serve_spike.py \
-  --dist "$DIST" --iso "$ISO" --port 8091 --password '<scelta-al-momento>'
+# dalla radice del repository: il server è versionato, non una copia in /tmp
+python3 scripts/phase0/serve_spike.py \
+  --dist "$DIST" --iso "$ISO" \
+  --chunks /home/hermes/incoming/phase0/disc-chunks.json \
+  --port 8091 --password '<scelta-al-momento>'
 # atteso: serving <DIST> and 1459978240 bytes of disc on http://127.0.0.1:8091/spike.html
+#         serving the piece manifest for 88 pieces of 16777216 bytes at .../phase0/disc-chunks
 tailscale serve --bg 8091
 tailscale serve status
 ```
+
+`--chunks` è il manifest che `scripts/phase0/disc_chunks.py` ha scritto sulla VPS (88 pezzi,
+SHA-1 `d4e70c06…`): è il contratto con cui la pagina scarica il disco nella propria cache OPFS.
+Senza di esso la sezione "Disc cache" della pagina si dichiara non disponibile (il resto della
+procedura funziona lo stesso: il disco viene dal selettore di file). Il server lo **rifiuta prima
+di mettersi in ascolto** quando non descrive il disco che sta per servire (dimensione diversa,
+numero di pezzi incoerente, digest malformato), così una sessione sul device non parte con il
+manifest sbagliato. Se l'HTTPS della tailnet non è disponibile,
+`scripts/phase0/device_test_serve.sh` avvia questo stesso server e un tunnel in un comando solo, e
+stampa utente, password e indirizzi.
 
 **Da verificare, e non verificato durante la stesura** (il comando `tailscale` non è stato
 eseguito): la sintassi esatta dipende dalla versione (`tailscale serve --help`); può servire
@@ -194,10 +208,13 @@ curl -sI -u 'fabri:<password>' http://127.0.0.1:8091/spike.html
 # attesi: 200, Cross-Origin-Opener-Policy: same-origin, Cross-Origin-Embedder-Policy: require-corp
 curl -sI -u 'fabri:<password>' -H 'Range: bytes=0-5' http://127.0.0.1:8091/disc.iso
 # atteso: 206 e Content-Range: bytes 0-5/1459978240
+curl -sI -u 'fabri:<password>' http://127.0.0.1:8091/phase0/disc-chunks
+# atteso: 200, Content-Type: application/json, Cache-Control: no-store, Content-Length 6471
 ```
 
-L'indirizzo per l'operatore diventa `https://<nome-macchina>.<tailnet>.ts.net/spike.html` e la
-ISO `https://<nome-macchina>.<tailnet>.ts.net/disc.iso`.
+L'indirizzo per l'operatore diventa `https://<nome-macchina>.<tailnet>.ts.net/spike.html`, la
+ISO `https://<nome-macchina>.<tailnet>.ts.net/disc.iso` e il manifest
+`https://<nome-macchina>.<tailnet>.ts.net/phase0/disc-chunks`.
 
 **Se l'HTTPS non si riesce ad attivare:** il test si può fare lo stesso sull'indirizzo `http://`,
 sapendo in anticipo che `cross_origin_isolated` sarà `false` e che il risultato potrà valere solo
@@ -284,6 +301,32 @@ Le scritte della pagina sono in inglese; qui sono citate esattamente come appaio
    Lo manda all'agente (passo 12) **prima** di proseguire: l'agente guarda
    `cross_origin_isolated` e `timer_resolution_ms` (sezione 5, C2). Se l'orologio è grossolano si
    decide subito se continuare comunque (sezione 6), invece di scoprirlo dopo tre corse lunghe.
+
+**La cache OPFS (opzionale, una volta, senza Cloudflare).** La sezione "Disc cache" della pagina
+scarica il disco **una volta** nella memoria del browser e poi lo riusa: è il meccanismo della PR 4
+del piano di deploy, e finché non esistono le credenziali Cloudflare questa è l'unica occasione di
+provarlo su un device vero. Va fatto in una **tab normale, non privata**: una finestra privata non
+mantiene lo spazio persistente (`storage_persisted` resterà `false`) e la cache sparirebbe alla
+chiusura — mentre il passo 4 richiede una tab privata proprio per non avere cache di visite
+precedenti. Le due cose non stanno nella stessa finestra, e non devono: la cache si prova in una
+tab normale, le tre corse cronometrate restano nella tab privata.
+
+- Apre una tab normale su `.../spike.html` e tocca **"Download the disc into this browser"**. La
+  riga sotto dice quanti byte ha già scritto; sono 1,46 GB una volta sola (lo stesso traffico del
+  passo 2, ma verso la memoria del browser invece che verso l'app File).
+  *Se compare `disc cache: unavailable`:* il manifest non è raggiungibile su quell'indirizzo
+  (sezione 4, V3): il resto della procedura funziona, questa prova no.
+- A download finito la riga dice che il disco è verificato: la pagina rilegge e ri-hasha ogni pezzo
+  prima di dichiararlo completo.
+- Lascia il selettore "Local disc image" **vuoto** e tocca "Run". Nel JSON il campo `disc_source`
+  vale `opfs` invece di `file`: è la prova che la corsa ha preso il disco dalla cache. Il resto del
+  risultato (traccia, `exit`) deve essere identico a una corsa con il selettore.
+- *Se in alto compare `a service worker controls this page: use a private window`:* è un avviso,
+  non un blocco — la pagina lo scrive e non cambia comportamento, quindi i due bottoni della cache
+  e "Run" funzionano lo stesso. Vale la pena annotarlo nel messaggio all'agente, perché in una tab
+  normale può capitare.
+- Alla fine **"Delete the cached disc"** libera quello spazio (e il disco va cancellato anche
+  dall'app File, passo 13).
 
 **Le tre corse vere**
 
