@@ -1032,7 +1032,9 @@ in memory and the server is real HTTP on an ephemeral port; no ISO is involved
 
 | Actions run | Conclusion | Measurement |
 | --- | --- | --- |
-| pending | | the CI table is added before the merge, as for the previous steps |
+| `36838901377` (CI, on the PR, `4a9a804`) | **success** | hygiene: `Ran 135 tests in 15.208s`, `OK` (was 132 on `4a3f537`); 188 tracked files checked for game data; web shell: **289 unit tests across 21 files** (unchanged), typecheck and build clean, first-load shell 41.3 KB across 4 files (budget 1024 KB); **10 shell Chromium tests pass** (6.9 s); deploy skipped without credentials |
+| `36838962972` (push CI, on `4a9a804`) | **success** | same commit, all four jobs green |
+| `phase0-build.yml` | not triggered, on purpose | its path filter lists only the scripts the build itself uses, so this PR costs about two runner-minutes instead of a 35-minute WASM build |
 
 **Not in this step.** The tunnel script (`scripts/phase0/device_test_serve.sh`) still has no test: it
 needs `cloudflared` and a real tunnel, which no runner has. Its output still prints only the
