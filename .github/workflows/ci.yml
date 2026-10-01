@@ -196,4 +196,12 @@ jobs:
 
       - name: Deploy
         if: steps.credentials.outputs.enabled == 'true'
-        run: bash scripts/deploy.sh --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+        run: |
+          set -euo pipefail
+          # deploy.sh refuses a dirty tree so the deployed shell is a commit rather than somebody's
+          # working copy. The repository carries no lockfile, so npm writes one during the build:
+          # that file is a byproduct, not a source edit. Drop it and print whatever git still
+          # reports, so the guard keeps its meaning.
+          rm -f web/package-lock.json
+          git status --porcelain | sed 's/^/  before deploy: /'
+          bash scripts/deploy.sh --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
