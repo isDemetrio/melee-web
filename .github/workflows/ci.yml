@@ -162,6 +162,11 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT || secrets.CF_PAGES_PROJECT }}
+      # The shell is not ready to be published: it needs the extracted assets (T8) before it can
+      # load a game, and publishing it would put an empty page on the project's production address.
+      # The credentials alone used to be the switch, so setting them turned this job on and made it
+      # fail on every push and pull request; the switch is now explicit.
+      CF_DEPLOY_SHELL: ${{ vars.CF_DEPLOY_SHELL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -175,6 +180,9 @@ jobs:
           [ -n "$CF_PAGES_PROJECT" ] || missing+=(CF_PAGES_PROJECT)
           if ((${#missing[@]})); then
             echo "::notice::deploy skipped: no Cloudflare credentials (${missing[*]}); docs/OPEN_QUESTIONS.md Q3"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          elif [ "${CF_DEPLOY_SHELL:-}" != "true" ]; then
+            echo "::notice::deploy skipped: credentials are present but the shell deploy is off; set the repository variable CF_DEPLOY_SHELL=true when the shell can actually load a game (docs/DEPLOY.md section 3)"
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -196,4 +204,12 @@ jobs:
 
       - name: Deploy
         if: steps.credentials.outputs.enabled == 'true'
-        run: bash scripts/deploy.sh --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+        run: |
+          set -euo pipefail
+          # deploy.sh refuses a dirty tree so the deployed shell is a commit rather than somebody's
+          # working copy. The repository carries no lockfile, so npm writes one during the build:
+          # that file is a byproduct, not a source edit. Drop it and print whatever git still
+          # reports, so the guard keeps its meaning.
+          rm -f web/package-lock.json
+          git status --porcelain | sed 's/^/  before deploy: /'
+          bash scripts/deploy.sh --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
