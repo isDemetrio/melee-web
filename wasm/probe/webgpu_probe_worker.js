@@ -9,7 +9,7 @@
 // animation frames (`visibility: visible` both times) — so neither collection nor an idle page is
 // the cause.
 //
-// The realm is what is left, and the evidence for it is in this repository: `web/tests/spike/
+// The realm was what was left, and the evidence for it is in this repository: `web/tests/spike/
 // render.spec.ts` and `web/src/spike/gpu.ts` do exactly this readback in CI, in a worker, in the
 // same browser with the same two launch flags, and get the colour back (runs 36892349174,
 // 36896537472, 36898914442, 36901465493). The renderer runs in a worker too, so this is also the
@@ -26,11 +26,13 @@
 // (`uncapturederror`); and a buffer round trip that touches neither texture nor canvas runs first, so
 // "the device is dead" and "the copy is wrong" cannot be confused again.
 //
-// What the worker cannot do here is read a canvas pixel back: `gpu.ts` records that the device does
-// not survive the end of the first task that takes a canvas texture (run 36898914442, "THE GAP" in
-// render.spec.ts). Run 36912403273 reproduced that in the worker as well — the canvas was configured,
-// cleared and submitted, and the device was lost when the task that committed its frame ended — so
-// the canvas is configured, cleared and submitted here, its commit is recorded as a measurement
+// THE REALM IS NOT WHAT KILLS THE DEVICE (run 36920684654). With the readback fixed, the worker
+// returned [255,0,0,255] from a texture cleared to red — the answer the probe exists for — and lost
+// the device 0.8 ms after the canvas was configured and cleared (11.6 ms in the full-build
+// configuration), with `onSubmittedWorkDone` rejecting "A valid external Instance reference no longer
+// exists". That is the failure `render.spec.ts` records as "THE GAP", reproduced in the realm the
+// renderer runs in: the canvas frame's commit ends the device, not the realm it is committed from.
+// So the canvas is configured, cleared and submitted here, its commit is recorded as a measurement
 // (`canvas_commit`), and its pixel is left to a real device. The texture readback is the same backend
 // path with only the canvas commit removed, and that is what the check requires.
 

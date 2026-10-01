@@ -208,13 +208,13 @@ how the core is driven, not to the renderer) or a presentation thread fed with f
 memory (the module is built `MELEE_SINGLE_THREAD=1` today). Not needed to prove step 1; needed for
 anything a player would look at.
 
-**(b), probed 2026-10-01 — PR #47, run `36912403273`.** The first half of (b) is answered: the pinned
-Emscripten (4.0.23) compiles and links a unit that includes `<webgpu/webgpu.h>` and calls into it with
-`--use-port=emdawnwebgpu`, and the browser this repository's CI can run gives the renderer a device it
-can render with — a texture cleared to red reads back `[255,0,0,255]` under `google swiftshader`, in a
-worker, with `--enable-unsafe-swiftshader --enable-unsafe-webgpu`. What is still open is the part this
-decision turns on: whether that port can *adopt* a device acquired in JavaScript, since the
-simulation is one synchronous `callMain` and the device has to be acquired before it. The probe
-creates an instance of its own and does not attempt the import (`wasm/probe/webgpu_probe.cpp` says
-so), so the choice between `EM_JS` and `<webgpu/webgpu.h>` is still the operator's, with the
-toolchain risk removed from it.
+**(b), probed 2026-10-01 — PR #47, runs `36912403273` and `36920684654`.** The first half of (b) is
+answered: the pinned Emscripten (4.0.23) compiles and links a unit that includes `<webgpu/webgpu.h>`
+and calls into it with `--use-port=emdawnwebgpu`, and the browser this repository's CI can run gives
+the renderer a device it can render with — a texture cleared to red reads back `[255,0,0,255]` under
+`google swiftshader`, in a worker, with `--enable-unsafe-swiftshader --enable-unsafe-webgpu` (run
+`36920684654`). What is still open is the part this decision turns on: whether that port can *adopt* a
+device acquired in JavaScript, since the simulation is one synchronous `callMain` and the device has to
+be acquired before it. The probe creates an instance of its own and does not attempt the import
+(`wasm/probe/webgpu_probe.cpp` says so), so the choice between `EM_JS` and `<webgpu/webgpu.h>` is
+still the operator's, with the toolchain risk removed from it.

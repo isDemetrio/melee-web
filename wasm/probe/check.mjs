@@ -35,10 +35,11 @@
 // WHAT IS REQUIRED, AND WHAT IS ONLY MEASURED. Required: the C++ half reports the toolchain ok, a
 // device exists, the texture readback is the colour the probe cleared to, the canvas configures and
 // clears, and no uncaptured error was raised. Measured but not required: whether the device survives
-// the canvas frame's commit. CI's Chromium does not survive it -- run 36912403273 lost it 1.2 ms
-// after the task that committed the frame, the same failure `render.spec.ts` records as "THE GAP" and
-// routes around with an offscreen texture target -- and the canvas pixel is therefore left to a real
-// device, exactly as the renderer's own tests leave it.
+// the canvas frame's commit. CI's Chromium does not survive it -- run 36920684654 lost it 0.8 ms
+// after the canvas was configured and cleared in the worker (11.6 ms in the full-build
+// configuration), the same failure `render.spec.ts` records as "THE GAP" and routes around with an
+// offscreen texture target -- and the canvas pixel is therefore left to a real device, exactly as the
+// renderer's own tests leave it.
 //
 // The two configurations are the remaining variable: Playwright launches the `chromium-headless-shell`
 // build for `headless: true` unless a channel is named (microsoft/playwright#33566), while
