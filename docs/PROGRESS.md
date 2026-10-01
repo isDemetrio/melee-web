@@ -1042,3 +1042,47 @@ needs `cloudflared` and a real tunnel, which no runner has. Its output still pri
 
 **Next step.** Unchanged: the device rows. M1 and M2 first (M2 decides), then the OPFS run over the
 real host, which this fix is what makes possible over the device server. O1–O9 stay the operator's.
+
+## The built shell lands where the deploy looks for it (2026-10-01, midday)
+
+PR #35 left one thing open on the deploy path: the shell deploy failed with
+`web/dist/_headers is missing`, and its note said `web/public/_headers` exists and is tracked, so
+the copy should happen, "but this box has no Node to reproduce it with". The copy is not the
+problem. Where the copy lands is.
+
+`web/vite.config.ts` set `outDir: '../dist'`. `outDir` is resolved relative to `root`, and
+`root` is `'.'`, that is `web/`, so the build wrote to `<repo>/dist` — one level above the shell.
+Every consumer of the artifact looks in `web/dist`: `scripts/deploy.sh` (its default
+`--dist-dir`, and it refuses to upload without `_headers`), `scripts/build_web.sh` (which checks
+`_headers` immediately after the build, so it would have failed the same way), and `wrangler.toml`
+(`pages_build_output_dir`). Two consumers had instead been adapted to the wrong location: the CI
+size report read `../dist`, and `web/playwright.config.ts` served `../dist` with a comment
+recording that pointing at `dist` "served an empty directory".
+
+So the first real deploy attempt (run 36843140022) could not have succeeded, and
+`scripts/build_web.sh` — the documented way to build the shell locally, `docs/DEPLOY.md` section
+3 — could not either.
+
+**Changed.** `outDir: 'dist'` in `web/vite.config.ts`, whose comment now says which three
+things read that directory; `web/playwright.config.ts` serves `dist`; the CI web job size report
+reads `dist`. **New guard**: that job asserts, immediately after the build, that `dist/_headers`
+and `dist/index.html` exist, that `dist/_headers` is byte-identical to `public/_headers`, and that
+`../dist` was not written — the criterion `docs/PLAN_BREAKDOWN.md` line 184 states and no job
+checked. The minor correction `docs/PHASE0_DEPLOY_PLAN.md` asks for (the `vite.config.ts` comment
+about where `_headers` lives) is folded into the same comment.
+
+**Measured, on the VPS** (pure Python and bash: no build, `docs/AGENT_RULES.md` rules 2 and 3):
+`python3 -m unittest discover -s scripts/tests` is **135 tests, OK**, the same count as the last CI
+run on `main`; `bash scripts/tests/test_deploy_guard.sh` and `bash scripts/tests/test_phase0_runner.sh`
+pass. The layout assertion itself needs Node, so the CI web job is what decides it.
+
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `PENDING` | | |
+
+**Not in this step.** Nothing is published: the shell deploy job stays off until
+`CF_DEPLOY_SHELL=true` (the switch #35 added), so this change cannot put a page on the project
+address. `wrangler.toml` and `docs/DEPLOY.md` already named `web/dist` and are unchanged;
+`scripts/build_web.sh` is unchanged too, because it becomes correct rather than being corrected.
+
