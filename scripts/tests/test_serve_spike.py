@@ -16,6 +16,14 @@ past the last byte (clamped, not refused), a range that lies past the end or run
 unsatisfiable range was answered with a `206` whose `Content-Range` ended before it began and
 whose `Content-Length` was negative.
 
+Three of the routes are the page's own: it asks for the piece manifest at `/phase0/disc-chunks`
+and for the disc at `/phase0/disc` (`manifestUrl` and `discUrl` in
+`web/src/spike/disc-cache.ts`), and both are the paths the Pages Function serves those objects
+from. The disc is additionally served at `/disc.iso`, which is the path
+`docs/PHASE0_DEVICE_PLAN.md` section 4 tells the operator to download it from in Safari. The
+tests pin all three: a server that answers the operator's path but not the page's cannot run the
+OPFS download it exists to exercise.
+
 The disc here is 4096 bytes held in memory. The real one is 1,459,978,240 bytes and lives
 outside every repository (`docs/AGENT_RULES.md` rule 1); `main()` is tested with
 `DISC_BYTES` patched, so no test needs it either.
@@ -43,6 +51,11 @@ DISC = bytes((index * 7 + 3) % 256 for index in range(DISC_BYTES))
 # The route the page asks for the piece manifest on (`manifestUrl` in
 # `web/src/spike/disc-cache.ts`, and the object key `functions/phase0/[[path]].ts` serves).
 MANIFEST_ROUTE = '/phase0/disc-chunks'
+# The route the page's disc cache asks for the disc on (`discUrl` in the same file, and the path
+# `functions/phase0/[[path]].ts` serves the object from).
+DISC_ROUTE = '/phase0/disc'
+# The path `docs/PHASE0_DEVICE_PLAN.md` section 4 tells the operator to download the disc from.
+ISO_ROUTE = '/disc.iso'
 # The document `scripts/phase0/disc_chunks.py` would write for the 4096-byte disc above: two
 # 2048-byte pieces, with the real SHA-256 of each, so the fixture describes this disc and not a
 # plausible-looking one.
@@ -179,12 +192,38 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(headers['content-range'], f'bytes */{DISC_BYTES}')
         self.assertEqual(body, b'')
 
+    # The route the page's disc cache asks the disc on. `/disc.iso` is the operator's download
+    # and is not what the page fetches, so a server that answers only `/disc.iso` 404s the first
+    # piece of the OPFS download even when the manifest is served.
+
+    def test_the_disc_is_served_at_the_route_the_page_asks_for(self):
+        status, headers, body = self.request(DISC_ROUTE, 'bytes=0-2047')
+        self.assertEqual(status, 206)
+        self.assertEqual(headers['content-range'], f'bytes 0-2047/{DISC_BYTES}')
+        self.assertEqual(headers['content-length'], '2048')
+        self.assertEqual(body, DISC[:2048])
+
+    def test_both_disc_routes_serve_the_same_file(self):
+        self.assertEqual(self.request(ISO_ROUTE, 'bytes=100-199'),
+                         self.request(DISC_ROUTE, 'bytes=100-199'))
+
+    def test_the_disc_route_wins_over_a_file_of_the_same_name_in_the_dist(self):
+        # The Function reads the disc out of the bucket, never out of the dist; a dist that
+        # happens to contain this path must not become the disc the page downloads.
+        shadow = self.dist / 'phase0'
+        shadow.mkdir()
+        (shadow / 'disc').write_text('not the disc\n')
+        status, _headers, body = self.request(DISC_ROUTE)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, DISC)
+
     # The piece manifest: the other object the Pages Function serves, and the contract the
     # page's disc cache downloads 1.4 GB against. Without it the page reports the cache as
     # unavailable, so the OPFS path cannot be exercised over this origin at all.
 
-    def test_the_route_the_page_asks_for_is_the_one_this_server_serves(self):
+    def test_the_routes_the_page_asks_for_are_the_ones_this_server_serves(self):
         self.assertEqual(serve_spike.MANIFEST_ROUTE, MANIFEST_ROUTE)
+        self.assertEqual(serve_spike.DISC_ROUTE, DISC_ROUTE)
 
     def test_the_manifest_is_served_the_way_the_function_serves_it(self):
         status, headers, body = self.request(MANIFEST_ROUTE)

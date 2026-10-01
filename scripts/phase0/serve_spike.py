@@ -10,7 +10,9 @@ It serves the four things a device run needs, none of which a plain static serve
 1. **COOP/COEP headers**, which the page needs to be *cross-origin isolated*.
 2. **Range requests** for the disc, so a 1.4 GB download resumes instead of restarting -- and
    `416` for a range that lies past the last byte or runs backwards, which is what the Pages
-   Function serving the same disc in production answers (`functions/phase0/[[path]].ts`).
+   Function serving the same disc in production answers (`functions/phase0/[[path]].ts`). The
+   disc is served at that Function's own route, `/phase0/disc`, because that is the route the
+   page's disc cache asks for, and at `/disc.iso` for the operator's own download in Safari.
 3. **The piece manifest** at `/phase0/disc-chunks` (`--chunks`): the other object that Function
    serves, and the contract the page's disc cache downloads the disc against. Without it the
    page's "Disc cache" section reports the cache as unavailable and the whole OPFS path
@@ -69,6 +71,16 @@ DISC_BYTES = 1459978240
 # (`web/src/spike/disc-cache.ts`), and the object key the Pages Function serves it from
 # (`functions/phase0/[[path]].ts`).
 MANIFEST_ROUTE = '/phase0/disc-chunks'
+
+# The disc's route, which is the page's default `discUrl` (`web/src/spike/disc-cache.ts`) and the
+# path the Pages Function serves the same object from (`functions/phase0/[[path]].ts`). The page
+# asks for exactly this path, so a device run that serves the disc only at `/disc.iso` cannot
+# exercise the OPFS download it exists for: the first piece request comes back 404.
+DISC_ROUTE = '/phase0/disc'
+
+# The path `docs/PHASE0_DEVICE_PLAN.md` section 4 tells the operator to download the disc from, in
+# Safari. The same file as DISC_ROUTE, kept because the procedure and its checks quote it.
+ISO_ROUTE = '/disc.iso'
 
 # The digest formats `scripts/phase0/disc_chunks.py` publishes.
 SHA1_PATTERN = re.compile(r'^[0-9a-f]{40}$')
@@ -211,7 +223,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         clean = posixpath.normpath(urllib.parse.unquote(clean))
         if clean == '/':
             clean = '/spike.html'
-        if clean == '/disc.iso':
+        if clean in (ISO_ROUTE, DISC_ROUTE):
             return self.iso
         if clean == MANIFEST_ROUTE:
             # Empty when the run was started without `--chunks`; `send_head` then answers 404
@@ -317,7 +329,8 @@ class Server(socketserver.ThreadingTCPServer):
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--dist', required=True, help='the built spike directory')
-    parser.add_argument('--iso', required=True, help='the disc image to expose at /disc.iso')
+    parser.add_argument('--iso', required=True,
+                        help='the disc image to expose at ' + DISC_ROUTE + ' and ' + ISO_ROUTE)
     parser.add_argument('--chunks', default='',
                         help='the piece manifest to expose at ' + MANIFEST_ROUTE)
     parser.add_argument('--host', default='127.0.0.1', help='bind address; localhost or the tailnet IP')
@@ -353,6 +366,8 @@ def main(argv):
 
     with Server((args.host, args.port), Handler) as httpd:
         print(f'serving {Handler.dist} and {size} bytes of disc on http://{args.host}:{args.port}/spike.html')
+        print(f'the disc is at {DISC_ROUTE} (what the page asks for) and at {ISO_ROUTE} '
+              f'(what the operator downloads)')
         if manifest is not None:
             print(f'serving the piece manifest for {len(manifest["chunks"])} pieces of '
                   f'{manifest["chunk_size_bytes"]} bytes at '

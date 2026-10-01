@@ -996,3 +996,47 @@ manifest for `/phase0/disc-chunks` is already computed and verified on the VPS
 (`/home/hermes/incoming/phase0/disc-chunks.json`: 1,459,978,240 bytes, 88 chunks of 16 MiB, last
 one 360,448 bytes, SHA-1 `d4e70c06…`), and only its upload to R2 (`scripts/phase0/upload_disc.sh`,
 O2/O3/O4) is missing. `docs/PHASE0_REPORT.md` stays unwritten until those rows exist.
+
+## The device server serves the disc where the page asks for it (2026-10-01, morning)
+
+`#33` aligned the device server's piece manifest with the Pages Function and recorded it as "the
+OPFS download runs without Cloudflare". Half of that was true. The manifest is served at
+`/phase0/disc-chunks`, which is the page's `manifestUrl` — but the page asks for the disc itself at
+`/phase0/disc` (`discUrl`, `web/src/spike/disc-cache.ts`), and `scripts/phase0/serve_spike.py`
+served it only at `/disc.iso`, the path the operator's own Safari download uses
+(`docs/PHASE0_DEVICE_PLAN.md` section 4, step 2). Every other request falls through to the dist
+directory, so `/phase0/disc` was `<dist>/phase0/disc`: a `404`. On a device run the page would have
+read the manifest, reported its cache as unavailable, and failed the download on the first piece
+with `DiscFetchError: /phase0/disc answered 404 to bytes=0-16777215` (`disc-cache.ts`, `fetchPiece`,
+which requires a `206`) — in the one place the OPFS path can be exercised before Cloudflare
+credentials exist, and with the operator watching.
+
+**The fix.** `serve_spike.py` gains the Function's route as a constant and answers the disc on both:
+`DISC_ROUTE = '/phase0/disc'` and `ISO_ROUTE = '/disc.iso'` are the same file, and the startup line
+names both. Nothing else changes — the range machinery, the `416`s, the manifest route and the
+isolation headers are untouched, and `/disc.iso` keeps working for the procedure as written.
+
+**New.** Four tests in `scripts/tests/test_serve_spike.py`: the page's route answers a range (`206`,
+`Content-Range: bytes 0-2047/4096`, the right 2048 bytes), both routes serve the same bytes, a file
+of the same name in the dist does not shadow the route, and the constants test now pins
+`DISC_ROUTE` next to the existing `MANIFEST_ROUTE` assertion.
+
+**Measured, on the VPS** (`python3 -m unittest discover -s scripts/tests`; pure Python, so allowed
+here). On `4a3f537`, the commit `#33` left: **132 tests, OK**. With the new tests and **without** the
+fix: **3 failures and 1 error** — `test_the_disc_is_served_at_the_route_the_page_asks_for`,
+`test_both_disc_routes_serve_the_same_file`,
+`test_the_disc_route_wins_over_a_file_of_the_same_name_in_the_dist`, and the constants test erroring
+on the missing `DISC_ROUTE`. With the fix: **135 tests, OK**. The disc in those tests is 4096 bytes
+in memory and the server is real HTTP on an ephemeral port; no ISO is involved
+(`docs/AGENT_RULES.md` rule 1), and no server was left running.
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| pending | | the CI table is added before the merge, as for the previous steps |
+
+**Not in this step.** The tunnel script (`scripts/phase0/device_test_serve.sh`) still has no test: it
+needs `cloudflared` and a real tunnel, which no runner has. Its output still prints only the
+`/disc.iso` address, which is the one the operator needs.
+
+**Next step.** Unchanged: the device rows. M1 and M2 first (M2 decides), then the OPFS run over the
+real host, which this fix is what makes possible over the device server. O1–O9 stay the operator's.
