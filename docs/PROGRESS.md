@@ -864,3 +864,62 @@ PR 5 also owns the `_headers` rule for `/spike-core/*` and the `vite.config.ts` 
 rule) or PR 6 (`scripts/phase0/go_no_go.py`, S8 of `docs/PHASE0_NEXT.md`). The manifest endpoint
 the page now depends on is `/phase0/disc-chunks`, produced by `scripts/phase0/disc_chunks.py`, and
 it still has to be uploaded to R2 (`scripts/phase0/upload_disc.sh`, needs the operator's O2/O3).
+
+## PR 6, S8 — the go/no-go becomes a command (2026-10-01, night)
+
+`docs/PHASE0_DEVICE_PLAN.md` section 5 ended with "Fino ad allora i conti della sezione 6 si fanno a
+mano": this is the tool that stops the hand calculation. It reads the `melee-spike-result/1` JSONs,
+applies C1–C8 of section 5 and the criterion of section 6 with the clock's `q`, and prints the
+verdict. `docs/PHASE0_REPORT.md` is deliberately **not** written tonight: P0-12 belongs with the
+operator's own rows, and the task that ordered this tool said so.
+
+**New.** `scripts/phase0/go_no_go.py`, `scripts/tests/test_go_no_go.py` (30 tests; 96 across
+`scripts/tests`, all passing on the VPS with Python 3.14.7 — a pure-Python tool, so running it here
+is not the build `docs/AGENT_RULES.md` rule 3 forbids).
+
+The rules the tool enforces, and why each one exists:
+
+| Rule | Why it exists |
+| --- | --- |
+| The trace is re-compared with `compare_checkpoints.py` and the statistics recomputed with `frame_stats.py` | section 5: `trace_csv` and `sim_times_csv` are evidence, everything else in the JSON is a declaration. A JSON whose declared `stats_in_match` disagrees with its own CSV (beyond the page's two-decimal rounding) is refused rather than believed |
+| A trace that differs is NO-GO whatever the timings say — and it is not an input error | "unexplained" is not machine-checkable: the difference is a result about the port, not a defect in the evidence. Only the operator can record an explanation, next to this tool's output, never inside it |
+| C3 has exactly one exception, and it is the plan's own | section 5, "Il commit del riferimento": a core built from a later commit than the reference trace is accepted — annotating **both** commits — only when the trace is identical cell by cell *and* hashes to `c79c53b9…`. Anything less is discarded (exit 2), so a JSON from another core can never be averaged into a verdict on trust |
+| C2 is not an input error | section 5 says C2 "vale solo la regola del NO-GO netto": a coarse clock or a page that was not cross-origin isolated forbids a GO and leaves the net NO-GO rule standing. The run stays evidence, and the case is tested as "no verdict", not as exit 2 |
+| `q` is applied in the direction that makes the verdict harder | section 6: GO needs `m + q ≤ 3` and `p + q ≤ 6`; NO-GO needs `m − q > 6` or `p − q > 12`; the middle band needs `m − q > 3`, `m + q ≤ 6` and `p + q ≤ 12` |
+| The worst repeat decides, and fewer than three repeats is an input error | the criterion is defined over three repeats (section 6, prerequisites) |
+| A class nobody measured is not an error, it is an empty row | the desktop row does not exist yet, and its thresholds are then vacuous rather than failing |
+| A verdict other than GO on an `-O1` core is `provisional` | S11 of `docs/PHASE0_NEXT.md` |
+| Exit codes 0 GO / 1 NO-GO / 2 input error / 3 desktop only / 4 no verdict, one JSON on stdout then `VERDICT: …` | S8's interface, so the output can go into the report verbatim |
+
+**Measured — the iPhone row, run on the VPS.** This is the first time the row is decided by code
+rather than by hand:
+
+```bash
+python3 scripts/phase0/go_no_go.py \
+  --reference /home/hermes/incoming/phase0/f0d76a2816ec/runs/native-1/trace.csv \
+  --reference-commit f0d76a2816eceefb7ec98b5b4a78a55edfa537c0 \
+  --phone /home/hermes/incoming/phase0/devices/iphone-safari/*.json
+```
+
+Output: `VERDICT: DESKTOP-ONLY`, exit 3, `provisional: false`.
+
+| Field | Value |
+| --- | --- |
+| worst phone mean (three repeats) | **3.244226 ms** — `m − q` = 3.2242 > 3, so not GO; `m + q` = 3.2642 ≤ 6 |
+| worst phone p99 | **5.64 ms** — `p + q` = 5.66 ≤ 12 |
+| `q` (largest `timer_resolution_ms`) | 0.02 ms |
+| spread between the three means | 7.02% (tolerance 15%) |
+| worst warm-up, first vs last 100 in-match frames | 6.59% (tolerance 15%) |
+| traces | all three identical to the native reference, 2400 rows each, SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` |
+| in-match rows | 762 each, and the recomputed mean/p95/p99/max equal the declared ones |
+| C3 | the JSONs ran the core at `4fba3a08…` while the reference trace is `f0d76a28…`: accepted by the cross-commit rule, with the annotation in `reasons` |
+
+**What that verdict is not.** It is the **iOS row only** (`docs/OPEN_QUESTIONS.md` Q9): a GO would
+not have closed the Android row, and this is not a GO — the middle band is exactly the outcome the
+device plan describes as "si procede solo su desktop e si rivaluta il mobile in Fase 4". It is not
+`provisional` because the served core is `-Oz` and not `-O1` (S11). The row that decides (M2, a
+mid-range Android) is still unmeasured, and `docs/NIGHT_HANDOFF.md` still holds: the iPhone is not
+8% from the mobile line, the mobile line is unmeasured and may be 3x away.
+
+**Next step.** PR 5 of the deploy plan (`deploy_spike`), then the report once the operator's rows
+exist. The manifest endpoint the page needs (`/phase0/disc-chunks`) still has to be uploaded to R2.
