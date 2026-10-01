@@ -1174,3 +1174,53 @@ build on (3.36 ms per frame on the iPhone against a 16.67 ms budget at 60 Hz, ~5
 compiler-level speed work is closed by size. The remaining speed ideas that are not closed (the
 interpreter's dispatch path, SIMD) are worth single-digit percentages each and belong after a visible
 frame exists. M2 stays open until an Android device in the mobile configuration is available.
+
+## Renderer step 1 — a WebGPU backend that presents the frame's clear (2026-10-01, evening)
+
+Branch `render/webgpu-step1`. **Written, not run**: the account's Actions minutes are exhausted, so
+no workflow has picked up a job, and nothing here has been compiled — the VPS builds nothing.
+
+**What was found.** The web build had no backend and never built a frame: `gx_core.cpp` is not in
+the shipped modules (`native/core_sources.cmake`), `native/headless_fifo.cpp` decodes the FIFO in
+its place and drops all render state, and `gx::init` is never called. And no CI runner can produce
+a game frame at all: without the disc every spike run stops at the DOL, before the first GX command.
+
+**What was written.**
+
+- `native/headless_fifo.cpp`, `native/headless.h`: `host::gx_set_backend`. With a backend attached,
+  each EFB copy is recorded as `gx_core.cpp` records it and the `gx::Frame` is handed over at the
+  XFB copy. Null by default; the native reference and the Node module never set it.
+- `wasm/render/gx_webgpu.cpp` (web module only): `gx::Backend` with a persistent EFB texture;
+  replays each copy in order — EFB to canvas, then clear. Draws ignored. Detaches itself on any
+  JavaScript failure. `gx_webgpu_selftest` feeds the real decoder a frame's closing BP writes.
+- `web/src/spike/gpu.ts`, `worker.ts`, `main.ts`, `spike.html`: `?canvas` hands a run an
+  `OffscreenCanvas`; the device is acquired before `callMain`; without a canvas nothing changes.
+- Tests: `native/tests/fifo_test.cpp` (the seam: frames, order, colour, detach) and
+  `web/tests/spike/render.spec.ts` (two copies show the clear colour, one copy shows the
+  zero-initialised EFB, no canvas renders nothing; pixels read back with `copyTextureToBuffer`).
+
+**Next step.** When CI has minutes: run the probe (PR #47) first, then this branch's
+`Phase 0 — WASM core` and `Phase 0 — Linux headless reference` runs. Then the operator's call on
+`docs/OPEN_QUESTIONS.md` Q10 before step 2.
+
+**Update, first CI run (run `36892349174`, commit `54800cd`).** The C++ compiles and links in both
+builds; `native_fifo_test`, seam included, passed under g++ (run `36892349475`); the CI Chromium
+gave the render test a device. Two render tests failed on the readback: `device lost: Device was
+destroyed.` then `mapAsync` aborted with `A valid external Instance reference no longer exists.`
+Diagnosis: nothing reachable from the worker's global scope held the adapter, device or readback
+buffer once the synchronous stretch ended, so they could be collected while the map was pending.
+Fix: `web/src/spike/gpu.ts` roots every opened GPU object and every in-flight readback buffer for
+the worker's lifetime. The second test's `[0,0,0,0]` was right; its null pixel was the same failure.
+
+**Update, runs `36896537472` and `36898914442`.** Rooting the GPU objects (`cdba78b`) changed
+nothing: collection was not the cause. The diagnostic run's timeline settled where the device dies.
+Buffer round trips pass across several task boundaries while the canvas is configured but
+untouched. About 0.7 ms after the first task that calls `getCurrentTexture` yields (the moment its
+canvas frame is committed), the device is lost (`destroyed`) and every pending map aborts. One
+realm, one device, the backend used it, two copies recorded. Ruled out: a runtime exit (the
+self-test calls no `callMain`; `-sEXIT_RUNTIME=1` is linked only into the Node module and
+`sha1_test`) and `emdawnwebgpu` (not linked; 0 mentions in the run's log). What it is inside
+Chromium is not established. Change: the backend's XFB target is pluggable. CI reads the backend's
+output back from an offscreen texture (`?gx-selftest…&target=texture`), and the canvas path is
+asserted in CI without a pixel. The canvas pixel test runs with `SPIKE_CANVAS_READBACK=1`, and a
+`?canvas` run reports it as `render.readback`, for a real device to settle.
