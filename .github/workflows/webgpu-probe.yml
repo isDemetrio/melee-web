@@ -46,15 +46,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      # Playwright is installed outside the checkout so nothing in the repository is touched, and
-      # check.mjs is run from there with an absolute path: the directory it serves comes from its own
-      # URL, so the working directory only has to be the one that can resolve `playwright`.
-      - name: Install Playwright's Chromium
-        working-directory: ${{ runner.temp }}
+      # Playwright has to be resolvable from the file that imports it: Node resolves a bare
+      # specifier from the importing module's own directory upwards, not from the working
+      # directory, and NODE_PATH does not apply to ES modules. Installing it in the runner's
+      # temp directory therefore does not work; it is installed in the workspace instead.
+      # Nothing is committed: the checkout is thrown away with the runner.
+      - name: Install Playwright and its Chromium
+        working-directory: ${{ github.workspace }}
         run: |
           npm init -y >/dev/null
           npm install playwright@latest
           npx playwright install --with-deps chromium
       - name: Run the probe in headless Chromium
-        working-directory: ${{ runner.temp }}
-        run: node "$GITHUB_WORKSPACE/wasm/probe/check.mjs"
+        working-directory: ${{ github.workspace }}
+        run: node wasm/probe/check.mjs
