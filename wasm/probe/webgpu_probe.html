@@ -36,7 +36,7 @@
       //    `print` is the toolchain's answer. A module that failed to compile or link is not here
       //    to load at all, so a load failure is itself a result and not a crash.
       try {
-        const factory = (await import('./webgpu_probe.js')).default;
+        const factory = (await import('./webgpu_probe.mjs')).default;
         await factory({ print: (line) => result.cxx_lines.push(line) });
         result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
       } catch (error) {

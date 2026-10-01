@@ -40,9 +40,10 @@ jobs:
       - name: Compile the probe
         working-directory: wasm/probe
         run: |
-          emcc --use-port=emdawnwebgpu -O1 -sMODULARIZE=1 -sEXPORT_NAME=createWebgpuProbe \
-            -sENVIRONMENT=web -sEXIT_RUNTIME=1 -o webgpu_probe.js webgpu_probe.cpp
-          ls -l webgpu_probe.js webgpu_probe.wasm
+          emcc --use-port=emdawnwebgpu -O1 -sMODULARIZE=1 -sEXPORT_ES6=1 \
+            -sEXPORT_NAME=createWebgpuProbe \
+            -sENVIRONMENT=web -sEXIT_RUNTIME=1 -o webgpu_probe.mjs webgpu_probe.cpp
+          ls -l webgpu_probe.mjs webgpu_probe.wasm
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

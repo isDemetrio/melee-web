@@ -48,7 +48,10 @@ const server = createServer(async (request, response) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
 
-const browser = await chromium.launch({ args: ['--enable-unsafe-swiftshader'] });
+// No launch flags: the spike tests use Playwright's defaults and do get an adapter, while
+// `--enable-unsafe-swiftshader` here produced "no adapter, hardware or fallback". The flag is
+// what differed, so it is gone: the runner's plain Chromium is the configuration that works.
+const browser = await chromium.launch();
 const page = await browser.newPage();
 const pageErrors = [];
 page.on('pageerror', (error) => pageErrors.push(String(error)));
