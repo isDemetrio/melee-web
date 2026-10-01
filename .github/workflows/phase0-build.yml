@@ -31,7 +31,12 @@ on:
       - 'web/playwright.spike.config.ts'
       - 'web/public/sw.js'
       - 'web/vite.config.ts'
-      - 'wasm/**'
+      # The probe (wasm/probe) is a CMake project of its own: webgpu-probe.yml builds it and no
+      # target this workflow compiles reads it, so a change under it must not cost a 35-minute WASM
+      # core build -- the same rule the scripts/phase0 list below already follows.
+      - 'wasm/compat/**'
+      - 'wasm/core/**'
+      - 'wasm/render/**'
       - 'native/**'
       - 'patches/**'
       # Only the scripts the build actually uses. The whole of scripts/phase0/** used to be
