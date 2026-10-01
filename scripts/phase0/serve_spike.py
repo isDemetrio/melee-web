@@ -8,7 +8,9 @@ phone on the tailnet can open the page and pick the disc it has just downloaded.
 It does three things a plain static server does not:
 
 1. **COOP/COEP headers**, which the page needs to be *cross-origin isolated*.
-2. **Range requests** for the disc, so a 1.4 GB download resumes instead of restarting.
+2. **Range requests** for the disc, so a 1.4 GB download resumes instead of restarting -- and
+   `416` for a range that lies past the last byte or runs backwards, which is what the Pages
+   Function serving the same disc in production answers (`functions/phase0/[[path]].ts`).
 3. **One origin** for page, module and disc, which is what WORKERFS mounting needs.
 
 **The headers only work over HTTPS or `localhost`.** Cross-origin isolation is a *secure context*
@@ -52,6 +54,49 @@ CHUNK = 1024 * 1024
 
 # The disc's exact size, so a wrong file is refused before the phone downloads it.
 DISC_BYTES = 1459978240
+
+# One explicit range only, the shape the Pages Function accepts: a resumed download asks for
+# `bytes=<offset>-<offset+piece-1>`, one piece at a time.
+SINGLE_RANGE = re.compile(r'bytes=(\d*)-(\d*)$')
+
+
+def resolve_range(header, size):
+    """The inclusive byte range a request asks for, resolved as the Pages Function resolves it.
+
+    Returns `(start, end)`, or `None` when the header is absent or names nothing this server
+    understands -- HTTP then requires the whole object -- or the string `'unsatisfiable'` for a
+    range that starts past the last byte or runs backwards. A suffix of zero bytes is
+    unsatisfiable by definition.
+
+    `functions/phase0/[[path]].ts` (`resolveRange`) serves this same disc in production and
+    answers those cases with `416`; this server is the stand-in for device runs, so it must not
+    answer a `206` with an impossible `Content-Range` instead. It did, before this was shared:
+    `bytes=100-50` and `bytes=<size>-` returned a `206` whose `Content-Range` ended before it
+    began and whose `Content-Length` was negative, and curl reported a malformed reply (exit 8)
+    instead of a range it could not satisfy.
+    """
+    if not size:
+        return None
+    match = SINGLE_RANGE.match(header or '')
+    if match is None:
+        return None
+    first, last = match.group(1), match.group(2)
+    if first == '' and last == '':
+        return None
+    if first == '':
+        suffix = int(last)
+        if suffix == 0:
+            return 'unsatisfiable'
+        start = max(0, size - suffix)
+        return start, size - 1
+    start = int(first)
+    if start >= size:
+        return 'unsatisfiable'
+    # An end past the last byte is clamped, not refused; an end before the start is malformed.
+    end = size - 1 if last == '' else min(int(last), size - 1)
+    if end < start:
+        return 'unsatisfiable'
+    return start, end
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -117,20 +162,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path.endswith('.css'):
             content_type = 'text/css'
 
-        match = re.match(r'bytes=(\d*)-(\d*)$', self.headers.get('Range', ''))
-        start, end = 0, size - 1
-        partial = False
-        if match and size:
-            partial = True
-            first, last = match.group(1), match.group(2)
-            if first:
-                start = int(first)
-                if last:
-                    end = min(int(last), size - 1)
-            elif last:  # a suffix range: the last N bytes
-                start = max(0, size - int(last))
+        resolved = resolve_range(self.headers.get('Range'), size)
+        if resolved == 'unsatisfiable':
+            # The answer the Pages Function gives for the same request: a client that asks past
+            # the end of the disc must not be handed a 206 it cannot make sense of.
+            self.send_response(416)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Content-Range', f'bytes */{size}')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return None
 
-        if partial:
+        start, end = resolved if resolved else (0, size - 1)
+        if resolved:
             self.send_response(206)
             self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
         else:
