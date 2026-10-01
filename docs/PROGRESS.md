@@ -931,3 +931,68 @@ mid-range Android) is still unmeasured, and `docs/NIGHT_HANDOFF.md` still holds:
 
 **Next step.** PR 5 of the deploy plan (`deploy_spike`), then the report once the operator's rows
 exist. The manifest endpoint the page needs (`/phase0/disc-chunks`) still has to be uploaded to R2.
+
+## The device server answers the disc the way the Function does (2026-10-01, night)
+
+Both steps the night handoff ordered were already in `main` when this session started: PR 4 is
+complete (steps 1–4 as #26, #28, #29, #30) and so is S8 (`scripts/phase0/go_no_go.py`, #31). The
+deploy plan's PR 1–6 are all landed, and what is left in its order of execution is the operator's
+(O1–O10, the M1/M2/M5 devices). Verified before touching anything, on `bef2c56`:
+`python3 scripts/phase0/go_no_go.py --reference …/native-1/trace.csv --reference-commit
+f0d76a2816ec… --phone …/devices/iphone-safari/*.json` prints `VERDICT: DESKTOP-ONLY`, worst repeat
+3.2442 ms mean and 5.64 ms p99, `provisional: false` — the PR 6 row, reproduced — and
+`python3 -m unittest discover -s scripts/tests` is 96 tests, OK.
+
+What was still unguarded, and sits on the critical path of the operator's next session, is the
+server that session talks to: `scripts/phase0/serve_spike.py`, which
+`scripts/phase0/device_test_serve.sh` starts behind the tunnel (`docs/PHASE0_DEVICE_PLAN.md`
+section 4) and which `docs/PHASE0_DEPLOY_PLAN.md` section 2 calls the route that does not wait for
+Cloudflare credentials. It is the local stand-in for the page with its isolation headers and for
+the disc with byte ranges — and nothing tested either.
+
+**The defect.** Reproduced on the VPS against the operator's own ISO, on `127.0.0.1`, before the
+fix (the server was stopped afterwards):
+
+| Request | Answered | Should be |
+| --- | --- | --- |
+| `Range: bytes=1459978240-1459978339` (offset == size) | `206`, `Content-Range: bytes 1459978240-1459978239/1459978240`, `Content-Length: 0` | `416`, `Content-Range: bytes */1459978240` |
+| `Range: bytes=100-50` (end before start) | `206`, `Content-Range: bytes 100-50/…`, no usable `Content-Length`; curl exits 8 (malformed reply) | `416` |
+| `Range: bytes=-0` (a zero-byte suffix) | `206`, the same impossible `Content-Range` | `416` |
+| `Range: bytes=-` | `206` with the whole range | `200`, the whole object |
+
+The Pages Function that serves this same disc in production (`functions/phase0/[[path]].ts`,
+`resolveRange`, guarded by `tests/functions/phase0-disc.test.ts`) answers exactly that. Two servers
+answering the same requests must not disagree about a range that cannot be satisfied: a browser
+resuming a 1.4 GB download that asks past the end is entitled to a `416` and not to a `206` it
+cannot frame.
+
+**New.** `scripts/tests/test_serve_spike.py` (22 tests: the range table above, a clamped end past
+the last byte, an open range, a suffix range, a range header it does not understand, HEAD, the
+`401` and the isolation headers on it, `/` and `application/wasm`, a path that tries to leave the
+dist directory, a run without a password, and `main()` — the wrong-disc refusal that must happen
+*before* it binds, the address it binds, and the line the device procedure quotes back).
+**Modified.** `scripts/phase0/serve_spike.py`: the resolution moves into one function,
+`resolve_range`, mirroring the Function case by case, and `send_head` answers `416` with
+`Content-Length: 0` and no body. No ISO and no game data is involved: the disc in the tests is 4096
+bytes in memory and `main()` is tested with `DISC_BYTES` patched.
+
+**Measured.** Against the server as it was, the new file fails 6 tests and errors on 16 (the
+`resolve_range` cases do not exist yet); with the fix it is 22 of 22.
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36821195726` (CI, on the PR, `7fcf205`) | **success** | hygiene: `Ran 118 tests in 9.992s` (was 96; +22, the new file), `OK`; 188 tracked files checked for game data; web shell: **289 unit tests across 21 files** (unchanged), typecheck and build clean; **10 shell Chromium tests pass** (8.2 s); deploy skipped without credentials. Jobs: 25 s, 40 s, 61 s, 7 s |
+| `36821162687` (push CI, on `7fcf205`) | **success** | same commit |
+| `phase0-build.yml` | not triggered, on purpose | its path filter lists only the scripts the build itself uses, so this PR costs about two runner-minutes instead of a 35-minute WASM build |
+
+**Not in this step.** The tunnel script (`scripts/phase0/device_test_serve.sh`) still has no test:
+it needs `cloudflared` and a real tunnel, which no runner has. The page, the OPFS worker and the
+Function are untouched — the Function is the reference this server was aligned to.
+
+**Next step.** The plan's remaining autonomous work is exhausted; what is left needs the operator:
+O1 (may the module and the disc go to Cloudflare at all), O2–O9 (accounts, bucket, keys, Access),
+and the device rows — M1 and M2 first (M2 decides), then M5 for OPFS over the real host. The
+manifest for `/phase0/disc-chunks` is already computed and verified on the VPS
+(`/home/hermes/incoming/phase0/disc-chunks.json`: 1,459,978,240 bytes, 88 chunks of 16 MiB, last
+one 360,448 bytes, SHA-1 `d4e70c06…`), and only its upload to R2 (`scripts/phase0/upload_disc.sh`,
+O2/O3/O4) is missing. `docs/PHASE0_REPORT.md` stays unwritten until those rows exist.
