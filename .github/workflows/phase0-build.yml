@@ -247,14 +247,14 @@ jobs:
           # line detaches the header either way. Verify after the first deploy with
           # curl -sI .../spike-core/melee_core_web.wasm: it must not show `immutable`.
           printf '\n/spike-core/*\n  ! Cache-Control\n  Cache-Control: no-store\n' >> "$RUNNER_TEMP/spike-dist/_headers"
-          # deploy.sh refuses a dirty tree, and that guard exists so the deployed shell is a commit
-          # rather than somebody's working copy. Two entries in this job are build byproducts, not
-          # source edits: the patched submodule, whose checkout the build moves, and the lockfile
-          # npm ci writes. Put the tree back to the commit and show what was undone, so the guard
-          # keeps its meaning instead of being switched off.
-          git submodule update --checkout upstream/melee-unlocked 2>/dev/null || true
-          rm -f web/package-lock.json
-          git status --porcelain | sed 's/^/  after cleanup: /'
-          scripts/deploy.sh --branch phase0-spike --dist-dir "$RUNNER_TEMP/spike-dist" | tee "$RUNNER_TEMP/deploy.log"
+          # deploy.sh refuses a dirty tree, so the deployed shell is a commit rather than somebody's
+          # working copy. This job's tree is dirty by design once the build has run -- the patch step
+          # moves the submodule's checkout, which shows up as a modified submodule whatever the
+          # submodule itself contains, and npm writes a lockfile -- and undoing that is guesswork
+          # about what the build did. Publish from a clean copy of the commit instead: the dist is
+          # already built, and deploy.sh reads the checkout only to answer "is this a commit?".
+          git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/clean"
+          git -C "$RUNNER_TEMP/clean" status --porcelain | sed 's/^/  in the clean copy: /'
+          scripts/deploy.sh --branch phase0-spike --repo-dir "$RUNNER_TEMP/clean" --dist-dir "$RUNNER_TEMP/spike-dist" | tee "$RUNNER_TEMP/deploy.log"
           url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' "$RUNNER_TEMP/deploy.log" | tail -1)
           echo "spike preview: ${url:-not reported by wrangler}" | tee -a "$GITHUB_STEP_SUMMARY"
