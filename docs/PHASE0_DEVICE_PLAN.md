@@ -208,13 +208,20 @@ curl -sI -u 'fabri:<password>' http://127.0.0.1:8091/spike.html
 # attesi: 200, Cross-Origin-Opener-Policy: same-origin, Cross-Origin-Embedder-Policy: require-corp
 curl -sI -u 'fabri:<password>' -H 'Range: bytes=0-5' http://127.0.0.1:8091/disc.iso
 # atteso: 206 e Content-Range: bytes 0-5/1459978240
+curl -sI -u 'fabri:<password>' -H 'Range: bytes=0-5' http://127.0.0.1:8091/phase0/disc
+# atteso: 206 e Content-Range: bytes 0-5/1459978240 — lo stesso file su due rotte: `/disc.iso` è
+# il download manuale in Safari (sezione 4, passo 2), `/phase0/disc` è la rotta che la pagina
+# chiede da sola (`discUrl` di `web/src/spike/disc-cache.ts`) e la stessa che serve la Function in
+# produzione. Il server risponde su entrambe, o la cache OPFS non può scaricare il disco.
 curl -sI -u 'fabri:<password>' http://127.0.0.1:8091/phase0/disc-chunks
 # atteso: 200, Content-Type: application/json, Cache-Control: no-store, Content-Length 6471
 ```
 
 L'indirizzo per l'operatore diventa `https://<nome-macchina>.<tailnet>.ts.net/spike.html`, la
 ISO `https://<nome-macchina>.<tailnet>.ts.net/disc.iso` e il manifest
-`https://<nome-macchina>.<tailnet>.ts.net/phase0/disc-chunks`.
+`https://<nome-macchina>.<tailnet>.ts.net/phase0/disc-chunks`. Il disco è servito **anche** su
+`https://<nome-macchina>.<tailnet>.ts.net/phase0/disc`: è lo stesso file, ed è la rotta che la
+pagina chiede da sola per la cache OPFS.
 
 **Se l'HTTPS non si riesce ad attivare:** il test si può fare lo stesso sull'indirizzo `http://`,
 sapendo in anticipo che `cross_origin_isolated` sarà `false` e che il risultato potrà valere solo
