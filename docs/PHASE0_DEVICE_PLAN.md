@@ -427,14 +427,25 @@ questo piano: se C5 dà SHA-1 `c79c53b9…` identico, la parità si accetta anno
 se C5 dà una differenza, **prima** di cercarne la causa si produce una traccia nativa del commit del
 core servito, perché la differenza potrebbe venire dal commit e non da Safari.
 
+**Aggiornamento 2026-10-01.** Il core pubblicato è ora `63511ce6c5f4e39be07b9acc9b517b2010ca01db`
+(deploy `36868675226`) e la traccia nativa dello **stesso** commit esiste: run `36879113234`, in
+`/home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv`, identica a `c79c53b9…` (due corse,
+`identical: 2400 retraces`). Per quella pagina la regola del cross-commit non serve più: si passa
+`--reference-commit 63511ce6c5f4e39be07b9acc9b517b2010ca01db` con quel file. `current.env` punta a
+quella cartella (layout `runs/native-1/` incluso). Dettagli e numeri: `docs/PROGRESS.md`, sezione
+del 2026-10-01 pomeriggio (PR #46, non ancora in `main` a questa data).
+
 **Se la traccia differisce** (con riferimento dello stesso commit): è un risultato importante, non
 un guasto del test. Vuol dire che JavaScriptCore calcola qualcosa in modo diverso da V8 e dal nativo.
 Si annotano il primo retrace e la colonna che differiscono (li stampa `compare_checkpoints.py`), e
 si segue `docs/AGENT_RULES.md` regola 5: nessuna modifica al ricompilatore prima di averli scritti.
 Per la spec è NO-GO finché non è spiegata.
 
-**Nota:** `scripts/phase0/go_no_go.py` (passo S8 di `docs/PHASE0_NEXT.md`) **non esiste ancora**.
-Fino ad allora i conti della sezione 6 si fanno a mano con i valori di C6.
+**Nota (aggiornata 2026-10-01).** `scripts/phase0/go_no_go.py` esiste (PR #31) e i controlli C1-C8 di questa
+sezione sono dentro di lui: `evaluate_run()` li applica seguendo la tabella, con `WARMUP_TOLERANCE = 0.15`
+per C7, `SPREAD_TOLERANCE = 0.15` e `MAX_PLAUSIBLE_MS = 1000.0` per C8, e `STATS_TOLERANCE_MS = 0.01` per il
+confronto fra `stats_in_match` dichiarato e ricalcolato (C6). La sezione 6 non si calcola più a mano con i
+valori di C6: si esegue il comando, che elenca in `reasons` ogni controllo fallito.
 
 ---
 
