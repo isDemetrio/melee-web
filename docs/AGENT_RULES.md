@@ -47,6 +47,28 @@ established, so you do not have to rediscover them.
   a multiply-add into an FMA.
 - Never use `emscripten_sleep` or Asyncify in the simulation path.
 
+## CI budget
+
+The repository is private, so Actions minutes come out of the account's 2,000-minute monthly
+allowance rather than being unlimited. Measured on 2026-10-01: 91 workflow runs in one day,
+roughly 660 minutes — a third of the month — of which 24 were WASM core builds at 18–35 minutes
+each. When the allowance runs out the jobs stop until the next month; there is no charge, because
+the spending limit is zero. The cost of waste is therefore stalled work, not money.
+
+- **Batch experiments into one build.** The module per dispatch is the expensive unit; the fixed
+  costs (emsdk setup, the release guest compile gate, the Chromium run) are paid on every run.
+- **Screen locally first.** `scripts/phase0/run_checkpoints.sh` runs the 2400 checkpoints against
+  the Node module in about 75 s on the VPS and costs no CI minutes. CI is for the module that
+  cannot be built locally, not for the first look.
+- **Never leave two runs of one branch alive.** A pull-request push and a manual dispatch of the
+  same commit build the same module twice. Cancel the duplicate.
+- **The heavy build stays on the paths that need it.** Widening `phase0-build.yml`'s
+  `pull_request.paths` to all of `scripts/phase0/**` once cost a 35-minute WASM build for an edit
+  to the checkpoint comparator.
+- **One run per push, not two.** A branch with an open pull request used to fire both the `push`
+  and the `pull_request` events, so every push cost two full CI runs. `ci.yml` now triggers on
+  pull requests and on pushes to `main` only.
+
 ## Secrets
 
 Cloudflare and Supabase credentials live in CI secrets and Pages environment
