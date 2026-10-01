@@ -8,5 +8,18 @@
 <button id="run">Run</button>
 <p id="core"></p><p id="status"></p><pre id="log"></pre><pre id="stats"></pre><p id="compare"></p>
 <a id="download" hidden>result JSON</a>
+<!--
+  The disc cache. The operator downloads the 1.36 GiB disc once into this origin's own storage
+  (OPFS) and then runs from it, instead of handing the file selector the same image on every run.
+  The two lines below say what the cache holds and how far a download is; the buttons are the only
+  way the page ever writes or deletes those bytes.
+-->
+<section>
+  <h2>Disc cache</h2>
+  <button id="fetch-disc">Download the disc into this browser</button>
+  <button id="delete-disc">Delete the cached disc</button>
+  <p id="disc-status">disc cache: unknown</p>
+  <p id="disc-progress"></p>
+</section>
 <script type="module" src="/src/spike/main.ts"></script>
 </body></html>

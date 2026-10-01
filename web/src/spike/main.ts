@@ -7,6 +7,10 @@ const element = <T extends HTMLElement>(id: string): T => document.getElementByI
 const status = element('status');
 const run = element<HTMLButtonElement>('run');
 const download = element<HTMLAnchorElement>('download');
+const fetchDisc = element<HTMLButtonElement>('fetch-disc');
+const deleteDisc = element<HTMLButtonElement>('delete-disc');
+const discStatus = element('disc-status');
+const discProgress = element('disc-progress');
 const parameters = new URLSearchParams(location.search);
 const frames = Number(parameters.get('frames') ?? 2400);
 /**
@@ -22,6 +26,90 @@ function controlled(): boolean {
   return true;
 }
 controlled();
+
+/** Bytes with a unit, because the disc is 1.36 GiB and its pieces are 16 MiB. */
+function humanBytes(bytes: number): string {
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return unit === 0 ? `${bytes} B` : `${value.toFixed(1)} ${units[unit] ?? 'B'}`;
+}
+
+/**
+ * What the cache holds right now: the whole disc if every piece is stored and hashes to the
+ * manifest, otherwise nothing, and what the browser says about persisting the origin's storage.
+ *
+ * The verified disc is asked for rather than the stored length, because a length is not a
+ * disc: `getVerifiedDisc()` re-reads and re-hashes every stored piece and truncates the file at
+ * the first one that is wrong, so this line never calls a poisoned cache complete. A manifest the
+ * page cannot read -- a local preview with no Function behind it, an HTML sign-in page, a dropped
+ * connection -- is reported as an unavailable cache and not as an error, because the selector
+ * still runs the page (disc-source.ts, rule 2).
+ */
+async function refreshDiscStatus(): Promise<void> {
+  try {
+    const storage = await cache.storageStatus();
+    const persisted = storage.persisted ? 'persisted' : 'not persisted';
+    const file = await cache.getVerifiedDisc();
+    discStatus.textContent = file
+      ? `disc cache: ${humanBytes(file.size)} verified, ${persisted}`
+      : `disc cache: no verified disc, ${persisted}`;
+  } catch (error) {
+    discStatus.textContent = `disc cache: unavailable (${error})`;
+  }
+}
+void refreshDiscStatus();
+
+/**
+ * Download the missing pieces into OPFS. A second click while one is running joins the download
+ * in flight rather than starting a second writer (`disc-cache.ts`), and an interruption leaves
+ * the verified prefix behind, so this button is also the resume button.
+ */
+fetchDisc.onclick = async () => {
+  fetchDisc.disabled = true;
+  deleteDisc.disabled = true;
+  discProgress.textContent = 'disc download: starting…';
+  try {
+    const file = await cache.downloadDisc({
+      onProgress: (progress) => {
+        const percent = Math.floor((progress.receivedBytes / progress.totalBytes) * 100);
+        discProgress.textContent = `disc download: ${humanBytes(progress.receivedBytes)} of ` +
+          `${humanBytes(progress.totalBytes)} (${percent}%), piece ${progress.chunkIndex + 1} of ` +
+          `${progress.chunkCount}`;
+      },
+    });
+    discProgress.textContent = `disc download: complete, ${humanBytes(file.size)} as ${file.name}`;
+  } catch (error) {
+    discProgress.textContent = `disc download failed: ${error}`;
+  } finally {
+    fetchDisc.disabled = false;
+    deleteDisc.disabled = false;
+    await refreshDiscStatus();
+  }
+};
+
+/**
+ * Delete the cached disc, stopping a download in flight first. The bytes are gone from OPFS, not
+ * just forgotten by this page, so the next download starts at offset 0 and the next run falls
+ * back to the selector until it finishes.
+ */
+deleteDisc.onclick = async () => {
+  fetchDisc.disabled = true;
+  deleteDisc.disabled = true;
+  discProgress.textContent = 'disc cache: deleting…';
+  try {
+    await cache.deleteDisc();
+    discProgress.textContent = 'disc cache: deleted';
+  } catch (error) {
+    discProgress.textContent = `disc cache: deletion failed: ${error}`;
+  } finally {
+    fetchDisc.disabled = false;
+    deleteDisc.disabled = false;
+    await refreshDiscStatus();
+  }
+};
+
 run.onclick = async () => {
   if (controlled()) return;
   const picked = element<HTMLInputElement>('iso').files?.[0] ?? null;
