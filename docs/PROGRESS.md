@@ -921,5 +921,13 @@ device plan describes as "si procede solo su desktop e si rivaluta il mobile in 
 mid-range Android) is still unmeasured, and `docs/NIGHT_HANDOFF.md` still holds: the iPhone is not
 8% from the mobile line, the mobile line is unmeasured and may be 3x away.
 
+**Measured in CI.**
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36816027497` (CI, on the PR) | **success** | hygiene job: `Ran 96 tests in 1.340s`, 30 of them in `test_go_no_go.py`; web shell: 289 unit tests across 21 files, typecheck and build clean; 10 shell Chromium tests pass (7.3 s); deploy skipped without credentials |
+| `36816008571` (push CI) | **success** | same commit |
+| `phase0-build.yml` | not triggered, on purpose | its path filter lists only the scripts the build itself uses, so this PR costs about four runner-minutes instead of a 35-minute WASM build |
+
 **Next step.** PR 5 of the deploy plan (`deploy_spike`), then the report once the operator's rows
 exist. The manifest endpoint the page needs (`/phase0/disc-chunks`) still has to be uploaded to R2.
