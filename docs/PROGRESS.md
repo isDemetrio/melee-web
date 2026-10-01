@@ -735,3 +735,76 @@ exercise a resume, a private window is still incompatible with a persistent cach
 piece in memory, `flush()` after every piece, `close()` in `finally`, the `File` returned after the
 close, and downloads, deletions and runs serialised even across tabs. Then the JSON fields, then
 the button in the page.
+
+## PR 4, step 2 — the disc cache writes through one OPFS worker (2026-10-01, night)
+
+Written up late: PR #28 (`feat/phase0-opfs-worker`, merged 2026-10-01 01:51 UTC as `aad3598`)
+landed the browser implementation of step 1's `DiscStore` without a section here, so the "Next
+step" of the section above still named it as pending. It is recorded now because a session that
+reads this file alone would otherwise rebuild it.
+
+**New.** `web/src/spike/opfs-worker.ts` (the writer: one `createSyncAccessHandle()`, `flush()`
+after every piece, `close()` in a `finally`, a write only at the current end of the file, the
+`File` handed out with no handle open, one exclusive Web Lock per cache identity),
+`web/src/spike/opfs-store.ts` (the page's side: one identified message per operation, replies
+matched by id, everything in flight rejected when the worker dies),
+`web/tests/unit/opfs-worker.test.ts`, `web/tests/unit/opfs-store.test.ts`, and the fakes
+`web/tests/unit/fakes/fakeSyncOpfs.ts` and `web/tests/unit/fakes/fakeWorkerPort.ts`.
+
+**Measured.** Runs `36798558897` (CI, **success**) and `36798558952` (Phase 0 — WASM core,
+**success**), both on `f54ab72`: **282 unit tests across 20 files** (was 245 across 18: +37, the
+two new files), 3.95 s; typecheck and build clean; the spike Chromium test still passes.
+
+## PR 4, step 3 — the page names its disc source, its storage state and the core load time (2026-10-01, night)
+
+Step 3 of PR 4 (`docs/PHASE0_DEPLOY_PLAN.md` section 5). Steps 1 and 2 decided what a verified
+disc is and where its bytes are written; this step is the page: it runs from the verified cached
+disc when there is one and from the file selector when there is not, and the result JSON says
+which of the two it was.
+
+**New.** `web/src/spike/disc-source.ts`, `web/tests/unit/disc-source.test.ts` (7 tests).
+**Modified.** `web/src/spike/main.ts` (the choice, and `disc_source`, `storage_persisted`,
+`core_load_ms` in the result), `web/src/spike/worker.ts` (the `core_load_ms` measurement only; the
+WORKERFS mount is untouched), `web/tests/spike/spike.spec.ts` (two tests added).
+
+The rules the choice enforces, and why each one exists:
+
+| Rule | Why it exists |
+| --- | --- |
+| A verified cached disc wins over the picked file | the cached one has been hashed piece by piece and its length checked against the manifest; the picked file has been checked for its size and for nothing else |
+| A cache that cannot answer is a fallback, not a failure | the manifest is served by a Cloudflare Function: a local preview, a deploy where the binding is missing, and a phone whose connection dropped mid-download must all still run from the selector |
+| The result says where the disc came from | without `disc_source`, an operator reading a result cannot tell an OPFS run from a selector run, and the two are not the same measurement |
+| `core_load_ms` is measured in the worker, from its start to the `core` message | it is the wait the operator actually has: the four fetches, the module's own download and compile, the runtime's initialisation. Nothing about the run depends on it |
+
+`storage_persisted` is what the browser answers when asked whether this origin's storage is
+persisted, read at the moment of the run. It is reported rather than demanded: a denied
+`persist()` does not fail a run, it means the cached disc may be evicted before the next one.
+
+**Measured.**
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36804319138` (CI, on `75cd4d0`) | **success** | **289 unit tests across 21 files** (was 282 across 20: +7, exactly the new file), 4.96 s; typecheck and build clean; the shell's browser tests pass; deploy skipped without credentials |
+| `36804335543` (Phase 0 — WASM core, on `75cd4d0`) | **success** | job 10 m 43 s (02:07:32 → 02:18:15 UTC); the spike page typechecks and builds with the new module and the OPFS worker in its graph, and **3 Chromium spike tests pass** (673 ms, 256 ms, 554 ms; 3.9 s) |
+| `36804335525` (push CI, on `75cd4d0`) | **success** | same commit |
+
+Local convenience check, **not evidence**: `npm install` is forbidden on this VPS
+(`docs/AGENT_RULES.md` rule 3), so `src/spike` was typechecked with the repository's flags and the
+new test file executed under a vitest borrowed from another tree (4.1.10; this repository pins
+`^2.1.0`) against a scratch copy — 7 passed, and 289 unit tests across 21 files passed there too.
+The runs above are the authority.
+
+**Not in this step.** The download button in `web/spike.html`, its progress line and its delete
+button, and the Chromium tests that need a populated cache: the multi-piece fixture with a short
+last piece, the interrupt-and-resume with an exact `Range`, the corrupt piece, the complete cache
+that downloads nothing, and the run that reaches the expected DOL error with `disc_source=opfs`.
+The OPFS branch of the choice is covered by the unit tests here; the browser end of it arrives
+with the button. The plan's known defects that belong to step 4 are still untouched: the spike
+fixture is still too small to exercise a resume, a private window is still incompatible with a
+persistent cache, and removing `sw.js` from the deploy still does not unregister a service worker
+that is already registered.
+
+**Next step.** Step 4 of PR 4: the button in `web/spike.html` (download into OPFS with a progress
+line, and a delete button), then the Chromium tests over a populated cache, including the
+`disc_source=opfs` run. After PR 4, PR 5 (the `deploy_spike` step) and PR 6
+(`scripts/phase0/go_no_go.py`, S8 of `docs/PHASE0_NEXT.md`, still not written).
