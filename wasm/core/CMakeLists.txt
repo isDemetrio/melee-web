@@ -57,6 +57,19 @@ if(EMSCRIPTEN)
   add_library(offline_core OBJECT ${MELEE_HEADLESS_SOURCES} ${MELEE_SIM_SOURCES})
   target_link_libraries(offline_core PUBLIC core_options)
   target_compile_definitions(offline_core PRIVATE MELEE_HEADLESS=1)
+  # Per-file optimisation experiment (docs/FRAME_TIME_CONSULT.md). The PowerPC runtime and its
+  # interpreter fallback are the likeliest hot translation units in the simulation boundary, and
+  # the shipped executables are built from THIS target: runtime_core above is a compile gate and
+  # contributes no shipped byte, so a flag changed there would move nothing that runs. Only these
+  # two files move to -O2; the rest of the boundary, the generated guest code and the final link
+  # stay at ${MELEE_OPT}, which bounds the size cost to them.
+  #
+  # A source property is appended after the target's own and interface options, so -O2 is the last
+  # -O flag in these two compile commands and wins. That order is an assumption about CMake, and if
+  # it ever stops holding the experiment would silently measure nothing, so the workflow asserts it
+  # against the real compile commands (scripts/phase0/assert_hot_opt.sh).
+  set(MELEE_HOT_SOURCES "${PORT}/runtime/ppc/ppc_runtime.cpp" "${PORT}/runtime/ppc/interp.cpp")
+  set_source_files_properties(${MELEE_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
   foreach(platform IN ITEMS node web)
     add_executable(melee_core_${platform} $<TARGET_OBJECTS:offline_core>)
     target_link_libraries(melee_core_${platform} PRIVATE guest core_options)
