@@ -53,10 +53,14 @@ Vengono prima di tutto perché cambiano l'ordine dei lavori.
    disco, caricati su R2 e messi in cache nel browser uno per uno (`docs/SPEC_PIANO.md`, righe 178–179).
    Qui il disco intero va sul telefono **solo perché il core di Fase 0 legge una ISO**. La scelta
    della sezione 2 è quindi fatta per la misura, e non va trattata come base del prodotto.
-6. **Il 25 MiB per file di Pages non è stato verificato oggi.** Il numero è nel repository
-   (`scripts/phase0/wasm_report.py`, riga 83: `25 * 1024 * 1024` = 26.214.400 byte) ma è stato
-   scritto a partire dalla documentazione. **Da verificare** su
-   `https://developers.cloudflare.com/pages/platform/limits/` prima del primo deploy.
+6. **Il 25 MiB per file di Pages — verificato il 2026-10-01 sulla documentazione.** Il numero è
+   nel repository (`scripts/phase0/wasm_report.py`, riga 83: `25 * 1024 * 1024` = 26.214.400 byte)
+   ed è quello che la pagina dichiara: "The maximum file size for a single Cloudflare Pages site
+   asset is 25 MiB" (`https://developers.cloudflare.com/pages/platform/limits/`, sezione *File
+   size*, letto il 2026-10-01). Il modulo web a `-Oz` è 16.323.255 byte (il file in
+   `/home/hermes/incoming/phase0/spike-dist/spike-core/melee_core_web.wasm`, run `36753728272`,
+   `docs/OPEN_QUESTIONS.md` Q8): sta sotto il limite di 9.891.145 byte. Che Pages accetti il `dist` si vede solo dal deploy (passo 11); il limite non è
+   più un'ipotesi.
 
 Due difetti del repository che il piano corregge (sezione 5), trovati leggendo i file:
 
@@ -200,7 +204,7 @@ vedi sotto) e con il telefono. Nessuno è stato verificato durante la stesura.
 | `Cross-Origin-Opener-Policy: same-origin` e `Cross-Origin-Embedder-Policy: require-corp` su `spike.html` | senza isolamento `performance.now()` è arrotondato e ogni `sim_ms` è quantizzato (`docs/PHASE0_DEVICE_PLAN.md` §0 punto 3) | `web/public/_headers`, già presente e copiato nel `dist` da Vite | `curl -sI …/spike.html` mostra i due header; nel JSON `cross_origin_isolated` è `true` e `timer_resolution_ms` ≤ 0,1 |
 | HTTPS | l'isolamento esiste solo in contesto sicuro | automatico su `pages.dev` | l'indirizzo è `https://` |
 | `Content-Type: application/wasm` sul modulo | lo richiede la compilazione a flusso del browser | `_headers`, regola `/*.wasm` già presente | `curl -sI …/spike-core/melee_core_web.wasm` |
-| **Niente cache immutabile** su `/spike-core/*` | §0, primo difetto | regola aggiunta al `_headers` **del solo deploy spike** dalla workflow | lo stesso `curl` non mostra `immutable`. Come Pages combina due regole che toccano lo stesso header è **da verificare** proprio con questo `curl`; se le unisce, la regola spike usa la sintassi per staccare un header (`! Cache-Control`), anch'essa **da verificare** su `https://developers.cloudflare.com/pages/configuration/headers/` |
+| **Niente cache immutabile** su `/spike-core/*` | §0, primo difetto | regola aggiunta al `_headers` **del solo deploy spike** dalla workflow | lo stesso `curl` deve rispondere `Cache-Control: no-store` **e nient'altro**. Come Pages combina due regole che toccano lo stesso header **è documentato** (`https://developers.cloudflare.com/pages/configuration/headers/`, letto il 2026-10-01): *"An incoming request which matches multiple rules' URL patterns will inherit all rules' headers"*, e un header che arriva da due regole ha i valori **uniti con una virgola**. La sintassi `! Cache-Control` per staccare un header esiste ed è quella usata qui, quindi questo `curl` deve rispondere `no-store` da solo: un valore che porta ancora `immutable` significa che il distacco non ha funzionato |
 | Richieste parziali sul disco | ripresa del download | la Function `/phase0/disc` | `curl -sI -H 'Range: bytes=0-5' …/phase0/disc` → `206` e `Content-Range: bytes 0-5/1459978240` |
 | Dimensione per file | il modulo deve starci | limite di Pages, §1 | il deploy riesce; il log di `wasm_report.py` dice `within_pages_limit: true` per il modulo web |
 | Accesso protetto | spec riga 15; il modulo è derivato dal gioco | Cloudflare Access, applicazione che copre l'indirizzo dell'anteprima | da una finestra senza login si vede la pagina di login Access, non la pagina; `curl` senza token non riceve `200`. Che Access possa coprire gli indirizzi `*.pages.dev` delle anteprime è **da verificare** nel pannello (la middleware stessa lo annota: "Access coverage of custom domains/previews … require deployment verification", `functions/_middleware.ts` riga 56) |
@@ -456,4 +460,4 @@ Alla fine della Fase 0: cancellare il disco dal bucket (o il bucket), togliere i
 - **Niente prova che i tempi vengano davvero da quel device.** La traccia prova che il core ha
   girato correttamente; device e tempi sono dichiarati (`docs/PHASE0_DEVICE_PLAN.md` §5).
 - **Niente verifica dei limiti Cloudflare** fino al primo deploy: tutti quelli marcati "da
-  verificare" in §1 e §3 restano ipotesi finché il passo 11 non li ha controllati.
+  verificare" in §1 e §3 restano ipotesi finché il passo 11 non li ha controllati. **Due eccezioni, 2026-10-01**: quelli che dipendono solo da come Pages è documentato — il limite di 25 MiB per file (§0.6) e la combinazione di due regole `_headers` (§3) — sono verificati sulla documentazione, con le citazioni in quei punti; gli altri (indirizzo dell'anteprima, compressione, copertura di Access su `*.pages.dev`, header delle Functions, binding R2 dell'ambiente *preview*) si vedono solo su un deploy vero.

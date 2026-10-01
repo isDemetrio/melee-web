@@ -1042,3 +1042,35 @@ needs `cloudflared` and a real tunnel, which no runner has. Its output still pri
 
 **Next step.** Unchanged: the device rows. M1 and M2 first (M2 decides), then the OPFS run over the
 real host, which this fix is what makes possible over the device server. O1–O9 stay the operator's.
+
+## The two Cloudflare limits the deploy plan called "da verificare", verified from the documentation (2026-10-01, morning)
+
+`docs/PHASE0_DEPLOY_PLAN.md` §0.6 and the `/spike-core/*` row of its §3 table both ended in
+"**da verificare**" and both named the Cloudflare page that would settle them. Neither needs an
+account, a phone or a deployment, and both were ordered "prima del primo deploy" — the deploy
+being attempted now — so both were read, and the plan's own two claims are the ones that had to be
+checked.
+
+| Claim the plan left open | What the documentation says | What follows |
+| --- | --- | --- |
+| the Pages per-file limit is 25 MiB (§0.6; `scripts/phase0/wasm_report.py:83` uses `25 * 1024 * 1024` = 26.214.400) | *"The maximum file size for a single Cloudflare Pages site asset is 25 MiB"* — `developers.cloudflare.com/pages/platform/limits/`, section *File size*, read 2026-10-01 | the constant is the documented limit, and the web module at `-Oz` is **16.323.255 bytes**, 62% of it, with 9.891.145 bytes to spare |
+| whether two matching `_headers` rules are merged or the later one wins (§3) | *"An incoming request which matches multiple rules' URL patterns will inherit all rules' headers"*; a header set twice has its values **joined with a comma** — `.../pages/configuration/headers/`, read 2026-10-01 | merged, so the `/spike-core/*` rule cannot win by being last; only the detach line can remove the site-wide `immutable` |
+| whether `! Header` detaches a header added by a more pervasive rule (§3) | the same page, section *Detach a header*: prepending the name with an exclamation mark and a space removes a default header or one added by a more pervasive rule | the workflow's `! Cache-Control` line is the documented mechanism, not a guess |
+
+**What this changes for the checks.** §3's post-deploy `curl` on the module now has an exact
+expected value instead of a negative one: `Cache-Control: no-store` **alone** means the detach
+worked, and a value that still carries `immutable` (joined with a comma, which is what Pages does
+with a header set twice) means it did not. The plan's earlier wording — "must not show
+`immutable`" — would have passed a header whose value was `public, max-age=31536000, immutable,
+no-store`.
+
+**Measured.** The module size is the file, not a log line: `melee_core_web.wasm` is 16.323.255
+bytes in `/home/hermes/incoming/phase0/spike-dist/spike-core/`, the `-Oz` web module of run
+`36753728272` (`docs/OPEN_QUESTIONS.md` Q8). No CI run belongs to this step: it changes two
+documents and no code, so the repository's own suites are untouched.
+
+**Not in this step, and still "da verificare".** Everything that only a real deployment can answer:
+the preview address and its format, whether compression is applied to the module, whether Access
+covers `*.pages.dev` previews, whether Functions receive the `_headers` rules, and whether the
+preview environment really gets the R2 binding. §7 now says which items were documentation and
+which are deployment, instead of listing them together.
