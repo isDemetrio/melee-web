@@ -32,8 +32,8 @@ interface GpuCommandEncoder {
 interface GpuDevice {
   createBuffer(descriptor: { size: number; usage: number }): GpuBuffer;
   createCommandEncoder(): GpuCommandEncoder;
-  queue: { submit(buffers: unknown[]): void };
-  lost: Promise<{ message: string }>;
+  queue: { submit(buffers: unknown[]): void; writeBuffer(buffer: GpuBuffer, offset: number, data: Uint8Array): void };
+  lost: Promise<{ message: string; reason?: string }>;
   addEventListener(type: 'uncapturederror', listener: (event: { error: { message: string } }) => void): void;
 }
 interface GpuAdapter { requestDevice(): Promise<GpuDevice> }
@@ -58,20 +58,79 @@ export interface SpikeGpu {
   failure?: string;
   /** Written here: validation errors and device loss, which WebGPU reports without throwing. */
   errors: string[];
+  /** Where the readback dies, for the CI log: see `Diagnostic`. */
+  diagnostic: Diagnostic;
+  /** Written by gx_webgpu.cpp's gxw_open/gxw_copy: the device object it rendered with, and how often. */
+  backendDevice?: GpuDevice | null;
+  backendCopies?: number;
+}
+
+/**
+ * Evidence about the readback failure of runs 36892349174 and 36896537472, where `device lost:
+ * Device was destroyed.` came first and `mapAsync` then aborted with `A valid external Instance
+ * reference no longer exists.` WebGPU calls on a lost device fail silently, so `attached` and
+ * `presented` do not show when the device died; these fields do.
+ *
+ * - `timeline`: milliseconds since this module loaded in the worker, one entry per stage, including
+ *   when `device.lost` resolved and with which reason.
+ * - `probes`: buffer round trips (writeBuffer, then mapAsync) that touch neither the canvas nor the
+ *   core, taken at fixed stages. The stage at which they start failing brackets the cause.
+ * - `realm`: the global scope's constructor at open and at readback (a worker reports
+ *   `DedicatedWorkerGlobalScope`, a page `Window`).
+ */
+export interface Diagnostic {
+  timeline: { atMs: number; event: string }[];
+  probes: { stage: string; result: string }[];
+  realm: { open: string; readback: string | null };
+}
+
+const loadedMs = performance.now();
+const realmName = (): string => (globalThis as { constructor?: { name?: string } }).constructor?.name ?? 'unknown';
+
+/** Record a stage on the timeline. */
+export function mark(gpu: SpikeGpu, event: string): void {
+  gpu.diagnostic.timeline.push({ atMs: Math.round((performance.now() - loadedMs) * 10) / 10, event });
+}
+
+/**
+ * Round-trip four known bytes through a buffer: writeBuffer, then mapAsync. 'ok' when they come
+ * back, otherwise what went wrong. Touches neither the canvas nor the core.
+ */
+export async function probe(gpu: SpikeGpu, stage: string): Promise<void> {
+  const result = await roundTrip(gpu.device);
+  gpu.diagnostic.probes.push({ stage, result });
+  mark(gpu, `probe ${stage}: ${result}`);
+}
+
+async function roundTrip(device: GpuDevice): Promise<string> {
+  const expected = [1, 2, 3, 4];
+  try {
+    const buffer = device.createBuffer({ size: 4, usage: BUFFER_COPY_DST | BUFFER_MAP_READ });
+    live.mapping.add(buffer);
+    try {
+      device.queue.writeBuffer(buffer, 0, new Uint8Array(expected));
+      await buffer.mapAsync(MAP_READ);
+      const bytes = Array.from(new Uint8Array(buffer.getMappedRange().slice(0, 4)));
+      buffer.unmap();
+      return JSON.stringify(bytes) === JSON.stringify(expected) ? 'ok' : `wrong bytes ${JSON.stringify(bytes)}`;
+    } finally {
+      live.mapping.delete(buffer);
+    }
+  } catch (error) {
+    return String(error);
+  }
 }
 
 export interface GpuOpening { gpu: SpikeGpu | null; reason: string }
 
 /**
  * Every GPU object this worker opened, and every buffer with a mapping in flight, reachable from the
- * worker's global scope until the worker ends.
+ * worker's global scope until the worker ends, so a renderer that outlives one synchronous stretch
+ * never depends on what happens to stay referenced from suspended async frames.
  *
- * Without this, once the synchronous stretch of a run is over, the adapter, device and readback
- * buffer are referenced only from suspended async frames and from each other, and the garbage
- * collector may take them while `mapAsync` is pending. CI saw exactly that (run 36892349174):
- * `device lost: Device was destroyed.` -- the reason Dawn reports when a device's last external
- * reference goes, not a `destroy()` call, which nothing here makes -- and then the map aborted with
- * `A valid external Instance reference no longer exists.`
+ * This was first added as the fix for the readback failure of run 36892349174. It was not: run
+ * 36896537472 failed identically with it in place, so collection is not the cause. It stays because
+ * it is right for a long-lived renderer; the cause is what `Diagnostic` is for.
  */
 const live = { opened: new Set<SpikeGpu>(), mapping: new Set<GpuBuffer>() };
 
@@ -87,6 +146,9 @@ export async function openGpu(canvas: OffscreenCanvas): Promise<GpuOpening> {
     const adapter = (await gpu.requestAdapter()) ?? (await gpu.requestAdapter({ forceFallbackAdapter: true }));
     if (!adapter) return { gpu: null, reason: 'requestAdapter returned null, hardware and fallback' };
     const device = await adapter.requestDevice();
+    const deviceMs = performance.now() - loadedMs;
+    // Before the canvas is touched: separates the instance from the canvas (`Diagnostic`).
+    const beforeCanvas = await roundTrip(device);
     const context = (canvas as unknown as { getContext(id: 'webgpu'): GpuCanvasContext | null })
       .getContext('webgpu');
     if (!context) return { gpu: null, reason: 'the canvas has no webgpu context' };
@@ -95,10 +157,21 @@ export async function openGpu(canvas: OffscreenCanvas): Promise<GpuOpening> {
       device, format: 'rgba8unorm', alphaMode: 'opaque',
       usage: TEXTURE_RENDER_ATTACHMENT | TEXTURE_COPY_SRC | TEXTURE_COPY_DST,
     });
-    const opened: SpikeGpu = { gpu, adapter, canvas, device, context, format: 'rgba8unorm', errors: [] };
+    const opened: SpikeGpu = {
+      gpu, adapter, canvas, device, context, format: 'rgba8unorm', errors: [],
+      diagnostic: {
+        timeline: [{ atMs: Math.round(deviceMs * 10) / 10, event: 'device created' }],
+        probes: [{ stage: 'after device, before canvas', result: beforeCanvas }],
+        realm: { open: realmName(), readback: null },
+      },
+    };
     live.opened.add(opened);
+    mark(opened, 'device configured');
     device.addEventListener('uncapturederror', (event) => { opened.errors.push(event.error.message); });
-    void device.lost.then((info) => { opened.errors.push(`device lost: ${info.message}`); });
+    void device.lost.then((info) => {
+      opened.errors.push(`device lost: ${info.message}`);
+      mark(opened, `device lost (reason ${info.reason ?? 'none'}): ${info.message}`);
+    });
     return { gpu: opened, reason: 'device ready' };
   } catch (error) {
     return { gpu: null, reason: `WebGPU unavailable: ${error}` };
@@ -128,6 +201,7 @@ export function fillCanvas(gpu: SpikeGpu, rgba: readonly number[]): void {
  */
 export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] | null> {
   let buffer: GpuBuffer | null = null;
+  gpu.diagnostic.realm.readback = realmName();
   try {
     buffer = gpu.device.createBuffer({ size: 256, usage: BUFFER_COPY_DST | BUFFER_MAP_READ });
     live.mapping.add(buffer);
@@ -135,12 +209,15 @@ export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] |
     encoder.copyTextureToBuffer({ texture: gpu.context.getCurrentTexture(), origin: [x, y] },
       { buffer, bytesPerRow: 256 }, [1, 1]);
     gpu.device.queue.submit([encoder.finish()]);
+    mark(gpu, 'readback submitted');
     await buffer.mapAsync(MAP_READ);
+    mark(gpu, 'readback mapped');
     const pixel = Array.from(new Uint8Array(buffer.getMappedRange().slice(0, 4)));
     buffer.unmap();
     return pixel;
   } catch (error) {
     gpu.errors.push(`readback: ${error}`);
+    mark(gpu, `readback failed: ${error}`);
     return null;
   } finally {
     if (buffer) live.mapping.delete(buffer);

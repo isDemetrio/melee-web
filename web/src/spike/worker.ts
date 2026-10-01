@@ -5,7 +5,7 @@
 // WebGPU device for it before the simulation starts and attaches the core's WebGPU backend
 // (wasm/render/gx_webgpu.cpp). Without a canvas, or when any of that fails, the run is exactly the
 // headless run it always was; the reason is reported, never thrown.
-import { fillCanvas, openGpu, readPixel, type SpikeGpu } from './gpu.js';
+import { fillCanvas, mark, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
 
 interface CoreFS {
   mkdir(path: string): void;
@@ -72,6 +72,14 @@ interface RenderReport {
   pixel: number[] | null;
   failure: string | null;
   errors: string[];
+  /** Where a failing readback died (gpu.ts, `Diagnostic`), plus who held which object. */
+  diagnostic: (Diagnostic & {
+    /** `Module.gxWebgpu` is the object this worker opened: the backend saw this worker's device. */
+    moduleSawThisGpu: boolean;
+    /** The device gx_webgpu.cpp copied with is the device the readback uses, and how many copies. */
+    backendUsedThisDevice: boolean;
+    backendCopies: number;
+  }) | null;
 }
 
 /** Attach the core's WebGPU backend to an opened device. Never throws: false and a reason instead. */
@@ -96,6 +104,12 @@ async function report(core: MeleeCore, gpu: SpikeGpu | null, attached: { attache
     pixel: pixel ? await pixel : null,
     failure: gpu?.failure ?? null,
     errors: gpu?.errors ?? [],
+    diagnostic: gpu ? {
+      ...gpu.diagnostic,
+      moduleSawThisGpu: (core as unknown as { gxWebgpu?: unknown }).gxWebgpu === gpu,
+      backendUsedThisDevice: gpu.backendDevice === gpu.device,
+      backendCopies: gpu.backendCopies ?? 0,
+    } : null,
   };
 }
 
@@ -118,15 +132,23 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     // the options object is the module's `Module`, where the backend looks for it.
     const opening = canvas ? await openGpu(canvas) : null;
     const gpu = opening?.gpu ?? null;
+    // Diagnostic probes (gpu.ts, `Diagnostic`): before the module exists, and once it does.
+    if (gpu) await probe(gpu, 'after device, before core');
     const core = await factory(gpu ? { print: log, printErr: log, gxWebgpu: gpu } : { print: log, printErr: log });
     const coreLoadMs = performance.now() - startedMs;
     scope.postMessage({ type: 'core', commit: meta.commit, opt: meta.opt, coreLoadMs });
+    if (gpu) { mark(gpu, 'core instantiated'); await probe(gpu, 'after core, before attach'); }
     const attached = opening ? attach(core, gpu, opening.reason) : null;
+    if (gpu) mark(gpu, `attach returned ${attached?.attached}`);
     if (selftest) {
       // Sentinel, decoder, readback: one synchronous stretch, so all three see the same canvas texture.
       if (gpu && attached?.attached) fillCanvas(gpu, SENTINEL);
       const presented = core._gx_webgpu_selftest ? core._gx_webgpu_selftest(selftest.argb >>> 0, selftest.copies) : null;
+      if (gpu) mark(gpu, `selftest returned ${presented}`);
       const pixel = gpu && attached?.attached ? readPixel(gpu) : null;
+      // Started in the same task as the readback, on a buffer that never touches the canvas.
+      const sameTask = gpu ? probe(gpu, 'same task as the readback') : null;
+      if (sameTask) await sameTask;
       const render = attached ? await report(core, gpu, attached, pixel) : null;
       scope.postMessage({ type: 'selftest', presented, sentinel: SENTINEL, render });
       return;

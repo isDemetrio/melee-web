@@ -40,6 +40,7 @@ EM_JS(int, gxw_open, (int width, int height), {
       size: [width, height], format: gpu.format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
+    gpu.backendDevice = gpu.device;
     return 1;
   } catch (error) {
     gpu.failure = "open: " + error;
@@ -73,6 +74,8 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
       gpu.lastClearArgb = c;
     }
     gpu.device.queue.submit([encoder.finish()]);
+    gpu.backendCopies = (gpu.backendCopies | 0) + 1;
+    if (gpu.device !== gpu.backendDevice) gpu.backendDevice = null;
     return 1;
   } catch (error) {
     gpu.failure = "copy: " + error;

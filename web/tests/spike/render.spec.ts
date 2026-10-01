@@ -37,6 +37,7 @@ interface SelftestResult {
     pixel: number[] | null;
     failure: string | null;
     errors: string[];
+    diagnostic: unknown;
   } | null;
 }
 
@@ -57,7 +58,8 @@ test('the WebGPU backend presents the clear colour on the canvas', async ({ page
   const result = await selftest(page, `gx-selftest=${COLOUR.toString(16)}&copies=2`);
   expect(result.error).toBeUndefined();
   expect(result.render?.attached, JSON.stringify(result.render)).toBe(true);
-  expect(result.render?.errors).toEqual([]);
+  // The message carries the worker's timeline and probes (gpu.ts, `Diagnostic`) into the CI log.
+  expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
   expect(result.render?.failure).toBeNull();
   expect(result.presented).toBe(2);
   expect(result.render?.lastClearArgb).toBe(COLOUR);
@@ -69,7 +71,8 @@ test('one XFB copy presents the EFB as it was before its clear', async ({ page }
   const result = await selftest(page, `gx-selftest=${COLOUR.toString(16)}&copies=1`);
   expect(result.error).toBeUndefined();
   expect(result.render?.attached, JSON.stringify(result.render)).toBe(true);
-  expect(result.render?.errors).toEqual([]);
+  // The message carries the worker's timeline and probes (gpu.ts, `Diagnostic`) into the CI log.
+  expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
   expect(result.render?.failure).toBeNull();
   expect(result.presented).toBe(1);
   // The copy overwrote the sentinel with the EFB's raw bytes: zero, alpha included. alphaMode
