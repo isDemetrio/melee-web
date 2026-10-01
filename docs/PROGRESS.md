@@ -1224,3 +1224,42 @@ Chromium is not established. Change: the backend's XFB target is pluggable. CI r
 output back from an offscreen texture (`?gx-selftest…&target=texture`), and the canvas path is
 asserted in CI without a pixel. The canvas pixel test runs with `SPIKE_CANVAS_READBACK=1`, and a
 `?canvas` run reports it as `render.readback`, for a real device to settle.
+
+## The WebGPU toolchain probe answers — and one of its answers was the harness (2026-10-01, night)
+
+Branch `render/webgpu-probe`, PR #47. This is the first step the renderer's plan named: the previous
+section ends "run the probe (PR #47) first", because `docs/RENDERER_MAP.md` puts a WebGPU backend at
+the top of the renderer and the plan rested on two assumptions that were cheap to check once and
+expensive to assume for a whole backend. Both are now measured. The job is `WebGPU toolchain probe`
+of run `36912403273` (headless Chromium on a standard runner, adapter `google swiftshader`, two
+minutes), and its first two runs of the day (`36876533202`, `36883720514`, `36895365217`,
+`36897513498`) are why the launch flags are what they are.
+
+| Question | Answer | Evidence, run `36912403273` |
+| --- | --- | --- |
+| Does the pinned Emscripten (4.0.23) build and link a unit that includes `<webgpu/webgpu.h>` and calls into it, with `--use-port=emdawnwebgpu`? | **Yes** | the compile step; the page then loads the module and collects `cxx: instance created` / `cxx: instance released, toolchain ok` |
+| Does the browser this repository's CI can run give the renderer a device it can render with? | **Yes, on the backend path** — adapter `google swiftshader`, a device, `round_trip: "ok"`, and a texture cleared to red read back as `[255,0,0,255]` | `adapter`, `round_trip`, `readback` |
+| Can a canvas pixel be read back in CI? | **No** — the device does not survive the canvas frame's commit | `canvas: "configured and cleared"` with `canvas_commit` reporting the loss 1.2 ms after the task that committed the frame; `web/tests/spike/render.spec.ts` "THE GAP" records the same failure and already routes around it with an offscreen texture target |
+
+**The zero that was not an answer.** The first worker version read `[0,0,0,0]` from a texture it had
+just cleared to red, and the cause was this probe's own copy, not the GPU: the whole 4x4 texture with
+`bytesPerRow: 256` into a 256-byte buffer is a copy WebGPU rejects — four rows need
+`256 * 3 + 16 = 784` bytes — and it rejects it with a validation error, which neither throws nor stops
+the run. The buffer stayed zero-initialised, so the harness read a plausible `[0,0,0,0]` off it and
+the job reported a GPU failure that had not happened. Three changes in
+`wasm/probe/webgpu_probe_worker.js`, all of them about not confusing a silent rejection with a
+measurement: the copy is now the one `web/src/spike/gpu.ts`'s `readPixel` makes and CI returns the
+colour from (one pixel, `bytesPerRow: 256`, a 256-byte buffer); an `uncapturederror` listener reports
+a rejected command instead of letting it read as an answer; and a buffer round trip that touches
+neither texture nor canvas runs first, so "the device is dead" and "the copy is wrong" cannot be
+confused again. `wasm/probe/check.mjs` requires those three and the canvas configure, and records the
+canvas commit without requiring it — the canvas pixel is left to a real device, exactly as the
+renderer's own tests leave it.
+
+**What this does not answer.** Q10(b) in `docs/OPEN_QUESTIONS.md`: whether the port can *adopt* a
+device acquired in JavaScript, so the backend owns the instance instead of reaching the device
+through `EM_JS`. The probe proves the port builds, links and creates an instance of its own; the
+import is a different question and is not attempted here.
+
+**Next step.** Unchanged and now unblocked on this side: the operator's call on Q10 (a) before
+renderer step 2, and (b) with this probe's answer in hand.

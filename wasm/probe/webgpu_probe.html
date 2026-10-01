@@ -14,8 +14,10 @@
     <p>
       Two questions, both answered into <code>window.__probe</code> for the CI check to read:
       does this browser expose a usable WebGPU adapter, device and readback (<code>adapter</code>,
-      <code>device</code>, <code>readback</code>), and can the pinned Emscripten build and run a
-      WebGPU translation unit (<code>cxx</code>)?
+      <code>device</code>, <code>round_trip</code>, <code>readback</code>), and can the pinned
+      Emscripten build and run a WebGPU translation unit (<code>cxx</code>)? The canvas is
+      configured, cleared and submitted, and what its commit did to the device is recorded in
+      <code>canvas_commit</code> rather than required — see the worker's header.
     </p>
     <canvas id="probe" width="64" height="64"></canvas>
     <pre id="out">running</pre>
@@ -26,6 +28,11 @@
       // boundary on the page's main thread, while this repository's own CI readback -- in a worker,
       // in this same browser, with these same two launch flags -- gets the colour back. The C++
       // half is the page's, because it is a module load and nothing else.
+      //
+      // Run 36912403273 is why the worker's readback is not simply trusted either: it answered
+      // [0,0,0,0] from a copy WebGPU had rejected, because a rejected copy raises a validation
+      // error and a validation error is silent. The worker's header carries the whole finding; this
+      // page only collects what the worker answered.
       const out = document.getElementById('out');
       const result = {
         timeline: [],
@@ -34,8 +41,11 @@
         cxx_lines: [],
         adapter: null,
         device: null,
+        round_trip: null,
         readback: null,
         canvas: null,
+        canvas_commit: null,
+        errors: [],
         device_lost: null,
         error: null,
       };

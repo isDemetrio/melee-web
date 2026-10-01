@@ -23,6 +23,23 @@
 // this repository's own CI readback gets its colour back (runs 36892349174, 36896537472, 36898914442,
 // 36901465493). The probe answers in the realm the renderer runs in, or it answers nothing.
 //
+// THE ZEROS WERE THE HARNESS (run 36912403273). In the worker the readback still read [0,0,0,0], and
+// the cause was this probe's own copy, not the GPU: the whole 4x4 texture copied with
+// `bytesPerRow: 256` into a 256-byte buffer is a copy WebGPU rejects (four rows need 256 * 3 + 16 =
+// 784 bytes), and it rejects it with a validation error, which neither throws nor stops the run. The
+// buffer stayed zero and the probe read a plausible [0,0,0,0] off it. The copy is now the one
+// `gpu.ts`'s `readPixel` makes and CI returns the colour from, the probe reports uncaptured GPU
+// errors instead of reading them as answers, and it round-trips a buffer first, so "the device is
+// dead" and "the copy is wrong" cannot be confused again.
+//
+// WHAT IS REQUIRED, AND WHAT IS ONLY MEASURED. Required: the C++ half reports the toolchain ok, a
+// device exists, the texture readback is the colour the probe cleared to, the canvas configures and
+// clears, and no uncaptured error was raised. Measured but not required: whether the device survives
+// the canvas frame's commit. CI's Chromium does not survive it -- run 36912403273 lost it 1.2 ms
+// after the task that committed the frame, the same failure `render.spec.ts` records as "THE GAP" and
+// routes around with an offscreen texture target -- and the canvas pixel is therefore left to a real
+// device, exactly as the renderer's own tests leave it.
+//
 // The two configurations are the remaining variable: Playwright launches the `chromium-headless-shell`
 // build for `headless: true` unless a channel is named (microsoft/playwright#33566), while
 // `channel: 'chromium'` selects the new headless mode on the full Chromium build. The check passes if
@@ -117,10 +134,15 @@ function shortfalls(result) {
   }
   if (result.navigator_gpu !== true) missing.push('navigator.gpu is undefined in this browser');
   if (!result.device) missing.push(`no usable device (adapter: ${JSON.stringify(result.adapter)})`);
+  if (result.round_trip !== 'ok') {
+    missing.push(`a buffer round trip that touches no texture came back ${JSON.stringify(result.round_trip)}`);
+  }
   if (JSON.stringify(result.readback) !== JSON.stringify(RED)) {
     missing.push(`the red clear came back as ${JSON.stringify(result.readback)}, expected ${JSON.stringify(RED)}`);
   }
   if (result.canvas !== 'configured and cleared') missing.push(`canvas: ${JSON.stringify(result.canvas)}`);
+  // A rejected command is a validation error, and a validation error is not an answer.
+  if (result.errors?.length > 0) missing.push(`uncaptured GPU errors: ${JSON.stringify(result.errors)}`);
   if (result.pageErrors.length > 0) missing.push(`page errors: ${JSON.stringify(result.pageErrors)}`);
   return missing;
 }
@@ -132,8 +154,10 @@ function diagnostics(result) {
     `realm: ${JSON.stringify(result.realm)}`,
     `timeline: ${JSON.stringify(result.timeline)}`,
     `adapter: ${JSON.stringify(result.adapter)}; device: ${JSON.stringify(result.device)}`,
+    `buffer round trip: ${JSON.stringify(result.round_trip)}`,
     `readback: ${JSON.stringify(result.readback)}`,
-    `canvas: ${JSON.stringify(result.canvas)}`,
+    `canvas: ${JSON.stringify(result.canvas)}; commit: ${JSON.stringify(result.canvas_commit)}`,
+    `uncaptured errors: ${JSON.stringify(result.errors)}`,
     `device lost: ${JSON.stringify(result.device_lost)}`,
     `error: ${JSON.stringify(result.error)}`,
   ];
@@ -166,3 +190,4 @@ console.log('PROBE OK');
 console.log(`  configuration: ${winner.name}`);
 console.log(`  browser: ${winner.browser_version} (${winner.user_agent})`);
 console.log(`  realm: ${winner.realm}; adapter: ${winner.adapter}; readback: ${JSON.stringify(winner.readback)}; canvas: ${winner.canvas}`);
+console.log(`  canvas commit: ${winner.canvas_commit}`);

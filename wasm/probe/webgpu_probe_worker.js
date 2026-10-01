@@ -15,10 +15,24 @@
 // 36896537472, 36898914442, 36901465493). The renderer runs in a worker too, so this is also the
 // realm the probe's answer has to hold in.
 //
+// THE ZEROS WERE THIS HARNESS, NOT THE BROWSER (run 36912403273). In the worker the readback still
+// came back [0,0,0,0], and the cause was not the GPU: this file copied the whole 4x4 texture with
+// `bytesPerRow: 256` into a 256-byte buffer — four rows need 256 * 3 + 16 = 784 bytes — and WebGPU
+// rejects that copy with a validation error, which does not throw. The buffer stayed
+// zero-initialised and the probe read a plausible [0,0,0,0] off it, indistinguishable from a GPU
+// that ran the clear and returned nothing. Three things follow, all below: the copy is now the one
+// `gpu.ts`'s `readPixel` makes and CI returns the colour from (one pixel, `bytesPerRow: 256`, a
+// 256-byte buffer); a validation error is reported instead of being read as a GPU result
+// (`uncapturederror`); and a buffer round trip that touches neither texture nor canvas runs first, so
+// "the device is dead" and "the copy is wrong" cannot be confused again.
+//
 // What the worker cannot do here is read a canvas pixel back: `gpu.ts` records that the device does
 // not survive the end of the first task that takes a canvas texture (run 36898914442, "THE GAP" in
-// render.spec.ts), so the canvas is configured and cleared and its pixel is left to a real device.
-// The texture readback below is the same backend path with only the canvas commit removed.
+// render.spec.ts). Run 36912403273 reproduced that in the worker as well — the canvas was configured,
+// cleared and submitted, and the device was lost when the task that committed its frame ended — so
+// the canvas is configured, cleared and submitted here, its commit is recorded as a measurement
+// (`canvas_commit`), and its pixel is left to a real device. The texture readback is the same backend
+// path with only the canvas commit removed, and that is what the check requires.
 
 const TIMEOUT_MS = 20000;
 
@@ -27,8 +41,11 @@ const result = {
   timeline: [],
   adapter: null,
   device: null,
+  round_trip: null,
   readback: null,
   canvas: null,
+  canvas_commit: null,
+  errors: [],
   device_lost: null,
   error: null,
 };
@@ -45,7 +62,25 @@ const withTimeout = (promise, label) =>
     ),
   ]);
 
-/** Clear a 4x4 texture to `colour` and read pixel (0, 0) back off the GPU. */
+/**
+ * Round-trip four known bytes through a buffer: writeBuffer, then mapAsync. Touches neither the
+ * texture nor the canvas, so it separates "the device is dead" from "the copy is wrong".
+ */
+async function roundTrip(device) {
+  const expected = [1, 2, 3, 4];
+  const buffer = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  self.__gpu.buffers.push(buffer);
+  device.queue.writeBuffer(buffer, 0, new Uint8Array(expected));
+  await withTimeout(buffer.mapAsync(GPUMapMode.READ), 'mapAsync (round trip)');
+  const bytes = Array.from(new Uint8Array(buffer.getMappedRange().slice(0, 4)));
+  buffer.unmap();
+  return JSON.stringify(bytes) === JSON.stringify(expected) ? 'ok' : `wrong bytes ${JSON.stringify(bytes)}`;
+}
+
+/** Clear a 4x4 texture to `colour` and read its far corner back off the GPU. */
 async function clearAndRead(device, colour) {
   const size = 4;
   const texture = device.createTexture({
@@ -57,6 +92,7 @@ async function clearAndRead(device, colour) {
     size: 256,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
+  self.__gpu.buffers.push(buffer);
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
     colorAttachments: [
@@ -64,7 +100,14 @@ async function clearAndRead(device, colour) {
     ],
   });
   pass.end();
-  encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: 256 }, [size, size]);
+  // One pixel at the far corner, `bytesPerRow: 256`, a 256-byte buffer: exactly the copy
+  // `web/src/spike/gpu.ts` makes in `readPixel` and CI returns the colour from. Copying all four
+  // rows into this buffer is the rejected copy the header describes, and it reads back as zeros.
+  encoder.copyTextureToBuffer(
+    { texture, origin: [size - 1, size - 1] },
+    { buffer, bytesPerRow: 256 },
+    [1, 1],
+  );
   device.queue.submit([encoder.finish()]);
   await withTimeout(buffer.mapAsync(GPUMapMode.READ), 'mapAsync');
   const bytes = new Uint8Array(buffer.getMappedRange().slice(0, 4));
@@ -93,19 +136,28 @@ self.onmessage = async (event) => {
           : 'present';
         const device = await withTimeout(adapter.requestDevice(), 'requestDevice');
         // Rooted for the worker's lifetime, as `web/src/spike/gpu.ts` does.
-        self.__gpu = { adapter, device };
+        self.__gpu = { adapter, device, buffers: [] };
         result.device = device !== null && device !== undefined;
+        // WebGPU reports a rejected command as a validation error, and a validation error neither
+        // throws nor stops the run: without this listener a rejected copy is read as an answer.
+        device.addEventListener('uncapturederror', (event) => {
+          result.errors.push(event.error.message);
+          mark(`uncaptured error: ${event.error.message}`);
+        });
         device.lost.then((info) => {
           result.device_lost = `${info.reason}: ${info.message}`;
           mark(`device lost: ${info.reason}: ${info.message}`);
         });
         mark('device acquired');
 
+        result.round_trip = await withTimeout(roundTrip(device), 'the buffer round trip');
+        mark(`buffer round trip: ${result.round_trip}`);
+
         result.readback = await withTimeout(clearAndRead(device, { r: 1, g: 0, b: 0, a: 1 }), 'the texture readback');
         mark(`texture readback: ${JSON.stringify(result.readback)}`);
 
-        // The path the renderer actually needs: a canvas configured for WebGPU, cleared. The pixel
-        // is not read back — see the header.
+        // The path the renderer actually needs: a canvas configured for WebGPU, cleared, submitted.
+        // The pixel is not read back -- see the header -- and the commit is recorded instead.
         const canvas = event.data?.canvas;
         if (!canvas) {
           result.canvas = 'no canvas was transferred';
@@ -129,9 +181,17 @@ self.onmessage = async (event) => {
           });
           pass.end();
           device.queue.submit([encoder.finish()]);
-          await withTimeout(device.queue.onSubmittedWorkDone(), 'onSubmittedWorkDone');
+          // Set before the await: the three calls above are the answer, and the await below is the
+          // canvas frame's commit, which is where CI's Chromium loses the device.
           result.canvas = 'configured and cleared';
           mark('canvas configured and cleared');
+          try {
+            await withTimeout(device.queue.onSubmittedWorkDone(), 'onSubmittedWorkDone');
+            result.canvas_commit = 'the device survived the canvas commit';
+          } catch (error) {
+            result.canvas_commit = `the device did not survive the canvas commit: ${error}`;
+          }
+          mark(result.canvas_commit);
         }
       }
     }
