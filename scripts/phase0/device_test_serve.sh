@@ -64,8 +64,15 @@ cloudflared=$(command -v cloudflared || echo "$HOME/.local/bin/cloudflared")
 
 # A password a phone keyboard can type: lowercase letters and digits only. Punctuation is what
 # makes these logins fail on a phone, and the address is public for as long as this runs.
+# Ten characters exactly, drawn from /dev/urandom. The earlier version filtered a single 64-byte
+# read, which averages about eight usable characters and once produced two: measured over 200
+# draws, 110 were shorter than ten and the shortest was two, so the public address could be
+# guarded by a two-character password. The truncation is done in the shell rather than by a
+# second head in the pipeline, so no stage can be killed by SIGPIPE under pipefail.
 if [ -z "$password" ]; then
-  password=$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 10)
+  password=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc "a-z0-9")
+  password=${password:0:10}
+  [ ${#password} -eq 10 ] || { echo "could not draw a password from /dev/urandom" >&2; exit 2; }
 fi
 
 work=$(mktemp -d)
@@ -138,7 +145,13 @@ cat <<EOF
 
   spike page   $url/spike.html
   disc         $url/disc.iso
-$manifest_line  user         fabri
+EOF
+# The manifest line goes on a line of its own, and only when the route answered. It used to be
+# interpolated into the heredoc line that prints the user field, so a run with a manifest printed
+# "manifest ... user ..." on one line.
+if [ -n "$manifest_line" ]; then printf "%s\n" "$manifest_line"; fi
+cat <<EOF
+  user         fabri
   password     $password
 
   On the phone: open the page, let it take the disc from the server, run the three runs and send

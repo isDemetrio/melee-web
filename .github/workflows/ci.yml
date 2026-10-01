@@ -55,6 +55,12 @@ jobs:
         # ends in a refusal or in a dry run, so this needs no disc image and executes nothing.
         run: bash scripts/tests/test_phase0_runner.sh
 
+      - name: Device tunnel guards
+        # device_test_serve.sh starts the spike server and a cloudflared tunnel for a device
+        # session. cloudflared is a stub there and the disc is a sparse zero file, so no tunnel,
+        # no ISO and no game data is involved.
+        run: bash scripts/tests/test_device_test_serve.sh
+
       - name: Validate workflow files
         run: |
           set -euo pipefail
