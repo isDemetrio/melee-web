@@ -41,6 +41,17 @@ endif()
 add_library(guest STATIC ${GUEST_SOURCES}
   "${MELEE_GEN}/function_names.cpp" "${MELEE_GEN}/gecko_data.cpp")
 target_link_libraries(guest PUBLIC core_options)
+# Per-file optimisation experiment, second step (docs/FRAME_TIME_CONSULT.md): the generated guest
+# code is the bulk of the module and the bulk of the work, and a CPU profile of a 600-frame run
+# puts 53% of the sampled time in a single function with the process 99.4% busy, so this is where
+# the next measurable gain has to come from. Everything the guest calls stays at ${MELEE_OPT}.
+#
+# This is the experiment that spends the headroom wasm-opt bought: Pages allows 26,214,400 bytes
+# per file, the shipped module is 15.2 MB after post-processing, and -O2 on these units is expected
+# to grow them. The acceptance rule is unchanged: the size ceiling, the 2400-checkpoint trace gate,
+# and a measured gain.
+set_source_files_properties(${GUEST_SOURCES} "${MELEE_GEN}/function_names.cpp" "${MELEE_GEN}/gecko_data.cpp"
+  PROPERTIES COMPILE_OPTIONS "-O2")
 # P0-05 compile gate for the exact proposed upstream component boundary.
 # The proven offline executable below uses the SAME host/FIFO/services as native/.
 add_library(runtime_core STATIC

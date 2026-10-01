@@ -119,7 +119,7 @@ jobs:
           # mechanism is that CMake appends source options after the target's own and interface
           # options. Read the real compile commands instead of trusting that ordering: if it ever
           # changes, -Oz would win and the experiment would measure nothing (docs/FRAME_TIME_CONSULT.md).
-          bash scripts/phase0/assert_hot_opt.sh "$RUNNER_TEMP/wasm/compile_commands.json" -O2 \
+          bash scripts/phase0/assert_hot_opt.sh "$RUNNER_TEMP/wasm/compile_commands.json" -O2 "$RUNNER_TEMP/generated" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           SECONDS=0
           cmake --build "$RUNNER_TEMP/wasm" --target guest runtime_core melee_core_wasm sha1_test --parallel "$BUILD_JOBS"
