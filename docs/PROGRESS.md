@@ -1268,3 +1268,33 @@ import is a different question and is not attempted here.
 
 **Next step.** Unchanged, and now unblocked on this side: the operator's call on Q10 (a) before
 renderer step 2, and (b) with this probe's answer in hand.
+
+## The deploy plan's Cloudflare numbers are read, not assumed (2026-10-01, night)
+
+`docs/PHASE0_DEPLOY_PLAN.md` §1's limits table ended seven rows in "**da verificare**", each naming
+the page that would settle it, and §7 said they stayed hypotheses until the first deploy. None of
+the seven needed an account, a credential or a device — they were documentation questions — so they
+were read on 2026-10-01 and the plan now carries the answer and the quote.
+
+| Row | Value | Source |
+| --- | --- | --- |
+| Pages: maximum size per file | 25 MiB | `pages/platform/limits/` |
+| Pages: files per site | 20.000 (Free) | same page |
+| Pages Functions: requests per day | 100.000/day, 10 ms CPU (Workers Free) | `workers/platform/limits/`, plus the Pages line that binds Functions to the Workers quota |
+| `wrangler r2 object put` | 315 MB per object, one object at a time | `r2/objects/upload-objects/` |
+| R2: object size, single upload | 5 TiB per object; 5 GiB single PUT; 4,995 TiB multipart in up to 10.000 parts | `r2/platform/limits/` |
+| R2 free tier | 10 GB-month, 1M Class A, 10M Class B, egress free | `r2/pricing/` |
+| Access free | 50 users | `cloudflare.com/zero-trust/products/access` |
+
+**What the numbers change.** The disc is 1,36 GiB, which is inside the documented single-PUT limit
+(5 GiB) but outside the range R2's own guide recommends for a single PUT (under ~100 MB), so the
+documented path for a file that size is multipart — what `rclone` already does. It fits the R2 free
+tier (10 GB-month), so keeping it in the bucket costs nothing while the measurement is open, and 88
+Class B reads per full download sit far inside the 10 million per month. The two local sizes were
+measured, not estimated: the spike `dist` is 21 files / 18.005.796 bytes (13 files / 268.162 bytes
+without `spike-core` and the source maps), and the web module at `-Oz` is 16.323.255 bytes, read
+from run `36743835141`'s `wasm_report.py` output — the log line §0.3 asked for. Nothing was
+deployed, no account was touched, no game data moved, and no source file changed.
+
+**Next step.** Unchanged, with one fewer unknown: the device rows (M1, M2, M5) and O1-O10 are the
+operator's, and the renderer's step 2 waits on Q10(a). No autonomous step of the plan is left open.
