@@ -167,3 +167,43 @@ Android row. What that does and does not settle:
 
 **Not blocking**: the tailnet test path (D in `docs/PHASE0_DEPLOY_PLAN.md` §2) needs no
 Cloudflare credentials, so the iPhone run can start before Q3/O1 are answered.
+
+## Q10 — The renderer after step 1: where frames come from, who owns the device, when a frame is shown
+
+Raised 2026-10-01 by the WebGPU step 1 branch (`render/webgpu-step1`). Step 1 itself is not blocked
+by any of the three: it presents the frame's EFB copies and clears, and each choice below was made
+the smallest way and is reversible. Step 2 (draws) is blocked by (a), and (c) decides whether a real
+run shows more than its last frame.
+
+**(a) Where the web build's frames come from.** The shipped modules do not compile
+`port/runtime/gx/gx_core.cpp` at all: `native/core_sources.cmake` puts `native/headless_fifo.cpp` in
+its place, a decoder that consumes the FIFO's bytes and drops everything a renderer needs
+(`headless_fifo.cpp`, "Replaces vertex decoding, texture snapshots and draw observation").
+`gx_core.cpp` is compiled only in `wasm/core/CMakeLists.txt`'s `runtime_core` compile gate, which
+links into nothing. Step 1 records EFB copies in `headless_fifo.cpp` behind a null-by-default
+backend pointer. Draws need far more of `gx_core.cpp` (`decode_vertices`, XF/CP state, texture
+snapshots). Options:
+
+1. Link `gx_core.cpp` into the web module in place of `headless_fifo.cpp`. One decoder, the port's
+   own; but it is a change to the simulation path (it writes guest memory at the XFB copy, takes
+   texture snapshots through `ppc::watch_ram_range`, logs), its link closure (`render_observer`,
+   `native_pose_bridge`, `slippi_online`, the settings boundary of patch 0007) has never been linked
+   here, and the 2400-checkpoint comparison would have to pass again before anything else.
+2. Keep growing `headless_fifo.cpp`'s recording, display-only, one priority at a time. The
+   simulation path never changes; but it duplicates `gx_core.cpp`'s decoding and can drift from it.
+
+**(b) Who owns the GPU objects.** The brief for step 1 asked for a backend that owns the instance,
+adapter and device. In step 1 the worker acquires them in JavaScript (`web/src/spike/gpu.ts`) and the
+C++ backend reaches them through `EM_JS` (`wasm/render/gx_webgpu.cpp`). Reason: `requestAdapter` and
+`requestDevice` resolve only after the event loop turns, the simulation is one synchronous
+`callMain`, and Asyncify is ruled out for the simulation path (`docs/AGENT_RULES.md`). The other
+option is `<webgpu/webgpu.h>` with `--use-port=emdawnwebgpu`, which still needs the device acquired
+before `callMain` and imported into C++ (whether the pinned port exposes such an import is unknown —
+needs investigation), and rests on the toolchain probe, PR #47, which has not run.
+
+**(c) When a frame reaches the screen.** A canvas transferred to a worker is committed when the
+worker's task ends, and a run is one task, so a `?canvas` run shows only its last frame. Showing
+every frame needs either the simulation to return to the event loop once per retrace (a change to
+how the core is driven, not to the renderer) or a presentation thread fed with frames over shared
+memory (the module is built `MELEE_SINGLE_THREAD=1` today). Not needed to prove step 1; needed for
+anything a player would look at.

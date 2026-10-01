@@ -9,6 +9,11 @@
 <p id="core"></p><p id="status"></p><pre id="log"></pre><pre id="stats"></pre><p id="compare"></p>
 <a id="download" hidden>result JSON</a>
 <!--
+  The renderer. Empty unless the page is opened with ?canvas (a run draws into a canvas here through
+  the core's WebGPU backend) or ?gx-selftest (the render test); #render is what the renderer reports.
+-->
+<div id="screen"></div><pre id="render"></pre>
+<!--
   The disc cache. The operator downloads the 1.36 GiB disc once into this origin's own storage
   (OPFS) and then runs from it, instead of handing the file selector the same image on every run.
   The two lines below say what the cache holds and how far a download is; the buttons are the only

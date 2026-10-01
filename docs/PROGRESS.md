@@ -1042,3 +1042,31 @@ needs `cloudflared` and a real tunnel, which no runner has. Its output still pri
 
 **Next step.** Unchanged: the device rows. M1 and M2 first (M2 decides), then the OPFS run over the
 real host, which this fix is what makes possible over the device server. O1–O9 stay the operator's.
+
+## Renderer step 1 — a WebGPU backend that presents the frame's clear (2026-10-01, evening)
+
+Branch `render/webgpu-step1`. **Written, not run**: the account's Actions minutes are exhausted, so
+no workflow has picked up a job, and nothing here has been compiled — the VPS builds nothing.
+
+**What was found.** The web build had no backend and never built a frame: `gx_core.cpp` is not in
+the shipped modules (`native/core_sources.cmake`), `native/headless_fifo.cpp` decodes the FIFO in
+its place and drops all render state, and `gx::init` is never called. And no CI runner can produce
+a game frame at all: without the disc every spike run stops at the DOL, before the first GX command.
+
+**What was written.**
+
+- `native/headless_fifo.cpp`, `native/headless.h`: `host::gx_set_backend`. With a backend attached,
+  each EFB copy is recorded as `gx_core.cpp` records it and the `gx::Frame` is handed over at the
+  XFB copy. Null by default; the native reference and the Node module never set it.
+- `wasm/render/gx_webgpu.cpp` (web module only): `gx::Backend` with a persistent EFB texture;
+  replays each copy in order — EFB to canvas, then clear. Draws ignored. Detaches itself on any
+  JavaScript failure. `gx_webgpu_selftest` feeds the real decoder a frame's closing BP writes.
+- `web/src/spike/gpu.ts`, `worker.ts`, `main.ts`, `spike.html`: `?canvas` hands a run an
+  `OffscreenCanvas`; the device is acquired before `callMain`; without a canvas nothing changes.
+- Tests: `native/tests/fifo_test.cpp` (the seam: frames, order, colour, detach) and
+  `web/tests/spike/render.spec.ts` (two copies show the clear colour, one copy shows the
+  zero-initialised EFB, no canvas renders nothing; pixels read back with `copyTextureToBuffer`).
+
+**Next step.** When CI has minutes: run the probe (PR #47) first, then this branch's
+`Phase 0 — WASM core` and `Phase 0 — Linux headless reference` runs. Then the operator's call on
+`docs/OPEN_QUESTIONS.md` Q10 before step 2.

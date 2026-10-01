@@ -1,6 +1,7 @@
 // Minimal guest-visible FIFO decoder, derived from pinned gx_core.cpp.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "headless.h"
+#include "gx_core.h"
 #include <vector>
 #include <array>
 #include <algorithm>
@@ -129,6 +130,41 @@ void capture_default_hud() {
   }
 }
 
+// The renderer seam behind host::gx_set_backend. With a backend attached, every EFB copy is
+// recorded the way gx_core.cpp's BP_TRIGGER_EFB_COPY case records it, and the frame is handed over
+// at the XFB copy. Display only: BP registers in, a Frame out, no guest memory or host state
+// touched, so the simulation runs the same with or without a backend.
+gx::Backend* g_backend = nullptr;
+gx::Frame g_frame;
+uint64_t g_frame_sequence = 0;
+
+void record_efb_copy(uint32_t trigger) {
+  gx::EfbCopy c{};
+  c.dest_addr = bp[gx::BP_EFB_ADDR] << 5;
+  c.dest_stride = bp[gx::BP_MIPMAP_STRIDE] << 5;
+  const uint32_t tl = bp[gx::BP_EFB_TL], br = bp[gx::BP_EFB_BR];
+  c.src_x = bits(tl, 0, 10); c.src_y = bits(tl, 10, 10);
+  c.src_w = bits(br, 0, 10) + 1; c.src_h = bits(br, 10, 10) + 1;
+  const uint32_t tpf = bits(trigger, 3, 4);
+  c.format = tpf / 2 + (tpf & 1) * 8;
+  c.to_xfb = bits(trigger, 14, 1);
+  c.clear = bits(trigger, 11, 1);
+  c.intensity = bits(trigger, 15, 1);
+  c.half_scale = bits(trigger, 9, 1);
+  c.is_depth = (bp[gx::BP_ZCOMPARE] & 7) == 3;
+  // A(31..24) R(23..16) G(15..8) B(7..0), as gx_core.cpp packs it.
+  const uint32_t ar = bp[gx::BP_CLEAR_AR], gb = bp[gx::BP_CLEAR_GB];
+  c.clear_color = ((ar >> 8) & 0xFF) << 24 | (ar & 0xFF) << 16 | ((gb >> 8) & 0xFF) << 8 | (gb & 0xFF);
+  c.clear_z = bp[gx::BP_CLEAR_Z] & 0xFFFFFF;
+  const uint32_t yscale = bp[gx::BP_COPYYSCALE];
+  c.y_scale = bits(trigger, 10, 1) ? 256.0f / float(yscale) : float(yscale) / 256.0f;
+  g_frame.copies.push_back(c);
+  g_frame.commands.push_back({gx::FrameCommand::Copy, uint32_t(g_frame.copies.size() - 1)});
+  if (!c.to_xfb) return;
+  g_frame.sequence = ++g_frame_sequence;
+  g_backend->submit_and_recycle(g_frame);   // `g_frame` comes back cleared
+}
+
 void bp_write(uint32_t value) {
   const uint32_t r = value >> 24, v = value & 0xFFFFFF;
   if (r == 0xFE) { bp_mask = v; return; }
@@ -142,7 +178,10 @@ void bp_write(uint32_t value) {
     if (host::rd8(0x804A04F0) == 4 && host::rd16(0x804A04F2) == 3 &&
         (host::rd32(0x804A04FC) & 0x10)) host::wr8(0x804A0501, 0);
   }
-  // Replaces renderer-only BP state, TLUT copies and EFB submissions. Windows with a null
+  // EFB copies reach a backend only when one is attached, and only after the guest-visible
+  // effects above, so those happen in the same order with or without one.
+  if (r == 0x52 && g_backend) record_efb_copy(bp[r]);
+  // Replaces the rest of the renderer-only BP state and TLUT copies. Windows with a null
   // backend queues/discards EFB copies; it does not rasterize or copy pixels into guest RAM.
   // HUD scaling uses the Windows defaults: 100%, PAL stock mode disabled.
 }
@@ -188,6 +227,12 @@ size_t parse(const uint8_t* p, size_t len, unsigned depth) {
 }
 } // namespace
 namespace host {
+// A backend may detach itself from inside submit_frame, while `g_frame` is the frame it is reading,
+// so only an attach starts the frame over: nothing is recorded while detached anyway.
+void gx_set_backend(gx::Backend* backend) {
+  if (backend && backend != g_backend) g_frame.clear();
+  g_backend = backend;
+}
 void gx_write(uint32_t value, int bytes) {
   if (bytes < 1 || bytes > 4) die("invalid FIFO write size");
   for (int i=bytes-1; i>=0; --i) fifo.push_back(uint8_t(value >> (8*i)));
