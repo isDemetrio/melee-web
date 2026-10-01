@@ -808,3 +808,59 @@ that is already registered.
 line, and a delete button), then the Chromium tests over a populated cache, including the
 `disc_source=opfs` run. After PR 4, PR 5 (the `deploy_spike` step) and PR 6
 (`scripts/phase0/go_no_go.py`, S8 of `docs/PHASE0_NEXT.md`, still not written).
+
+## PR 4, step 4 — the page downloads the disc into OPFS from a button (2026-10-01, night)
+
+The last step of PR 4 (`docs/PHASE0_DEPLOY_PLAN.md` section 5). Steps 1–3 decided what a verified
+disc is, where its bytes are written and which of the two discs a run used; this step is the only
+way those bytes ever appear: the operator clicks a button, the page downloads the disc into this
+origin's own storage piece by piece, and the next run takes its disc from there instead of from the
+file selector. **PR 4 is complete with this step.**
+
+**Modified.** `web/spike.html` (a "Disc cache" section: download button, delete button, a line
+that says what the cache holds and a line for the download's progress), `web/src/spike/main.ts`
+(the two handlers, `humanBytes`, `refreshDiscStatus`; the run itself is unchanged),
+`web/tests/spike/spike.spec.ts` (the synthetic disc served by the test itself and four new tests;
+the old selector test is replaced by the `disc_source=opfs` run). `disc-cache.ts`,
+`opfs-worker.ts` and `disc-source.ts` are untouched: this step wires what they already do.
+
+The rules the page enforces, and why each one exists:
+
+| Rule | Why it exists |
+| --- | --- |
+| The status line asks for the **verified** disc (`getVerifiedDisc()`), never for the stored length | a length is not a disc: a half-written or poisoned cache must not be reported as ready, and the verification re-reads and re-hashes every stored piece and truncates at the first bad one |
+| A cache that cannot answer is reported as unavailable, not as an error | the manifest is served by a Cloudflare Function: a local preview, a missing binding or a dropped connection must still leave the page runnable from the selector |
+| A second click joins the download in flight | `downloadDisc()` serialises by cache identity, so the button cannot start a second writer on the same file |
+| Delete stops a download first, then removes the bytes from OPFS | "deleted" means gone from the origin's storage, not forgotten by the page: the next download starts at offset 0 and the next run falls back to the selector |
+| The fixture is four pieces of 16 KiB with a **short last piece** (2000 bytes) | the plan's own fixture was too small to exercise a resume; a single piece cannot show one, and a full-size last piece cannot show that the last `Range` is the short one. **Defect 1 of the plan is corrected here** |
+| The test serves the manifest and the byte ranges itself | no CI runner has the operator's ISO and none ever will (`docs/AGENT_RULES.md` rule 1); `functions/phase0/disc.ts` is the real endpoint, and the assertions are about what the page does with the bytes |
+| The cache is filled and read inside one browser session | the plan's **defect 2** (a private window is incompatible with a persistent cache) is real for the operator's procedure, but not for these tests: each test fills the cache it then reads, and nothing asserts that the cache survives the session. `storage_persisted` is reported, never demanded |
+
+**Measured.**
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36810185941` (CI, on `eb8f9d5`) | **success** | **289 unit tests across 21 files**, 5.06 s (unchanged: this step adds browser tests, not unit tests); typecheck and build clean; **10 shell Chromium tests pass** (7.5 s); deploy skipped without credentials |
+| `36810185919` (Phase 0 — WASM core, on `eb8f9d5`) | **success** | job 12 m 30 s (03:22:10 → 03:34:40 UTC); **6 spike Chromium tests pass** (789, 445, 497, 367, 531, 789 ms; 5.0 s) — the one WORKERFS test plus the five cache tests |
+| `36810154802` (push CI, on `eb8f9d5`) | **success** | same commit, 03:21:46 → 03:23:40 UTC |
+
+What the five cache tests assert, with the `Range` headers the page actually sent (all six runs
+observed in the job log above):
+
+| Test | Evidence |
+| --- | --- |
+| download fills OPFS, a complete cache is not downloaded again | four pieces requested in order, the last one short: `bytes=0-16383`, `bytes=16384-32767`, `bytes=32768-49151`, `bytes=49152-51151`; a second click sends **no request at all** |
+| an interrupted download resumes at the last verified piece | piece 3 answered `500`: three ranges sent, cache reports "no verified disc"; the retry asks for exactly `bytes=32768-49151` and `bytes=49152-51151` — the two stored pieces are re-read and re-hashed locally, not fetched again |
+| a corrupt piece is refused before it is written | piece 2 served with one flipped byte: the download fails on the hash, and the retry asks for `bytes=16384-32767` again (it was never written) plus the two pieces after it |
+| delete removes the cached bytes | after delete the status is "no verified disc" and the next download sends all four ranges again |
+| a run takes its disc out of OPFS | no file chosen, `disc_source` is `opfs`, `iso_bytes` 51152, `exit_code` 1 and `FATAL: cannot read full Melee DOL` in the log — the same failure `docs/PROGRESS.md` S6 records, so the OPFS path reaches the expected error and not another one |
+
+**Not in this step.** **Defect 3 of the plan** (removing `sw.js` from the deploy does not unregister
+a service worker that is already registered) belongs to PR 5, the `deploy_spike` step: nothing in
+this repository's CI serves a registered service worker, so there is nothing here to fix it against.
+PR 5 also owns the `_headers` rule for `/spike-core/*` and the `vite.config.ts` comment correction.
+
+**Next step.** PR 5 (the deploy from the CI: `deploy_spike`, the `sw.js` removal, the `_headers`
+rule) or PR 6 (`scripts/phase0/go_no_go.py`, S8 of `docs/PHASE0_NEXT.md`). The manifest endpoint
+the page now depends on is `/phase0/disc-chunks`, produced by `scripts/phase0/disc_chunks.py`, and
+it still has to be uploaded to R2 (`scripts/phase0/upload_disc.sh`, needs the operator's O2/O3).
