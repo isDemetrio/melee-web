@@ -112,8 +112,15 @@ jobs:
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/wasm" -G Ninja \
             -DMELEE_GEN="$RUNNER_TEMP/generated" \
             -DMELEE_OPT="$MELEE_OPT" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/scripts/phase0/time_compile.sh"
           echo "opt_level=$MELEE_OPT" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The two hot translation units are moved to -O2 by a source property, and the whole
+          # mechanism is that CMake appends source options after the target's own and interface
+          # options. Read the real compile commands instead of trusting that ordering: if it ever
+          # changes, -Oz would win and the experiment would measure nothing (docs/FRAME_TIME_CONSULT.md).
+          bash scripts/phase0/assert_hot_opt.sh "$RUNNER_TEMP/wasm/compile_commands.json" -O2 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
           SECONDS=0
           cmake --build "$RUNNER_TEMP/wasm" --target guest runtime_core melee_core_wasm sha1_test --parallel "$BUILD_JOBS"
           echo "offline_compile_link_seconds=$SECONDS" | tee -a "$GITHUB_STEP_SUMMARY"
