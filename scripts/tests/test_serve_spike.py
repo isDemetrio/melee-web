@@ -21,9 +21,12 @@ outside every repository (`docs/AGENT_RULES.md` rule 1); `main()` is tested with
 `DISC_BYTES` patched, so no test needs it either.
 """
 import base64
+import hashlib
 import http.client
 import importlib.util
 import io
+import json
+import os
 import tempfile
 import threading
 from contextlib import redirect_stderr, redirect_stdout
@@ -37,6 +40,19 @@ spec.loader.exec_module(serve_spike)
 
 DISC_BYTES = 4096
 DISC = bytes((index * 7 + 3) % 256 for index in range(DISC_BYTES))
+# The route the page asks for the piece manifest on (`manifestUrl` in
+# `web/src/spike/disc-cache.ts`, and the object key `functions/phase0/[[path]].ts` serves).
+MANIFEST_ROUTE = '/phase0/disc-chunks'
+# The document `scripts/phase0/disc_chunks.py` would write for the 4096-byte disc above: two
+# 2048-byte pieces, with the real SHA-256 of each, so the fixture describes this disc and not a
+# plausible-looking one.
+MANIFEST = {
+    'size_bytes': DISC_BYTES,
+    'chunk_size_bytes': 2048,
+    'sha1': 'd4e70c064cc714ba8400a849cf299dbd1aa326fc',
+    'chunks': [hashlib.sha256(DISC[:2048]).hexdigest(), hashlib.sha256(DISC[2048:]).hexdigest()],
+}
+MANIFEST_BYTES = (json.dumps(MANIFEST) + '\n').encode()
 PASSWORD = 'prova'
 AUTHORIZATION = 'Basic ' + base64.b64encode(f'fabri:{PASSWORD}'.encode()).decode()
 
@@ -61,10 +77,12 @@ class ServerTest(unittest.TestCase):
         self.outside.write_text('not part of the dist\n')
         self.disc = root / 'disc.iso'
         self.disc.write_bytes(DISC)
+        self.manifest = root / 'disc-chunks.json'
+        self.manifest.write_bytes(MANIFEST_BYTES)
         self.dist = dist
         handler = type('TestHandler', (serve_spike.Handler,), {
-            'dist': str(dist), 'iso': str(self.disc), 'password': PASSWORD,
-            'log_message': quiet,
+            'dist': str(dist), 'iso': str(self.disc), 'chunks': str(self.manifest),
+            'password': PASSWORD, 'log_message': quiet,
         })
         self.server = serve_spike.Server(('127.0.0.1', 0), handler)
         self.addCleanup(self.server.server_close)
@@ -161,6 +179,66 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(headers['content-range'], f'bytes */{DISC_BYTES}')
         self.assertEqual(body, b'')
 
+    # The piece manifest: the other object the Pages Function serves, and the contract the
+    # page's disc cache downloads 1.4 GB against. Without it the page reports the cache as
+    # unavailable, so the OPFS path cannot be exercised over this origin at all.
+
+    def test_the_route_the_page_asks_for_is_the_one_this_server_serves(self):
+        self.assertEqual(serve_spike.MANIFEST_ROUTE, MANIFEST_ROUTE)
+
+    def test_the_manifest_is_served_the_way_the_function_serves_it(self):
+        status, headers, body = self.request(MANIFEST_ROUTE)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['content-type'], 'application/json')
+        self.assertEqual(headers['cache-control'], 'no-store')
+        self.assertEqual(headers['cross-origin-resource-policy'], 'same-origin')
+        self.assertEqual(headers['accept-ranges'], 'bytes')
+        self.assertEqual(headers['content-length'], str(len(MANIFEST_BYTES)))
+        self.assertEqual(body, MANIFEST_BYTES)
+
+    def test_a_range_on_the_manifest_goes_through_the_same_machinery(self):
+        status, headers, body = self.request(MANIFEST_ROUTE, 'bytes=0-3')
+        self.assertEqual(status, 206)
+        self.assertEqual(headers['content-range'], f'bytes 0-3/{len(MANIFEST_BYTES)}')
+        self.assertEqual(body, MANIFEST_BYTES[:4])
+
+    def test_an_unsatisfiable_range_on_the_manifest_is_416(self):
+        status, headers, body = self.request(MANIFEST_ROUTE, f'bytes={len(MANIFEST_BYTES)}-')
+        self.assertEqual(status, 416)
+        self.assertEqual(headers['content-range'], f'bytes */{len(MANIFEST_BYTES)}')
+        self.assertEqual(body, b'')
+
+    def test_head_on_the_manifest_reports_its_size_without_a_body(self):
+        status, headers, body = self.request(MANIFEST_ROUTE, method='HEAD')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['content-type'], 'application/json')
+        self.assertEqual(headers['content-length'], str(len(MANIFEST_BYTES)))
+        self.assertEqual(body, b'')
+
+    def test_the_manifest_route_wins_over_a_file_of_the_same_name_in_the_dist(self):
+        # The Function reads the manifest out of the bucket, never out of the dist; a dist that
+        # happens to contain this path must not become the manifest the page downloads against.
+        shadow = self.dist / 'phase0'
+        shadow.mkdir()
+        (shadow / 'disc-chunks').write_text('{"size_bytes": 1}\n')
+        status, _headers, body = self.request(MANIFEST_ROUTE)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, MANIFEST_BYTES)
+
+    def test_the_manifest_is_behind_the_password(self):
+        status, _headers, _body = self.request(MANIFEST_ROUTE, authorization=None)
+        self.assertEqual(status, 401)
+
+    def test_without_a_manifest_the_route_is_404_and_says_so(self):
+        # A run started without `--chunks` must leave the page reporting its cache as
+        # unavailable (it treats a manifest it cannot read as no cache), not fail some other way.
+        handler = self.server.RequestHandlerClass
+        original, handler.chunks = handler.chunks, ''
+        self.addCleanup(setattr, handler, 'chunks', original)
+        status, _headers, body = self.request(MANIFEST_ROUTE)
+        self.assertEqual(status, 404)
+        self.assertIn(b'no piece manifest', body)
+
     # The page, and the things the device session depends on being true of every response.
 
     def test_the_page_is_served_with_the_isolation_headers(self):
@@ -242,6 +320,61 @@ class ResolveRangeTest(unittest.TestCase):
 
     def test_a_zero_byte_file_has_no_range(self):
         self.assertIsNone(serve_spike.resolve_range('bytes=0-5', 0))
+
+
+class CheckManifestTest(unittest.TestCase):
+    """What `check_manifest` accepts, and every shape of document it refuses.
+
+    The shape rules are the page's own (`parseDiscManifest`), so a manifest this server serves
+    is one the page will accept; the last case in each family is the one this server adds -- the
+    document has to describe the disc about to be served.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.counter = 0
+
+    def write(self, document):
+        self.counter += 1
+        path = self.root / f'manifest-{self.counter}.json'
+        path.write_text(document if isinstance(document, str) else json.dumps(document))
+        return str(path)
+
+    def document(self, **changes):
+        document = dict(MANIFEST)
+        document.update(changes)
+        return document
+
+    def test_the_document_the_chunks_script_writes_is_accepted(self):
+        accepted = serve_spike.check_manifest(self.write(MANIFEST), DISC_BYTES)
+        self.assertEqual(accepted['size_bytes'], DISC_BYTES)
+        self.assertEqual(len(accepted['chunks']), 2)
+
+    def test_the_refusals(self):
+        cases = [
+            ('{"size_bytes": 1', 'not readable JSON'),
+            ('[1, 2]', 'must be a JSON object'),
+            (self.document(size_bytes=0), 'size_bytes must be a positive integer'),
+            (self.document(size_bytes='4096'), 'size_bytes must be a positive integer'),
+            (self.document(size_bytes=True), 'size_bytes must be a positive integer'),
+            (self.document(chunk_size_bytes=0), 'chunk_size_bytes must be a positive integer'),
+            (self.document(chunk_size_bytes=serve_spike.MAX_CHUNK_BYTES + 1), 'over the'),
+            (self.document(size_bytes=DISC_BYTES * 2), 'the disc being served is 4096 bytes'),
+            (self.document(sha1='deadbeef'), 'sha1 must be a lowercase hex SHA-1'),
+            (self.document(sha1=MANIFEST['sha1'].upper()), 'sha1 must be a lowercase hex SHA-1'),
+            (self.document(chunks=[]), 'chunks must be a non-empty array'),
+            (self.document(chunks='x'), 'chunks must be a non-empty array'),
+            (self.document(chunks=[MANIFEST['chunks'][0]]), 'is 2'),
+            (self.document(chunks=[MANIFEST['chunks'][0], 'nope']),
+             'chunks[1] is not a lowercase hex SHA-256'),
+        ]
+        for document, expected in cases:
+            with self.subTest(expected=expected, document=document):
+                with self.assertRaises(ValueError) as caught:
+                    serve_spike.check_manifest(self.write(document), DISC_BYTES)
+                self.assertIn(expected, str(caught.exception))
 
 
 class MainTest(unittest.TestCase):
@@ -327,6 +460,53 @@ class MainTest(unittest.TestCase):
             ['--dist', str(self.dist), '--iso', str(self.disc), '--host', '100.64.0.1'])
         self.assertIn('not a secure context', out)
         self.assertEqual(self.recorded['address'], ('100.64.0.1', 8091))
+
+
+    # The manifest, which main() refuses before it binds when it does not describe the disc.
+
+    def manifest(self, **changes):
+        document = dict(MANIFEST)
+        document.update(changes)
+        path = self.root / 'disc-chunks.json'
+        path.write_text(json.dumps(document))
+        return str(path)
+
+    def test_a_missing_manifest_file_is_refused(self):
+        status, _out, err = self.run_main(['--dist', str(self.dist), '--iso', str(self.disc),
+                                           '--chunks', str(self.root / 'nope.json')])
+        self.assertEqual(status, 2)
+        self.assertIn('no such path', err)
+
+    def test_a_manifest_for_another_disc_is_refused_before_it_binds(self):
+        self.stub_server()
+        self.patch('DISC_BYTES', DISC_BYTES)
+        status, _out, err = self.run_main(['--dist', str(self.dist), '--iso', str(self.disc),
+                                           '--chunks', self.manifest(size_bytes=DISC_BYTES * 2)])
+        self.assertEqual(status, 2)
+        self.assertIn('manifest refused', err)
+        self.assertIn('the disc being served is 4096 bytes', err)
+        self.assertEqual(self.recorded, {})
+
+    def test_the_expected_disc_and_its_manifest_bind_together(self):
+        self.stub_server()
+        self.patch('DISC_BYTES', DISC_BYTES)
+        manifest = self.manifest()
+        status, out, err = self.run_main(['--dist', str(self.dist), '--iso', str(self.disc),
+                                          '--chunks', manifest])
+        self.assertEqual(status, 0)
+        self.assertEqual(err, '')
+        self.assertEqual(os.path.realpath(self.recorded['handler'].chunks),
+                         os.path.realpath(manifest))
+        self.assertIn('serving the piece manifest for 2 pieces of 2048 bytes at '
+                      'http://127.0.0.1:8091/phase0/disc-chunks', out)
+
+    def test_without_a_manifest_the_run_says_what_is_missing(self):
+        self.stub_server()
+        self.patch('DISC_BYTES', DISC_BYTES)
+        status, out, _err = self.run_main(['--dist', str(self.dist), '--iso', str(self.disc)])
+        self.assertEqual(status, 0)
+        self.assertEqual(self.recorded['handler'].chunks, '')
+        self.assertIn('no piece manifest', out)
 
 
 if __name__ == '__main__':

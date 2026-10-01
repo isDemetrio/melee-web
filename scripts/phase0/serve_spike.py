@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Serve the spike page and the disc image from one origin, for a device run.
+"""Serve the spike page, the disc image and its piece manifest from one origin, for a device run.
 
 Why it exists: the spike page (`web/spike.html`, P0-10) takes the disc from a file picker, and
 the disc exists only on the machine that owns it. This server exposes both from one origin so a
 phone on the tailnet can open the page and pick the disc it has just downloaded.
 
-It does three things a plain static server does not:
+It serves the four things a device run needs, none of which a plain static server serves:
 
 1. **COOP/COEP headers**, which the page needs to be *cross-origin isolated*.
 2. **Range requests** for the disc, so a 1.4 GB download resumes instead of restarting -- and
    `416` for a range that lies past the last byte or runs backwards, which is what the Pages
    Function serving the same disc in production answers (`functions/phase0/[[path]].ts`).
-3. **One origin** for page, module and disc, which is what WORKERFS mounting needs.
+3. **The piece manifest** at `/phase0/disc-chunks` (`--chunks`): the other object that Function
+   serves, and the contract the page's disc cache downloads the disc against. Without it the
+   page's "Disc cache" section reports the cache as unavailable and the whole OPFS path
+   (`docs/PHASE0_DEPLOY_PLAN.md` section 5, PR 4) stays untested until Cloudflare credentials
+   exist. The manifest is refused before this server binds unless it describes the disc it is
+   about to serve -- see `check_manifest`.
+4. **One origin** for page, module, disc and manifest, which is what WORKERFS mounting needs.
 
 **The headers only work over HTTPS or `localhost`.** Cross-origin isolation is a *secure context*
 feature: served as `http://<tailnet-ip>:8091` the browser ignores these headers,
@@ -34,7 +40,9 @@ the test session — the VPS policy forbids long-lived servers.
 
 Usage:
   python3 scripts/phase0/serve_spike.py --dist /path/to/spike-dist \\
-      --iso /home/hermes/incoming/melee-ntsc102.iso --host 127.0.0.1 --port 8091 [--password secret]
+      --iso /home/hermes/incoming/melee-ntsc102.iso \\
+      --chunks /home/hermes/incoming/phase0/disc-chunks.json \\
+      --host 127.0.0.1 --port 8091 [--password secret]
 """
 
 from __future__ import annotations
@@ -42,7 +50,9 @@ from __future__ import annotations
 import argparse
 import base64
 import http.server
+import json
 import os
+from pathlib import Path
 import posixpath
 import re
 import socketserver
@@ -54,6 +64,19 @@ CHUNK = 1024 * 1024
 
 # The disc's exact size, so a wrong file is refused before the phone downloads it.
 DISC_BYTES = 1459978240
+
+# The piece manifest's route, which is the page's default `manifestUrl`
+# (`web/src/spike/disc-cache.ts`), and the object key the Pages Function serves it from
+# (`functions/phase0/[[path]].ts`).
+MANIFEST_ROUTE = '/phase0/disc-chunks'
+
+# The digest formats `scripts/phase0/disc_chunks.py` publishes.
+SHA1_PATTERN = re.compile(r'^[0-9a-f]{40}$')
+SHA256_PATTERN = re.compile(r'^[0-9a-f]{64}$')
+
+# The piece size the page refuses to go over (`web/src/spike/disc-cache.ts`, `MAX_CHUNK_BYTES`):
+# it holds exactly one piece in memory at a time.
+MAX_CHUNK_BYTES = 32 * 1024 * 1024
 
 # One explicit range only, the shape the Pages Function accepts: a resumed download asks for
 # `bytes=<offset>-<offset+piece-1>`, one piece at a time.
@@ -99,9 +122,64 @@ def resolve_range(header, size):
     return start, end
 
 
+def check_manifest(path, disc_bytes):
+    """The manifest document at `path`, refused unless it describes the disc being served.
+
+    Every shape rule here is one of the page's own rules (`parseDiscManifest` in
+    `web/src/spike/disc-cache.ts`), stated in the same order: the document is an object, the
+    sizes are positive integers, the piece size is not over the buffer the page will hold in
+    memory, the digests are lowercase hex of the right length, and the pieces cover the disc
+    exactly (the count is the ceiling of the division). A manifest the page would refuse must
+    not be served as if it were one.
+
+    The one rule that is this server's own is the comparison with the disc it is about to serve.
+    It is worth making before binding: the manifest is the contract for 1.4 GB of traffic, and a
+    manifest for another image would have the phone download the whole disc, fail on the first
+    piece, and report a defect of the port. Refusing at startup costs nothing and names the two
+    sizes.
+
+    The disc's own SHA-1 is deliberately *not* recomputed: reading and hashing 1.4 GB would add
+    seconds to every run to catch a case the size already excludes, and the digest in the
+    manifest is the page's own end-to-end check.
+    """
+    try:
+        document = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise ValueError(f'{path} is not readable JSON: {error}') from error
+    if not isinstance(document, dict):
+        raise ValueError('the piece manifest must be a JSON object')
+    size = document.get('size_bytes')
+    chunk_size = document.get('chunk_size_bytes')
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise ValueError('size_bytes must be a positive integer')
+    if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size <= 0:
+        raise ValueError('chunk_size_bytes must be a positive integer')
+    if chunk_size > MAX_CHUNK_BYTES:
+        raise ValueError(f'chunk_size_bytes is {chunk_size}, over the {MAX_CHUNK_BYTES}-byte '
+                         'limit the page will hold in memory')
+    if size != disc_bytes:
+        raise ValueError(f'the manifest describes {size} bytes but the disc being served is '
+                         f'{disc_bytes} bytes')
+    sha1 = document.get('sha1')
+    if not isinstance(sha1, str) or not SHA1_PATTERN.match(sha1):
+        raise ValueError('sha1 must be a lowercase hex SHA-1 of 40 digits')
+    chunks = document.get('chunks')
+    if not isinstance(chunks, list) or not chunks:
+        raise ValueError('chunks must be a non-empty array')
+    for index, digest in enumerate(chunks):
+        if not isinstance(digest, str) or not SHA256_PATTERN.match(digest):
+            raise ValueError(f'chunks[{index}] is not a lowercase hex SHA-256 of 64 digits')
+    expected = -(-size // chunk_size)  # the ceiling, without floating point
+    if len(chunks) != expected:
+        raise ValueError(f'chunks has {len(chunks)} entries but {size} bytes in '
+                         f'{chunk_size}-byte pieces is {expected}')
+    return document
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     dist = ''
     iso = ''
+    chunks = ''
     password = ''
 
     def log_message(self, format, *args):  # noqa: A002 - the base class names this parameter `format`
@@ -135,6 +213,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             clean = '/spike.html'
         if clean == '/disc.iso':
             return self.iso
+        if clean == MANIFEST_ROUTE:
+            # Empty when the run was started without `--chunks`; `send_head` then answers 404
+            # with a message that says so, rather than looking for a file named after the route.
+            return self.chunks
         # Never let a request escape the dist directory.
         parts = [part for part in clean.split('/') if part not in ('', '.', '..')]
         return os.path.join(self.dist, *parts)
@@ -143,6 +225,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # point of this override, so the deviation from the declared return type is deliberate.
     def send_head(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         path = self.translate_path(self.path)
+        if not path:
+            self.send_error(404, 'this run serves no piece manifest: start the server with '
+                                 '--chunks, or take the disc from the file picker')
+            return None
         if os.path.isdir(path):
             return super().send_head()
         if not os.path.exists(path):
@@ -151,7 +237,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         size = os.path.getsize(path)
         content_type = 'application/octet-stream'
-        if path.endswith('.js'):
+        if path == self.chunks:
+            # The Pages Function serves this object as `application/json` and the page parses it
+            # with `response.json()`; a `text/plain` manifest is a defect the Function does not
+            # have, so this server does not have it either.
+            content_type = 'application/json'
+        elif path.endswith('.js'):
             content_type = 'text/javascript'
         elif path.endswith('.html'):
             content_type = 'text/html; charset=utf-8'
@@ -227,6 +318,8 @@ def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--dist', required=True, help='the built spike directory')
     parser.add_argument('--iso', required=True, help='the disc image to expose at /disc.iso')
+    parser.add_argument('--chunks', default='',
+                        help='the piece manifest to expose at ' + MANIFEST_ROUTE)
     parser.add_argument('--host', default='127.0.0.1', help='bind address; localhost or the tailnet IP')
     parser.add_argument('--port', type=int, default=8091)
     parser.add_argument('--password', default='', help='basic auth password (user: fabri)')
@@ -236,18 +329,37 @@ def main(argv):
         if not os.path.exists(path):
             print(f'ERROR: no such path: {path}', file=sys.stderr)
             return 2
+    if args.chunks and not os.path.exists(args.chunks):
+        print(f'ERROR: no such path: {args.chunks}', file=sys.stderr)
+        return 2
 
     size = os.path.getsize(args.iso)
     if size != DISC_BYTES:
         print(f'ERROR: disc is {size} bytes, expected {DISC_BYTES}', file=sys.stderr)
         return 2
 
+    manifest = None
+    if args.chunks:
+        try:
+            manifest = check_manifest(args.chunks, size)
+        except ValueError as error:
+            print(f'ERROR: manifest refused: {error}', file=sys.stderr)
+            return 2
+
     Handler.dist = os.path.abspath(args.dist)
     Handler.iso = os.path.abspath(args.iso)
+    Handler.chunks = os.path.abspath(args.chunks) if args.chunks else ''
     Handler.password = args.password
 
     with Server((args.host, args.port), Handler) as httpd:
         print(f'serving {Handler.dist} and {size} bytes of disc on http://{args.host}:{args.port}/spike.html')
+        if manifest is not None:
+            print(f'serving the piece manifest for {len(manifest["chunks"])} pieces of '
+                  f'{manifest["chunk_size_bytes"]} bytes at '
+                  f'http://{args.host}:{args.port}{MANIFEST_ROUTE}')
+        else:
+            print('no piece manifest: /phase0/disc-chunks answers 404, so the page reports its '
+                  'disc cache as unavailable and the disc has to come from the file picker')
         if args.host not in ('127.0.0.1', 'localhost', '::1'):
             print('NOTE: plain HTTP on this address is not a secure context, so the browser will')
             print('      ignore COOP/COEP and coarsen the clock. Put HTTPS in front (tailscale')
