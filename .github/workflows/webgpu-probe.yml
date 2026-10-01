@@ -1,0 +1,60 @@
+name: WebGPU toolchain probe
+
+# docs/RENDERER_MAP.md makes a WebGPU backend the first priority of the renderer, and the plan
+# rests on two assumptions. Both are cheap to check once and expensive to assume for a whole
+# backend:
+#
+#   1. The pinned Emscripten (EMSDK_VERSION) builds and links a translation unit that includes
+#      <webgpu/webgpu.h> and calls into it, with --use-port=emdawnwebgpu.
+#   2. The browser this repository's CI can run — headless Chromium, software rendering — exposes a
+#      usable WebGPU adapter and device. A renderer whose tests cannot run in CI cannot be verified
+#      by this repository at all.
+#
+# wasm/probe/webgpu_probe.cpp holds the reasoning; this workflow is the answer. It is deliberately
+# cheap: one small compilation and one browser run, no WASM core build.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'wasm/probe/**'
+      - '.github/workflows/webgpu-probe.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webgpu-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read emsdk pin
+        run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+      - name: Compile the probe
+        working-directory: wasm/probe
+        run: |
+          emcc --use-port=emdawnwebgpu -O1 -sMODULARIZE=1 -sEXPORT_NAME=createWebgpuProbe \
+            -sENVIRONMENT=web -sEXIT_RUNTIME=1 -o webgpu_probe.js webgpu_probe.cpp
+          ls -l webgpu_probe.js webgpu_probe.wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Playwright is installed outside the checkout so nothing in the repository is touched, and
+      # check.mjs is run from there with an absolute path: the directory it serves comes from its own
+      # URL, so the working directory only has to be the one that can resolve `playwright`.
+      - name: Install Playwright's Chromium
+        working-directory: ${{ runner.temp }}
+        run: |
+          npm init -y >/dev/null
+          npm install playwright@latest
+          npx playwright install --with-deps chromium
+      - name: Run the probe in headless Chromium
+        working-directory: ${{ runner.temp }}
+        run: node "$GITHUB_WORKSPACE/wasm/probe/check.mjs"

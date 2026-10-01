@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WebGPU probe</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; }
+      canvas { border: 1px solid #888; image-rendering: pixelated; width: 64px; height: 64px; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>WebGPU probe</h1>
+    <p>
+      Two questions, both answered into <code>window.__probe</code> for the CI check to read:
+      can the pinned Emscripten build and run a WebGPU translation unit (<code>cxx</code>), and
+      does this browser expose a usable WebGPU adapter and device (<code>adapter</code>,
+      <code>device</code>)?
+    </p>
+    <canvas id="probe" width="64" height="64"></canvas>
+    <pre id="out">running</pre>
+
+    <script type="module">
+      const out = document.getElementById('out');
+      const result = {
+        cxx: null,
+        cxx_lines: [],
+        adapter: null,
+        device: null,
+        readback: null,
+        canvas: null,
+        error: null,
+      };
+
+      // 1. The C++ half. The module is built with -sMODULARIZE=1; the line it prints through
+      //    `print` is the toolchain's answer. A module that failed to compile or link is not here
+      //    to load at all, so a load failure is itself a result and not a crash.
+      try {
+        const factory = (await import('./webgpu_probe.js')).default;
+        await factory({ print: (line) => result.cxx_lines.push(line) });
+        result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
+      } catch (error) {
+        result.cxx = false;
+        result.error = `cxx: ${error}`;
+      }
+
+      // 2. The browser half. `requestAdapter()` returning null is a real answer on a machine with
+      //    no WebGPU driver, which is why the fallback adapter is asked for explicitly before
+      //    concluding that WebGPU is unavailable: the CI runner renders in software.
+      if (typeof navigator.gpu === 'undefined') {
+        result.adapter = 'no navigator.gpu';
+      } else {
+        try {
+          const adapter =
+            (await navigator.gpu.requestAdapter()) ??
+            (await navigator.gpu.requestAdapter({ forceFallbackAdapter: true }));
+          if (!adapter) {
+            result.adapter = 'null (no adapter, hardware or fallback)';
+          } else {
+            result.adapter = adapter.info
+              ? `${adapter.info.vendor ?? '?'} ${adapter.info.architecture ?? '?'}`
+              : 'present';
+            const device = await adapter.requestDevice();
+            result.device = device !== null && device !== undefined;
+
+            // Clear a 4x4 texture to red and read the first pixel back: a colour that comes out
+            // of the GPU is the only evidence that a device exists and is executing commands.
+            const size = 4;
+            const texture = device.createTexture({
+              size: [size, size],
+              format: 'rgba8unorm',
+              usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+            });
+            const readback = device.createBuffer({
+              size: 256,
+              usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+            });
+            const encoder = device.createCommandEncoder();
+            const pass = encoder.beginRenderPass({
+              colorAttachments: [
+                {
+                  view: texture.createView(),
+                  clearValue: { r: 1, g: 0, b: 0, a: 1 },
+                  loadOp: 'clear',
+                  storeOp: 'store',
+                },
+              ],
+            });
+            pass.end();
+            encoder.copyTextureToBuffer({ texture }, { buffer: readback, bytesPerRow: 256 }, [
+              size,
+              size,
+            ]);
+            device.queue.submit([encoder.finish()]);
+            await readback.mapAsync(GPUMapMode.READ);
+            const pixel = new Uint8Array(readback.getMappedRange().slice(0, 4));
+            result.readback = [pixel[0], pixel[1], pixel[2], pixel[3]];
+            readback.unmap();
+
+            // And the path the renderer actually needs: a canvas configured for WebGPU, cleared.
+            const canvas = document.getElementById('probe');
+            const context = canvas.getContext('webgpu');
+            context.configure({
+              device,
+              format: navigator.gpu.getPreferredCanvasFormat(),
+              alphaMode: 'opaque',
+            });
+            const canvasEncoder = device.createCommandEncoder();
+            const canvasPass = canvasEncoder.beginRenderPass({
+              colorAttachments: [
+                {
+                  view: context.getCurrentTexture().createView(),
+                  clearValue: { r: 0, g: 1, b: 0, a: 1 },
+                  loadOp: 'clear',
+                  storeOp: 'store',
+                },
+              ],
+            });
+            canvasPass.end();
+            device.queue.submit([canvasEncoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+            result.canvas = 'configured and cleared';
+          }
+        } catch (error) {
+          if (result.adapter === null) result.adapter = `error: ${error}`;
+          result.error = String(error);
+        }
+      }
+
+      out.textContent = JSON.stringify(result, null, 2);
+      window.__probe = result;
+    </script>
+  </body>
+</html>
