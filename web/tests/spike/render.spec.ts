@@ -15,9 +15,13 @@ import { expect, test, type Page } from '@playwright/test';
  * XFB copy on. Two copies must show the colour; one copy must show the EFB before any clear, which
  * WebGPU guarantees is zero.
  *
- * The flags are the ones `wasm/probe/check.mjs` launches Chromium with, so a runner without a GPU
- * can hand out a software adapter. Whether that is enough on the CI runner is the open half of the
- * toolchain probe (PR #47): if no adapter comes back, the first assertion says so with the reason.
+ * The flags below were in force when CI first got a device here (run 36892349174, commit 54800cd:
+ * `render.attached` was true, the failure was a readback, not an adapter). The probe of PR #47
+ * reports no adapter with the same two flags in its own launch, so the difference lies in how that
+ * probe launches Chromium, not in these flags; they stay until a run without them says otherwise.
+ *
+ * `errors` is asserted before any pixel: a readback that fails returns a null pixel, and the reason
+ * is in `errors`, not in the pixel (run 36892349174's second test reported only `Received: null`).
  */
 test.use({ launchOptions: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] } });
 
@@ -63,8 +67,13 @@ test('the WebGPU backend presents the clear colour on the canvas', async ({ page
 
 test('one XFB copy presents the EFB as it was before its clear', async ({ page }) => {
   const result = await selftest(page, `gx-selftest=${COLOUR.toString(16)}&copies=1`);
+  expect(result.error).toBeUndefined();
   expect(result.render?.attached, JSON.stringify(result.render)).toBe(true);
+  expect(result.render?.errors).toEqual([]);
+  expect(result.render?.failure).toBeNull();
   expect(result.presented).toBe(1);
+  // The copy overwrote the sentinel with the EFB's raw bytes: zero, alpha included. alphaMode
+  // 'opaque' governs how the canvas is composited, not what its texture holds.
   expect(result.render?.pixel).toEqual([0, 0, 0, 0]);
 });
 

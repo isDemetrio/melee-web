@@ -1070,3 +1070,12 @@ a game frame at all: without the disc every spike run stops at the DOL, before t
 **Next step.** When CI has minutes: run the probe (PR #47) first, then this branch's
 `Phase 0 — WASM core` and `Phase 0 — Linux headless reference` runs. Then the operator's call on
 `docs/OPEN_QUESTIONS.md` Q10 before step 2.
+
+**Update, first CI run (run `36892349174`, commit `54800cd`).** The C++ compiles and links in both
+builds; `native_fifo_test`, seam included, passed under g++ (run `36892349475`); the CI Chromium
+gave the render test a device. Two render tests failed on the readback: `device lost: Device was
+destroyed.` then `mapAsync` aborted with `A valid external Instance reference no longer exists.`
+Diagnosis: nothing reachable from the worker's global scope held the adapter, device or readback
+buffer once the synchronous stretch ended, so they could be collected while the map was pending.
+Fix: `web/src/spike/gpu.ts` roots every opened GPU object and every in-flight readback buffer for
+the worker's lifetime. The second test's `[0,0,0,0]` was right; its null pixel was the same failure.

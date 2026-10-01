@@ -45,6 +45,10 @@ interface GpuCanvasContext {
 
 /** What `gx_webgpu.cpp` reads as `Module.gxWebgpu`, and what it writes back into it. */
 export interface SpikeGpu {
+  /** Held only so they stay reachable; see `live` below. */
+  gpu: Gpu;
+  adapter: GpuAdapter;
+  canvas: OffscreenCanvas;
   device: GpuDevice;
   context: GpuCanvasContext;
   /** The EFB's and the canvas's format: one format, so an XFB copy is a plain texture copy. */
@@ -57,6 +61,19 @@ export interface SpikeGpu {
 }
 
 export interface GpuOpening { gpu: SpikeGpu | null; reason: string }
+
+/**
+ * Every GPU object this worker opened, and every buffer with a mapping in flight, reachable from the
+ * worker's global scope until the worker ends.
+ *
+ * Without this, once the synchronous stretch of a run is over, the adapter, device and readback
+ * buffer are referenced only from suspended async frames and from each other, and the garbage
+ * collector may take them while `mapAsync` is pending. CI saw exactly that (run 36892349174):
+ * `device lost: Device was destroyed.` -- the reason Dawn reports when a device's last external
+ * reference goes, not a `destroy()` call, which nothing here makes -- and then the map aborted with
+ * `A valid external Instance reference no longer exists.`
+ */
+const live = { opened: new Set<SpikeGpu>(), mapping: new Set<GpuBuffer>() };
 
 /**
  * A device configured on `canvas`, or the reason there is none. The fallback adapter is asked for
@@ -78,7 +95,8 @@ export async function openGpu(canvas: OffscreenCanvas): Promise<GpuOpening> {
       device, format: 'rgba8unorm', alphaMode: 'opaque',
       usage: TEXTURE_RENDER_ATTACHMENT | TEXTURE_COPY_SRC | TEXTURE_COPY_DST,
     });
-    const opened: SpikeGpu = { device, context, format: 'rgba8unorm', errors: [] };
+    const opened: SpikeGpu = { gpu, adapter, canvas, device, context, format: 'rgba8unorm', errors: [] };
+    live.opened.add(opened);
     device.addEventListener('uncapturederror', (event) => { opened.errors.push(event.error.message); });
     void device.lost.then((info) => { opened.errors.push(`device lost: ${info.message}`); });
     return { gpu: opened, reason: 'device ready' };
@@ -109,8 +127,10 @@ export function fillCanvas(gpu: SpikeGpu, rgba: readonly number[]): void {
  * frame is committed. The copy is encoded synchronously, so only the mapping waits.
  */
 export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] | null> {
+  let buffer: GpuBuffer | null = null;
   try {
-    const buffer = gpu.device.createBuffer({ size: 256, usage: BUFFER_COPY_DST | BUFFER_MAP_READ });
+    buffer = gpu.device.createBuffer({ size: 256, usage: BUFFER_COPY_DST | BUFFER_MAP_READ });
+    live.mapping.add(buffer);
     const encoder = gpu.device.createCommandEncoder();
     encoder.copyTextureToBuffer({ texture: gpu.context.getCurrentTexture(), origin: [x, y] },
       { buffer, bytesPerRow: 256 }, [1, 1]);
@@ -122,5 +142,7 @@ export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] |
   } catch (error) {
     gpu.errors.push(`readback: ${error}`);
     return null;
+  } finally {
+    if (buffer) live.mapping.delete(buffer);
   }
 }
