@@ -1042,3 +1042,185 @@ needs `cloudflared` and a real tunnel, which no runner has. Its output still pri
 
 **Next step.** Unchanged: the device rows. M1 and M2 first (M2 decides), then the OPFS run over the
 real host, which this fix is what makes possible over the device server. O1–O9 stay the operator's.
+
+## The spike is published, the OPFS path costs nothing, and the optimisation campaign finds its ceiling (2026-10-01, afternoon)
+
+This session did four things in one order: put the page on a stable host, measure the disc cache on a
+device that is not the operator's, profile the simulation instead of guessing where its time goes, and
+then spend the CI budget on the levers that profile pointed at. The last of those produced a negative
+result that is as useful as the positive ones.
+
+### The spike is live on Pages, behind Access
+
+`deploy_spike` had failed twice. The first cause was a dirty tree and is fixed by PR #37 (deploy from
+a clean copy of the commit). The second was the real one and only surfaced once the first was gone:
+the Pages project declares **two** R2 buckets in `wrangler.toml`, and while `melee-phase0-disc` existed,
+**`melee-web-assets`** — the product's asset store, named in `docs/DEPLOY.md` and required by
+`functions/` — had never been created. Wrangler refused to publish the Function: *"R2 bucket
+'melee-web-assets' not found"*. The bucket was created empty (free: R2 charges for stored bytes, not
+for buckets) and run `36868675226` published successfully.
+
+| Check | Result |
+| --- | --- |
+| `https://phase0-spike.melee-web.pages.dev/spike.html` | **302** → `cloudflareaccess.com/cdn-cgi/access/login/phase0-spike…` |
+| `/` | 302, the same |
+| access | only the operator's email; the disc is served by the Function from `melee-phase0-disc` |
+
+This is M5's host, and it is also the answer to the operator's own question about cleaning up: the
+tunnel's address dies with the tunnel, so a cached disc downloaded from it can only be removed from the
+browser's own storage settings. A Pages address is stable, so the page's **"Delete the cached disc"**
+button keeps working days later, with the tab closed.
+
+### The OPFS disc costs nothing on a device, and the 2016-tablet reading was wrong
+
+The operator ran the same page twice on the iPhone 16 Pro with the disc **downloaded into OPFS** rather
+than picked from the file system — the first time that path has been exercised on a device that is not
+this VPS. Evidence: `/home/hermes/incoming/phase0/devices/iphone-safari-opfs-2026-10-01/`.
+
+| Run | in-match mean | p95 | p99 | max | disc_source | trace |
+| --- | --- | --- | --- | --- | --- | --- |
+| 13:10:15 | 3.359 ms | 3.90 | 4.30 | 9.04 | `opfs` | `c79c53b9…` |
+| 13:11:02 | 3.367 ms | 3.90 | 4.74 | 7.98 | `opfs` | `c79c53b9…` |
+
+Against the three file-picker runs of the same device (3.0315 / 3.2442 / 3.0809 ms), the cached path is
+within noise. `cross_origin_isolated: true`, `timer_resolution_ms` 0.02 ms, `exit_code` 0,
+`mode=2 state=2 match_frame=762`. **The disc source is not a variable in the timings**, which removes
+one of the three candidate explanations for the slow Firefox and Chrome rows below. Note for the
+device procedure: `storage_persisted` is **false** on iOS — Safari does not promise to keep the cached
+disc, so the delete button is the only guaranteed way to free the space.
+
+**Correction to the earlier reading of those rows.** The Firefox and Chrome runs from the friend's
+device reported `Mozilla/5.0 (X11; Linux x86_64 …)`, which was read here as a desktop Linux machine and
+recorded as such. That is wrong: it is the user agent Chrome and Firefox send **on Android with
+"Request desktop site" enabled**. The runs were on the device, executing natively. The operator reports
+a **2025 OnePlus tablet with OxygenOS**, 120 Hz. So the numbers stand (12.1 / 13.9 / 13.9 ms in-match on
+Firefox, 16.06 ms on Chrome, trace identical in all four) and the verdict `NO-GO` stands for that
+browser configuration, but the row is **not** an M2 row: a desktop-mode user agent is not the mobile
+configuration the plan specifies. The test that resolves it is the same page with desktop mode off,
+plus the exact model — a cheap 2025 tablet (Helio G99 class) and a flagship tablet (Snapdragon 8 class)
+differ by a factor of three here, and "smooth at 120 Hz" describes the interface, not single-core
+compute.
+
+### Where the frame time goes, measured instead of assumed
+
+A V8 CPU profile of a 600-frame run (`node --cpu-prof`, parsed by sample and `timeDeltas`) answers the
+question the night consultation said to answer first:
+
+| Finding | Value |
+| --- | --- |
+| CPU busy | **99.4%** (0.6% idle) — the frame is compute, not disc I/O |
+| one wasm function | **53%** of sampled time (indices shift between builds, so it cannot be named from the shipped module: it carries no name section) |
+
+That is what aimed the next two experiments, and both were screened locally with
+`scripts/phase0/run_checkpoints.sh` (2400 checkpoints, ~75 s, no CI minutes) before anything was
+proposed.
+
+### Three levers, measured: two merge, one is closed by size
+
+| Module | size | Pages limit | in-match mean (2 runs) | vs baseline | trace |
+| --- | --- | --- | --- | --- | --- |
+| baseline `-Oz` (`d04610d`) | 16,323,657 B | 62% | 27.667 / 27.332 ms | — | `c79c53b9…` |
+| `wasm-opt -O2` post-link | 15,162,083 B | 58% | 26.014 / 26.470 ms | **−4.6%** | identical |
+| `-O2` on `ppc_runtime.cpp` + `interp.cpp` | 15,178,688 B | 58% | 25.367 / 23.655 ms | **−10.9%** | identical |
+| both (main `8f44970`) | 15,173,540 B | 58% | 23.794 / 25.475 ms | **−10.4%** | identical |
+| `-O2` on all generated guest code | **70,133,325 B** | **268% — out** | 24.035 / 23.793 ms | −2.9% (noise) | identical |
+
+- **`wasm-opt` post-link (PR #43, merged).** −7.1% size and −4.6% time, and the CI step checks that the
+  post-processed module still compiles. `--all-features` produces a module the engine rejects
+  (`unknown import kind 0x7f`), so the CI uses an explicit feature set.
+- **`-O2` on the two PowerPC units (PR #41, merged).** −7.0% size, −10.9% time, with
+  `scripts/phase0/assert_hot_opt.sh` reading the real compile commands so that a `-Oz` arriving after
+  the source property cannot make the experiment measure nothing. The size went **down**: `-O2` beats
+  `-Oz` on these two units.
+- **The two do not stack.** Together they are −10.4%, not −15%: they overlap on the same code. Recorded
+  because a PR body that claimed the sum would be wrong.
+- **The generated guest code at `-O2` (PR #44, closed).** +362% size for a ~3% difference inside the
+  ±7% spread between repeats. Both the Pages per-file limit and the speed test close it, and the useful
+  part is what it proves by elimination: **the 53% function is not in the generated guest code**, or
+  compiling that code at `-O2` would have moved the needle. It is in the port's own runtime — which is
+  exactly why `-O2` on `ppc_runtime.cpp` and `interp.cpp` was worth 11% while this is worth nothing.
+  Further gain has to come from changing that code, not from asking the compiler again.
+
+### The CI budget was being spent twice per push
+
+The repository is private, so Actions minutes come out of the free plan's 2,000-minute monthly
+allowance. Measured for this one day: **91 workflow runs, roughly 660 minutes** — a third of the month,
+with 24 WASM core builds at 18–35 minutes each. Two concrete wastes, both fixed in PR #45:
+
+- `ci.yml` triggered on a push to **every** branch *and* on pull requests, so a commit on a branch with
+  an open pull request ran the whole suite twice — the two-runs-per-push the numbers show. Branches are
+  verified by their pull request; `main` is verified after the merge, and that is now the only push
+  that triggers it.
+- The practice is written into `docs/AGENT_RULES.md` ("CI budget") with these numbers: batch experiments
+  into one build, screen locally first, never leave two runs of one branch alive, keep the heavy build
+  on the paths that need it.
+
+When the allowance runs out the jobs stop until the next month and **nothing is charged** (the spending
+limit is zero), so the cost of waste is stalled work, not money.
+
+### Not in this session
+
+The renderer, untouched: `web/src/` still has no drawing code at all, and `docs/RENDERER_MAP.md` holds
+the order (GX command interception, a `Backend` interface, the WebGPU implementation priorities).
+Audio output plumbing. SIMD and threading in the simulation. The M2 row is still unmeasured, and the
+operator's own Pages-hosted run of the optimised module (which needs a native reference built at the
+same commit for `go_no_go.py`'s cross-commit rule) has not been done.
+
+### Next step
+
+**The renderer's first priority** — the backend seam, the canvas, and the first frame of the game
+drawn from the simulation's command stream — because the speed question is answered well enough to
+build on (3.36 ms per frame on the iPhone against a 16.67 ms budget at 60 Hz, ~5x headroom) and further
+compiler-level speed work is closed by size. The remaining speed ideas that are not closed (the
+interpreter's dispatch path, SIMD) are worth single-digit percentages each and belong after a visible
+frame exists. M2 stays open until an Android device in the mobile configuration is available.
+
+## Renderer step 1 — a WebGPU backend that presents the frame's clear (2026-10-01, evening)
+
+Branch `render/webgpu-step1`. **Written, not run**: the account's Actions minutes are exhausted, so
+no workflow has picked up a job, and nothing here has been compiled — the VPS builds nothing.
+
+**What was found.** The web build had no backend and never built a frame: `gx_core.cpp` is not in
+the shipped modules (`native/core_sources.cmake`), `native/headless_fifo.cpp` decodes the FIFO in
+its place and drops all render state, and `gx::init` is never called. And no CI runner can produce
+a game frame at all: without the disc every spike run stops at the DOL, before the first GX command.
+
+**What was written.**
+
+- `native/headless_fifo.cpp`, `native/headless.h`: `host::gx_set_backend`. With a backend attached,
+  each EFB copy is recorded as `gx_core.cpp` records it and the `gx::Frame` is handed over at the
+  XFB copy. Null by default; the native reference and the Node module never set it.
+- `wasm/render/gx_webgpu.cpp` (web module only): `gx::Backend` with a persistent EFB texture;
+  replays each copy in order — EFB to canvas, then clear. Draws ignored. Detaches itself on any
+  JavaScript failure. `gx_webgpu_selftest` feeds the real decoder a frame's closing BP writes.
+- `web/src/spike/gpu.ts`, `worker.ts`, `main.ts`, `spike.html`: `?canvas` hands a run an
+  `OffscreenCanvas`; the device is acquired before `callMain`; without a canvas nothing changes.
+- Tests: `native/tests/fifo_test.cpp` (the seam: frames, order, colour, detach) and
+  `web/tests/spike/render.spec.ts` (two copies show the clear colour, one copy shows the
+  zero-initialised EFB, no canvas renders nothing; pixels read back with `copyTextureToBuffer`).
+
+**Next step.** When CI has minutes: run the probe (PR #47) first, then this branch's
+`Phase 0 — WASM core` and `Phase 0 — Linux headless reference` runs. Then the operator's call on
+`docs/OPEN_QUESTIONS.md` Q10 before step 2.
+
+**Update, first CI run (run `36892349174`, commit `54800cd`).** The C++ compiles and links in both
+builds; `native_fifo_test`, seam included, passed under g++ (run `36892349475`); the CI Chromium
+gave the render test a device. Two render tests failed on the readback: `device lost: Device was
+destroyed.` then `mapAsync` aborted with `A valid external Instance reference no longer exists.`
+Diagnosis: nothing reachable from the worker's global scope held the adapter, device or readback
+buffer once the synchronous stretch ended, so they could be collected while the map was pending.
+Fix: `web/src/spike/gpu.ts` roots every opened GPU object and every in-flight readback buffer for
+the worker's lifetime. The second test's `[0,0,0,0]` was right; its null pixel was the same failure.
+
+**Update, runs `36896537472` and `36898914442`.** Rooting the GPU objects (`cdba78b`) changed
+nothing: collection was not the cause. The diagnostic run's timeline settled where the device dies.
+Buffer round trips pass across several task boundaries while the canvas is configured but
+untouched. About 0.7 ms after the first task that calls `getCurrentTexture` yields (the moment its
+canvas frame is committed), the device is lost (`destroyed`) and every pending map aborts. One
+realm, one device, the backend used it, two copies recorded. Ruled out: a runtime exit (the
+self-test calls no `callMain`; `-sEXIT_RUNTIME=1` is linked only into the Node module and
+`sha1_test`) and `emdawnwebgpu` (not linked; 0 mentions in the run's log). What it is inside
+Chromium is not established. Change: the backend's XFB target is pluggable. CI reads the backend's
+output back from an offscreen texture (`?gx-selftest…&target=texture`), and the canvas path is
+asserted in CI without a pixel. The canvas pixel test runs with `SPIKE_CANVAS_READBACK=1`, and a
+`?canvas` run reports it as `render.readback`, for a real device to settle.

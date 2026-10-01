@@ -427,14 +427,67 @@ questo piano: se C5 dà SHA-1 `c79c53b9…` identico, la parità si accetta anno
 se C5 dà una differenza, **prima** di cercarne la causa si produce una traccia nativa del commit del
 core servito, perché la differenza potrebbe venire dal commit e non da Safari.
 
+**Aggiornamento 2026-10-01.** Il core pubblicato è ora `63511ce6c5f4e39be07b9acc9b517b2010ca01db`
+(deploy `36868675226`) e la traccia nativa dello **stesso** commit esiste: run `36879113234`, in
+`/home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv`, identica a `c79c53b9…` (due corse,
+`identical: 2400 retraces`). Per quella pagina la regola del cross-commit non serve più: si passa
+`--reference-commit 63511ce6c5f4e39be07b9acc9b517b2010ca01db` con quel file. `current.env` punta a
+quella cartella (layout `runs/native-1/` incluso). Dettagli e numeri: `docs/PROGRESS.md`, sezione
+del 2026-10-01 pomeriggio (PR #46, non ancora in `main` a questa data).
+
 **Se la traccia differisce** (con riferimento dello stesso commit): è un risultato importante, non
 un guasto del test. Vuol dire che JavaScriptCore calcola qualcosa in modo diverso da V8 e dal nativo.
 Si annotano il primo retrace e la colonna che differiscono (li stampa `compare_checkpoints.py`), e
 si segue `docs/AGENT_RULES.md` regola 5: nessuna modifica al ricompilatore prima di averli scritti.
 Per la spec è NO-GO finché non è spiegata.
 
-**Nota:** `scripts/phase0/go_no_go.py` (passo S8 di `docs/PHASE0_NEXT.md`) **non esiste ancora**.
-Fino ad allora i conti della sezione 6 si fanno a mano con i valori di C6.
+**Nota (aggiornata 2026-10-01).** `scripts/phase0/go_no_go.py` esiste (PR #31) e i controlli C1-C8 di questa
+sezione sono dentro di lui: `evaluate_run()` li applica seguendo la tabella, con `WARMUP_TOLERANCE = 0.15`
+per C7, `SPREAD_TOLERANCE = 0.15` e `MAX_PLAUSIBLE_MS = 1000.0` per C8, e `STATS_TOLERANCE_MS = 0.01` per il
+confronto fra `stats_in_match` dichiarato e ricalcolato (C6). La sezione 6 non si calcola più a mano con i
+valori di C6: si esegue il comando, che elenca in `reasons` ogni controllo fallito.
+
+**Aggiornamento 2026-10-01 — i controlli C1–C8 sui JSON che non erano mai passati dal tool.** Questa
+sezione dice che i JSON si ricontrollano; finora erano passati da `scripts/phase0/go_no_go.py` solo i
+cinque JSON del telefono. Su questa macchina esistono altri due insiemi di corse, tenuti fuori dal
+checkout in `/home/hermes/incoming/phase0/devices/`: `firefox-linux-2026-10-01/run{1,2,3}.json` (tre
+corse) e `chrome-oneplus-2026-10-01-run1.json` (una). Tutti e quattro hanno `disc_source: opfs`,
+`core_commit 4a3f537…`, `core_opt -Oz`, 2400 frame, `exit_code 0`,
+`final_scene: mode=2 state=2 match_frame=762 (retraces=2400)`, `cross_origin_isolated: true`.
+Comando, con il riferimento di `current.env` (lo stesso commit che la pagina serve):
+
+```bash
+python3 scripts/phase0/go_no_go.py \
+  --reference /home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv \
+  --reference-commit 63511ce6c5f4e39be07b9acc9b517b2010ca01db \
+  --phone /home/hermes/incoming/phase0/devices/firefox-linux-2026-10-01/run1.json \
+           /home/hermes/incoming/phase0/devices/firefox-linux-2026-10-01/run2.json \
+           /home/hermes/incoming/phase0/devices/firefox-linux-2026-10-01/run3.json
+```
+
+| Insieme | corse | esito | numeri |
+| --- | --- | --- | --- |
+| Firefox | 3 | `VERDICT: NO-GO`, exit 1 | media peggiore **13,9379 ms**, p99 peggiore **16,96 ms**, `q` 0,02 ms |
+| Chrome | 1 | `VERDICT: INPUT-ERROR`, exit 2 | media 16,0602 ms, p99 19,335 ms, `q` 0,005 ms, ma una corsa sola: `phone: 1 run(s), but the criterion needs at least 3` |
+
+Il NO-GO non dipende dalla classe scelta: 13,94 ms supera anche la soglia desktop del tool
+(`desktop_mean_nogo_ms` 4,0). Quattro cose che il comando aggiunge ai numeri già noti:
+
+- **C5 superato su tutte e quattro.** Traccia identica al riferimento, **0 differenze su 2400 righe**,
+  SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; C3 accettato dalla regola del cross-commit (core
+  `4a3f537…` contro riferimento `63511ce…`), annotato in `reasons` come nella nota qui sopra.
+- **C7 sulla corsa 2 di Firefox: +82,5% fra i primi e gli ultimi 100 frame di partita**, oltre il 15%
+  che il tool tollera; annotato come nota, non come fallimento. Le altre due corse: −0,2% e +2,5%. È
+  lo stesso segnale della corsa 2 del telefono (+6,6%), molto più grande: la corsa rallenta mentre va.
+- **C8 su Firefox: scarto fra le tre medie 14,95%** contro il 15% di tolleranza — passa con 0,05 punti
+  di margine. Una quarta corsa può portarlo sopra, e allora la riga diventa **non decidibile**.
+- **Il Chrome non ha un verdetto, ha un `INPUT-ERROR`**: il criterio della sezione 6 vuole tre corse,
+  quindi per decidere quella riga ne mancano due.
+
+**Cosa questo aggiornamento non è.** Non è un verdetto su M1, M2 o M5: lo `user_agent` di tutte e
+quattro le corse è un `X11; Linux x86_64` (un browser in configurazione desktop), e questa sezione
+ricorda che device e tempi sono dichiarati, non provati. Vale come: i controlli di questa sezione
+girano anche su questi JSON, e la riga Chrome dice cosa manca per poterla decidere.
 
 ---
 
