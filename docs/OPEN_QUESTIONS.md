@@ -170,6 +170,25 @@ Cloudflare credentials, so the iPhone run can start before Q3/O1 are answered.
 
 ## Q10 — The renderer after step 1: where frames come from, who owns the device, when a frame is shown
 
+
+**Geometry follow-up — 2026-10-02 (`render/webgpu-geometry`, draft, unverified).**
+`wasm/render/gx_webgpu.cpp` now consumes Draw commands with verified packed offsets,
+upstream primitive conversion, XF/projection, vertex colors, scissor, culling and reversed
+D32 depth. Slot 0 is a neutral white 1×1 texture. Culling follows framebuffer-clockwise
+`FrontCounterClockwise=FALSE` in D3D and [WebGPU frontFace](https://www.w3.org/TR/webgpu/#enumdef-gpufrontface).
+The synthetic geometry readback tests in `web/tests/spike/render.spec.ts` distinguish a
+transformed green triangle from clear-only output and test occlusion/scissor/culling.
+These tests have **not been executed** in this implementation session.
+
+Priority 2 is still partial: lighting/channel controls and texgen are absent; normal and
+second-color outputs do not yet contribute to the fragment color. Lines lack a pixel fixture.
+Perspective/inverted viewports, clip edges, normal/matrix-index coverage and real game captures
+remain unverified. Priority 3 (exact TEV, blend/write masks, alpha test, destination alpha,
+fog/Z) and priority 4 (eight actual texture/sampler slots and snapshot decoding) remain open.
+Whole-EFB clears, copy fidelity, pipeline/cache lifetime across device recreation and submission
+cost also remain open. Compilation, CI, preview, GPU execution and 2400-checkpoint parity are
+not claimed; parity belongs to the parent session. See the final PROGRESS entry for limits.
+
 Raised 2026-10-01 by the WebGPU step 1 branch (`render/webgpu-step1`). Step 1 itself is not blocked
 by any of the three: it presents the frame's EFB copies and clears, and each choice below was made
 the smallest way and is reversible. Step 2 (draws) is blocked by (a), and (c) decides whether a real
