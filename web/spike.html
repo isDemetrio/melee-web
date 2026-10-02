@@ -6,7 +6,14 @@
 <label>Local disc image <input id="iso" type="file"></label>
 <label>Native reference CSV <input id="reference" type="file" accept=".csv"></label>
 <button id="run">Run</button>
-<p id="core"></p><p id="status"></p><pre id="log"></pre><pre id="stats"></pre><p id="compare"></p>
+<p id="core"></p><p id="status"></p>
+<!--
+  The heartbeat (src/spike/heartbeat.ts): the frame a run has reached and how long ago, while it runs,
+  and -- after a reload -- where the last run that never finished had got to. "partial report" saves
+  what the page has of a run that is still going: the beats, the log and the last renderer counts.
+-->
+<p id="heartbeat"></p><button id="partial" hidden>partial report JSON</button>
+<pre id="log"></pre><pre id="stats"></pre><p id="compare"></p>
 <a id="download" hidden>result JSON</a>
 <!--
   The renderer. Empty unless the page is opened with ?canvas (a run draws into a canvas here through

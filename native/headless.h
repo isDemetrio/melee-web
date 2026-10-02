@@ -10,6 +10,10 @@ void gx_set_backend(gx::Backend* backend);
 extern std::string dol_path;
 // --sim-times: per-retrace simulation wall time. Empty means the option was not given.
 extern std::string sim_times_path;
+// Called at the end of every retrace with the retraces completed; null (the default) does
+// nothing. It must only observe: the web core uses it for the page's heartbeat
+// (wasm/core/heartbeat.cpp), which reads no guest state.
+extern void (*retrace_heartbeat)(uint32_t retraces);
 bool input_load_script(const char* path);
 void input_mark_match_start();
 }

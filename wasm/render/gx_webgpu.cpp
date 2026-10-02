@@ -34,7 +34,10 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <climits>
 #include <cmath>
+#include <memory>
+#include <unordered_map>
 #include <emscripten/emscripten.h>
 
 // The two JavaScript halves stay at file scope, where Emscripten's EM_JS examples put them: the macro
@@ -71,7 +74,7 @@ EM_JS(int, gxw_open, (int width, int height), {
     // Draw resources are persistent and rewritten through the queue (gxw_texture, gxw_draw).
     gpu.uniforms = gpu.device.createBuffer({size:105*16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
     gpu.vertexBuffer = null; gpu.indexBuffer = null;
-    gpu.texturePool = new Map(); gpu.texturePoolBytes = 0; gpu.textureSerial = 0;
+    gpu.texturePool = new Map(); gpu.texturePoolBytes = 0; gpu.evicted = [];
     gpu.bindGroups = new Map();
     gpu.drawSerial = 0;
     gpu.backendDevice = gpu.device;
@@ -118,73 +121,89 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
   }
 });
 
-// Re-upload immutable snapshots per segment: no address/hash cache can return stale pixels.
-// queue.writeTexture copies the WASM bytes before this call returns.
-//
-// Samplers are cached instead. They have no destroy(), so a fresh one per slot per draw (8 per
+// Samplers are cached. They have no destroy(), so a fresh one per slot per draw (8 per
 // draw, unused slots included) was released only by garbage collection, whose timing nothing
 // here controls; createSampler is the call that failed on the iPhone after 81 copies (7296478).
 // The descriptor is a pure function of mode0 bits 0-7 and mode1 bits 0-15, which is the key, so
 // a hit is the sampler a miss would create. Bounded: past SAMPLER_CACHE_LIMIT distinct
 // keys the oldest is dropped (to garbage collection). render.spec.ts's sampler count is the misses.
 //
-// The textures the pixels go into are pooled, so that bind groups (no destroy() either) can be
-// reused: a bind group names its textures, and a texture made for one draw makes every bind group
-// single-use. A pool texture is keyed by slot and shape -- slot, so two slots of one draw never
-// share one -- and every level is rewritten on every use. Queue operations run in order, so a
-// writeTexture after a submit does not reach the draws already submitted.
-// https://www.w3.org/TR/webgpu/#queue-timeline
-// Bounded by count and bytes, least recently used first; an evicted texture is destroyed and its
-// id is never reused, so a cached bind group naming it is never hit again. Textures of the draw
-// being uploaded are never evicted: such a draw may exceed the budget rather than lose a slot.
-EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
-                       const void* rgba, int bytes, int mode0, int mode1), {
+// Textures are cached by content. `content` is the id upload_textures gives one immutable
+// TextureSnapshot decoded one way (format, TLUT format, size, levels); it never names anything
+// else, and the C++ side holds the snapshot for as long as this pool holds its texture, so the
+// pixels a hit returns are the pixels a miss would upload. No guest address or hash is trusted.
+// Until 9b08acf the pool was keyed by slot and shape and every level was decoded and rewritten
+// for every draw: 117 MB of writeTexture per in-match frame, ~1,880 draws (docs/PROGRESS.md).
+// A miss returns 2 and upload_textures writes the levels (gxw_upload); a hit returns 1 and
+// nothing is written. Queue operations run in order, so the first upload precedes every draw
+// that uses it. https://www.w3.org/TR/webgpu/#queue-timeline
+//
+// Bounded by count and bytes, least recently used first, with limits far above what a match was
+// measured to use (<=154 textures, 6.2 MiB per frame; 481 contents, 28 MB in 2400 frames). An
+// evicted texture is destroyed, which already-submitted draws survive
+// (https://www.w3.org/TR/webgpu/#texture-destruction), and its content id is queued for
+// upload_textures, which then forgets the snapshot (gxw_evicted): the id is never reused, so a
+// cached bind group naming it is never hit again. Textures of the draw being bound are never
+// evicted: such a draw may exceed the budget rather than lose a slot.
+EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, int mode0, int mode1), {
   const gpu = Module["gxWebgpu"];
   const SAMPLER_CACHE_LIMIT = 256;
-  const TEXTURE_POOL_LIMIT = 128, TEXTURE_POOL_BYTES = 32 << 20;
-  const pooled = () => {
-    const key = slot + ":" + width + "x" + height + "x" + levels;
-    let entry = gpu.texturePool.get(key);
-    if (entry) gpu.texturePool.delete(key);
+  const TEXTURE_POOL_LIMIT = 1024, TEXTURE_POOL_BYTES = 64 << 20;
+  try {
+    const minf = (mode0 >>> 5) & 7, mip = minf & 3;
+    const lo = (mode1 & 255) / 16, hi = mip ? ((mode1 >>> 8) & 255) / 16 : 0;
+    // WebGPU rejects inverted clamps; do not silently approximate invalid D3D state.
+    if (lo > hi) throw new Error("inverted texture LOD clamps");
+    const key = (mode0 & 255) | ((mode1 & 65535) << 8);
+    let sampler = gpu.samplers.get(key);
+    if (!sampler) {
+      const wrap = ["clamp-to-edge","repeat","mirror-repeat","repeat"];
+      sampler = gpu.device.createSampler({addressModeU:wrap[mode0&3],addressModeV:wrap[(mode0>>>2)&3],
+        magFilter:(mode0&16)?"linear":"nearest", minFilter:(minf&4)?"linear":"nearest",
+        mipmapFilter:mip===2?"linear":"nearest",lodMinClamp:lo,lodMaxClamp:hi});
+      if (gpu.samplers.size >= SAMPLER_CACHE_LIMIT) gpu.samplers.delete(gpu.samplers.keys().next().value);
+      gpu.samplers.set(key, sampler);
+    }
+    if (!content) { gpu.slots[slot] = {entry:gpu.whiteEntry, sampler, key}; return 1; }
+    let entry = gpu.texturePool.get(content), fresh = false;
+    if (entry) gpu.texturePool.delete(content);
     else {
       let size = 0;
       for (let l = 0; l < levels; l++) size += Math.max(1, width >> l) * Math.max(1, height >> l) * 4;
-      for (const [oldKey, old] of gpu.texturePool) {
+      for (const [oldContent, old] of gpu.texturePool) {
         if (gpu.texturePool.size < TEXTURE_POOL_LIMIT && gpu.texturePoolBytes + size <= TEXTURE_POOL_BYTES) break;
         if (old.draw === gpu.drawSerial) break; // this draw's own: everything after it is too
-        gpu.texturePool.delete(oldKey); gpu.texturePoolBytes -= old.size; old.texture.destroy();
+        gpu.texturePool.delete(oldContent); gpu.texturePoolBytes -= old.size; old.texture.destroy();
+        gpu.evicted.push(oldContent);
       }
       const texture = gpu.device.createTexture({size:[width,height],mipLevelCount:levels,
         format:"rgba8unorm",usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
-      entry = {id:++gpu.textureSerial, texture, view:texture.createView(), size};
+      entry = {id:content, texture, view:texture.createView(), size};
       gpu.texturePoolBytes += size;
+      fresh = true;
     }
     entry.draw = gpu.drawSerial;
-    gpu.texturePool.set(key, entry);
-    return entry;
-  };
+    gpu.texturePool.set(content, entry);
+    gpu.slots[slot] = {entry, sampler, key};
+    return fresh ? 2 : 1;
+  } catch(error) { gpu.recordFailure("texture", error); gpu.failure = "texture: " + error; return 0; }
+});
+
+// One level of the texture gxw_bind just made for `slot`. queue.writeTexture copies the WASM
+// bytes before this call returns. 1 on success.
+EM_JS(int, gxw_upload, (int slot, int level, int width, int height, const void* rgba, int bytes), {
+  const gpu = Module["gxWebgpu"];
   try {
-    if (level === 0) {
-      const minf = (mode0 >>> 5) & 7, mip = minf & 3;
-      const lo = (mode1 & 255) / 16, hi = mip ? ((mode1 >>> 8) & 255) / 16 : 0;
-      // WebGPU rejects inverted clamps; do not silently approximate invalid D3D state.
-      if (lo > hi) throw new Error("inverted texture LOD clamps");
-      const key = (mode0 & 255) | ((mode1 & 65535) << 8);
-      let sampler = gpu.samplers.get(key);
-      if (!sampler) {
-        const wrap = ["clamp-to-edge","repeat","mirror-repeat","repeat"];
-        sampler = gpu.device.createSampler({addressModeU:wrap[mode0&3],addressModeV:wrap[(mode0>>>2)&3],
-          magFilter:(mode0&16)?"linear":"nearest", minFilter:(minf&4)?"linear":"nearest",
-          mipmapFilter:mip===2?"linear":"nearest",lodMinClamp:lo,lodMaxClamp:hi});
-        if (gpu.samplers.size >= SAMPLER_CACHE_LIMIT) gpu.samplers.delete(gpu.samplers.keys().next().value);
-        gpu.samplers.set(key, sampler);
-      }
-      gpu.slots[slot] = {entry:width ? pooled() : gpu.whiteEntry, sampler, key};
-    }
-    if (width) gpu.device.queue.writeTexture({texture:gpu.slots[slot].entry.texture,mipLevel:level},
+    gpu.device.queue.writeTexture({texture:gpu.slots[slot].entry.texture,mipLevel:level},
       HEAPU8.subarray(rgba,rgba+bytes),{bytesPerRow:width*4,rowsPerImage:height},[width,height]);
+    gpu.textureUploads = (gpu.textureUploads | 0) + 1;
     return 1;
   } catch(error) { gpu.recordFailure("texture", error); gpu.failure = "texture: " + error; return 0; }
+});
+
+// The next content id gxw_bind evicted, oldest first; 0 when there is none.
+EM_JS(int, gxw_evicted, (), {
+  const gpu = Module["gxWebgpu"]; return gpu.evicted.length ? gpu.evicted.shift() : 0;
 });
 
 EM_JS(int, gxw_texture_count, (), {
@@ -202,15 +221,19 @@ EM_JS(int, gxw_texture_count, (), {
 // Bind groups have no destroy() and were the next call to fail on the iPhone (one per draw:
 // 22,514 in 2400 frames, first createBindGroup failure at 6755 ms). Their descriptor is the fixed
 // layout, the persistent uniform buffer, and per slot a pooled texture's view and a cached
-// sampler, so the pool id and sampler key of the eight slots are the key: a hit is the bind group
-// a miss would create. Bounded like the samplers, least recently used dropped (to garbage
-// collection). The pipeline key keeps only the bits the pipeline descriptor reads.
+// sampler, so the content id and sampler key of the eight slots are the key: a hit is the bind
+// group a miss would create. Bounded like the samplers, least recently used dropped (to garbage
+// collection): 1024, above the 817 distinct keys of a measured 2400-frame run (<=164 per frame),
+// where 256 missed 2383 times. The pipeline key keeps only the bits the pipeline descriptor reads.
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
                      const float* constants, const float* raster, int lines, int cull, int zmode, int components), {
   const gpu = Module["gxWebgpu"];
-  const BIND_GROUP_CACHE_LIMIT = 256;
+  const BIND_GROUP_CACHE_LIMIT = 1024;
   // The uploads before this call were draw drawSerial's; the next draw's get a new serial.
   gpu.drawSerial++;
+  // The page's heartbeat (web/src/spike/heartbeat.ts): a frame that draws slowly still beats.
+  const beat = Module["heartbeat"];
+  if (beat) beat(-1);
   try {
     const d = gpu.device;
     const r = HEAPF32.slice(raster >> 2, (raster >> 2) + 10);
@@ -319,13 +342,38 @@ static_assert(sizeof(gx::Vertex) == 108 && offsetof(gx::Vertex, nrm) == 12 &&
               offsetof(gx::Vertex, uv) == 32 && offsetof(gx::Vertex, posmtx) == 96 &&
               offsetof(gx::Vertex, texmtx) == 97, "WebGPU packed vertex layout");
 
-// All source reads are from TextureSnapshot, never host::ram/guest addresses.
+// What each pooled texture holds: one immutable snapshot, decoded one way. The key's pointer is
+// pinned by `snapshot` for as long as the entry exists, so it cannot be freed and reused for other
+// bytes while gxw_bind's pool may still hit on its id. Entries leave when the pool evicts the
+// texture (gxw_evicted), so this map is bounded by the pool.
+struct ContentKey {
+  const gx::TextureSnapshot* snapshot;
+  uint32_t width, height, format, tlut_format, levels;
+  bool operator==(const ContentKey& o) const {
+    return snapshot==o.snapshot && width==o.width && height==o.height && format==o.format &&
+           tlut_format==o.tlut_format && levels==o.levels;
+  }
+};
+struct ContentKeyHash {
+  size_t operator()(const ContentKey& k) const {
+    size_t h=std::hash<const void*>()(k.snapshot);
+    for (uint32_t v : {k.width,k.height,k.format,k.tlut_format,k.levels}) h=h*1000003u ^ v;
+    return h;
+  }
+};
+struct Content { int id; std::shared_ptr<const gx::TextureSnapshot> snapshot; };
+std::unordered_map<ContentKey, Content, ContentKeyHash> g_contents;
+std::unordered_map<int, ContentKey> g_content_keys;
+int g_next_content = 0;
+
+// All source reads are from TextureSnapshot, never host::ram/guest addresses. A snapshot already
+// in the pool is neither decoded nor uploaded again (gxw_bind).
 bool upload_textures(const gx::DrawCall& dc) {
   std::vector<uint8_t> rgba;
   for (int slot=0; slot<8; ++slot) {
     const auto& t=dc.textures[slot];
     if (!t.used) {
-      if (!gxw_texture(slot,0,0,1,0,nullptr,0,0,0)) return false;
+      if (!gxw_bind(slot,0,0,0,1,0,0)) return false;
       continue;
     }
     const bool supported=t.format<=6 || t.format==8 || t.format==9 || t.format==10 || t.format==14;
@@ -337,10 +385,28 @@ bool upload_textures(const gx::DrawCall& dc) {
       std::fprintf(stderr,"webgpu: invalid/unsupported texture snapshot in slot %d\n",slot);
       return false;
     }
+    const ContentKey key{t.data.get(),t.width,t.height,t.format,t.tlut_format,t.mip_levels};
+    auto found=g_contents.find(key);
+    if (found==g_contents.end()) {
+      if (g_next_content==INT32_MAX) { std::fprintf(stderr,"webgpu: texture content ids exhausted\n"); return false; }
+      found=g_contents.emplace(key,Content{++g_next_content,t.data}).first;
+      g_content_keys.emplace(found->second.id,key);
+    }
+    const int content=found->second.id;
+    const int bound=gxw_bind(slot,content,t.width,t.height,t.mip_levels,t.mode0,t.mode1);
+    if (!bound) return false;
+    // Only a miss evicts, and never this draw's textures, so `content` is not among these.
+    for (int gone; (gone=gxw_evicted());) {
+      const auto k=g_content_keys.find(gone);
+      if (k==g_content_keys.end()) { std::fprintf(stderr,"webgpu: pool evicted unknown content %d\n",gone); return false; }
+      g_contents.erase(k->second);
+      g_content_keys.erase(k);
+    }
+    if (bound==1) continue;
     uint32_t w=t.width,h=t.height; size_t offset=0;
     for (uint32_t level=0;level<t.mip_levels;++level) {
       gx::decode_texture(t.data->image.data()+offset,w,h,t.format,t.data->palette.data(),t.tlut_format,rgba);
-      if (!gxw_texture(slot,w,h,t.mip_levels,level,rgba.data(),rgba.size(),t.mode0,t.mode1)) return false;
+      if (!gxw_upload(slot,level,w,h,rgba.data(),rgba.size())) return false;
       offset+=gx::texture_level_bytes(w,h,t.format);
       w=std::max(1u,w/2); h=std::max(1u,h/2);
     }
@@ -452,9 +518,15 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_presented() {
 
 // Synthetic tiled GX bytes, deliberately independent of decode_texture's implementation.
 // Every format gives a non-white sample; palettes are part of the immutable snapshot.
-static gx::TextureRef fixture_texture(uint32_t format, bool changed=false, bool mips=false, bool pattern=false) {
+//
+// Like the decoder's TextureSnapshotCache, the same bytes come back as the same snapshot, unless
+// `fresh` asks for a new one (geometry 39: a new snapshot of unchanged bytes is a new content).
+static gx::TextureRef fixture_texture(uint32_t format, bool changed=false, bool mips=false, bool pattern=false, bool fresh=false) {
   gx::TextureRef t; t.used=true; t.addr=0x1000; t.width=8; t.height=8;
   t.format=format; t.tlut_format=1; t.mip_levels=mips?4:1;
+  static std::unordered_map<uint32_t, std::shared_ptr<const gx::TextureSnapshot>> made;
+  const uint32_t id=format | uint32_t(changed)<<8 | uint32_t(mips)<<9 | uint32_t(pattern)<<10;
+  if (!fresh) if (const auto found=made.find(id); found!=made.end()) { t.data=found->second; if(mips) { t.mode0=1u<<5; t.mode1=(16u<<8)|16u; } return t; }
   auto data=std::make_shared<gx::TextureSnapshot>();
   const size_t palette_bytes=format==8?32:format==9?512:format==10?32768:0;
   data->palette.resize(palette_bytes);
@@ -485,6 +557,7 @@ static gx::TextureRef fixture_texture(uint32_t format, bool changed=false, bool 
   }
   data->hash=0; // deliberately identical: backend must not trust a hash/address alone
   t.data=data;
+  if (!fresh) made[id]=data;
   if(mips) { t.mode0=1u<<5; t.mode1=(16u<<8)|16u; } // force mip 1
   return t;
 }
@@ -528,7 +601,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
       if (geometry>=10) {
         static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
         const uint32_t format=geometry<=20?formats[geometry-10]:geometry==32?8:6;
-        const auto texture=fixture_texture(format,layer==1 && (geometry==31 || geometry==32),geometry==33,geometry>=34);
+        // geometry 39: geometry 16's texture, as a new snapshot every time (the pool evicts).
+        const auto texture=fixture_texture(format,layer==1 && (geometry==31 || geometry==32),geometry==33,
+                                           geometry>=34 && geometry<=38,geometry==39);
         // Exercise all eight bindings even though the intentionally limited shader uses slot 0.
         for(auto& t:dc.textures) {
           t=texture;
