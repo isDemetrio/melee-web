@@ -1,0 +1,89 @@
+name: Ops — Pages Access environment
+
+# The Functions middleware (`functions/_middleware.ts`) validates the Access JWT against
+# `ACCESS_AUD` and `ACCESS_TEAM_DOMAIN`. When either is missing from the Pages project the
+# middleware answers `403 {"error":"Forbidden"}` to *everyone*, including the operator right
+# after a successful Access login -- which is how the spike preview failed. This workflow sets
+# them with the same credentials the deploy uses, so the operator does not have to touch the
+# dashboard and cannot mistype a value.
+#
+# It is dispatch-only, it writes only when `apply` is true (otherwise it prints the plan and
+# stops), and it verifies by reading the project back: a write that dropped the R2 bindings
+# fails the job instead of passing quietly.
+
+on:
+  workflow_dispatch:
+    inputs:
+      access_aud:
+        description: 'Access application AUD tag (the kid in the Access login URL, and the aud of the meta JWT)'
+        required: true
+      access_team_domain:
+        description: 'Access team domain, e.g. <team>.cloudflareaccess.com'
+        required: true
+      environment:
+        description: 'Deployment environment to set the variables in'
+        type: choice
+        options:
+          - preview
+          - production
+        default: preview
+      apply:
+        description: 'Write the change. Leave unchecked to only print what would be written.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-access-env
+  cancel-in-progress: false
+
+jobs:
+  set:
+    name: Set the Pages Access variables
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT || secrets.CF_PAGES_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Refuse to run without credentials
+        # Nothing is guessed and nothing is defaulted: a missing credential stops the job here
+        # rather than producing a partial configuration.
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing+=(CLOUDFLARE_API_TOKEN)
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing+=(CLOUDFLARE_ACCOUNT_ID)
+          [ -n "$CF_PAGES_PROJECT" ] || missing+=(CF_PAGES_PROJECT)
+          if ((${#missing[@]})); then
+            echo "::error::missing credential(s): ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Set the variables and read them back
+        # The values reach the script through the environment and are quoted, never interpolated
+        # into the script body.
+        env:
+          ACCESS_AUD: ${{ inputs.access_aud }}
+          ACCESS_TEAM_DOMAIN: ${{ inputs.access_team_domain }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          set -euo pipefail
+          args=(--project "$CF_PAGES_PROJECT" --environment "$ENVIRONMENT"
+                --set "ACCESS_AUD=$ACCESS_AUD"
+                --set "ACCESS_TEAM_DOMAIN=$ACCESS_TEAM_DOMAIN")
+          if [ "$APPLY" = "true" ]; then
+            python3 scripts/set_pages_env.py "${args[@]}" --apply
+          else
+            echo "::notice::dry run: nothing is written (dispatch again with apply=true to write)"
+            python3 scripts/set_pages_env.py "${args[@]}"
+          fi
