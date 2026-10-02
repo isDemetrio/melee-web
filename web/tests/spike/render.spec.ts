@@ -118,3 +118,24 @@ test('without a GPU the decoder runs the same commands and nothing is rendered',
   expect(result.presented).toBe(0);
   expect(errors).toEqual([]);
 });
+
+// All expected geometry colors differ from both the clear and the sentinel. Removing draw
+// submission fails the green probe; disabling depth makes the last (blue) triangle win.
+for (const [name, geometry, x, expected] of [
+  ['transformed triangle with reversed depth', 1, 320, [0, 255, 0, 255]],
+  ['unsupported points are skipped', 5, 320, COLOUR_RGBA],
+  ['outside the triangle', 1, 600, COLOUR_RGBA],
+  ['scissor excludes the triangle probe', 2, 320, COLOUR_RGBA],
+  ['front culling excludes the clockwise triangle', 3, 320, COLOUR_RGBA],
+] as const) {
+  test(`geometry: ${name}`, async ({ page }) => {
+    const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=${geometry}&sample-x=${x}`);
+    expectReplayed(result, 3, 'texture');
+    expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
+    expect(result.render?.readback).toEqual(expected);
+  });
+}
+
+test('geometry also submits through the canvas path without readback assertions', async ({ page }) => {
+  expectReplayed(await selftest(page, `${QUERY}&copies=2&geometry=1`), 3, 'canvas');
+});

@@ -20,7 +20,7 @@ interface MeleeCore {
   // Absent from a core built before the WebGPU backend existed, which then simply runs headless.
   _gx_webgpu_attach?(): number;
   _gx_webgpu_presented?(): number;
-  _gx_webgpu_selftest?(argb: number, copies: number): number;
+  _gx_webgpu_selftest?(argb: number, copies: number, geometry: number): number;
 }
 interface CoreOptions {
   print(line: string): void;
@@ -62,7 +62,7 @@ interface RunRequest {
    * The render test (web/tests/spike/render.spec.ts): feed the decoder `copies` clearing XFB copies.
    * `target: 'texture'` renders into an offscreen texture instead of a canvas (gpu.ts says why).
    */
-  selftest?: { argb: number; copies: number; target?: 'canvas' | 'texture' };
+  selftest?: { argb: number; copies: number; geometry: number; sampleX: number; target?: 'canvas' | 'texture' };
 }
 
 /** What the renderer did, reported in the result; `null` when no canvas was handed in. */
@@ -149,9 +149,9 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     if (selftest) {
       // Sentinel, decoder, readback: one synchronous stretch, so all three see the same canvas texture.
       if (gpu && attached?.attached) fillTarget(gpu, SENTINEL);
-      const presented = core._gx_webgpu_selftest ? core._gx_webgpu_selftest(selftest.argb >>> 0, selftest.copies) : null;
+      const presented = core._gx_webgpu_selftest ? core._gx_webgpu_selftest(selftest.argb >>> 0, selftest.copies, selftest.geometry) : null;
       if (gpu) mark(gpu, `selftest returned ${presented}`);
-      const pixel = gpu && attached?.attached ? readPixel(gpu) : null;
+      const pixel = gpu && attached?.attached ? readPixel(gpu, selftest.geometry ? selftest.sampleX : 0, selftest.geometry ? 240 : 0) : null;
       // Started in the same task as the readback, on a buffer that never touches the canvas.
       const sameTask = gpu ? probe(gpu, 'same task as the readback') : null;
       if (sameTask) await sameTask;

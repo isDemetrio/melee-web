@@ -1649,3 +1649,35 @@ validation if link closure is subsequently resolved.
 
 2401 rows each, and `diff` reports no differing line. **The real decoder does not change the simulated state**: the parity guarantee survives the substitution, and it is the third column that makes the claim strong — the trace taken *before* the substitution is the trace taken after it. `native_fifo_test` still exercises the legacy decoder only and is not evidence for this path; no CI check, guest read/write or texture RAM watch was relaxed. **Option 1 is adopted**, the branch is mergeable, and renderer step 2 is no longer blocked by Q10(a).
 
+
+### 2026-10-02 — Baseline WebGPU geometry (`render/webgpu-geometry`)
+
+Implemented only in `wasm/render/gx_webgpu.cpp`: packed 108-byte vertex uploads (offset
+assertions against `gx::Vertex`), per-segment upstream index conversion, triangles/lines,
+unsupported-primitive logging, position/normal XF transforms, projection, vertex colors,
+viewport/scissor, D3D clockwise culling and reversed depth comparisons. A persistent D32
+attachment clears with reversed `clear_z`; like the existing color clear this still covers
+all of the EFB. The shader samples a neutral white 1×1 texture in slot 0. Pipelines belong
+to this device and do not use `DrawCall::cached_pipeline`; submitted transient buffers retire
+on queue completion. No source-set, simulation, native or Node backend changes.
+
+`gx_webgpu_selftest` now optionally submits synthetic recorded Frame/DrawCall/Vertex data
+following the existing real-FIFO clear test. `web/tests/spike/render.spec.ts` checks a green
+transformed triangle against blue clear, red/far and blue/far overlapping triangles, an outside
+probe, scissor rejection, culling and unsupported points. Removing draws cannot pass the green
+assertion; disabling depth lets blue win. Canvas submission assertions remain without pixel
+assertions. The synthetic draws test the backend ABI, not FIFO vertex decoding.
+
+Verification performed: source review and `git diff --check` only. No local compilation,
+browser run, CI result, preview, game frame or 2400-checkpoint parity was verified. The parent
+session owns parity. Per operator instruction this session pushes a draft and does not pursue CI.
+
+Known limits: lighting/channel controls and texgen remain unfinished priority 2 work; transformed
+normals and col1 are carried but the fragment shader uses col0. Priority 3 TEV, alpha test,
+blend/write masks, fog and destination alpha, and priority 4 real textures remain absent.
+Line conversion is implemented but has no pixel fixture yet; perspective, inverted/outside
+viewports, all matrix indices and normal lighting behavior need further GPU coverage. Viewport
+mapping uses full-EFB rasterization plus original clip-coordinate rejection in the fragment
+shader; edge/sample equivalence with D3D needs comparison. No performance measurement or device
+loss/recreation validation; per-segment uploads/submissions and unbounded pipeline residency
+are provisional. Resource completion callbacks need the worker event loop to turn.
