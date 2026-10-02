@@ -81,6 +81,13 @@ export function gameScreen(context: AppContext): HTMLElement {
       // every finger the player was holding (touch.ts, setEnabled).
       controls.setEnabled(enabled);
       overlay.dataset.enabled = String(enabled);
+      // The zones sit on the stage and the toggle sits below it, so reaching the toggle can scroll
+      // the stage out of the viewport, and a point outside the viewport hits nothing. Bring the
+      // controls back into view; aligning their bottom also keeps them on a short landscape phone.
+      const box = overlay.getBoundingClientRect();
+      if (enabled && (box.top < 0 || box.bottom > window.innerHeight)) {
+        overlay.scrollIntoView({ block: 'end' });
+      }
       refresh();
       context.log(`touch overlay ${enabled ? 'enabled' : 'disabled'}`);
     },

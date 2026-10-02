@@ -2197,3 +2197,35 @@ phone presentation/performance and long-session GPU resource behavior still need
 The required trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` has NOT been verified by this agent;
 the operator runs the unchanged scripted spike to verify it. Merge requires green CI and verified
 preview; neither an input unit test nor synthetic GX proves the first playable acceptance criterion.
+
+### The three CI failures on #83, measured before fixing (2026-10-02, night)
+
+A diagnostic-only commit (`d3101e7`, run 37059095321) printed what the browser hit-tests at the zone
+centres and what the presented frames carry, before anything was changed.
+
+**Overlay (touch-overlay.spec.ts:17 and :57).** `document.elementFromPoint` at the centre of
+`#stick-zone` and of `#touch-a` returned **`null`**: the points were *outside the viewport*
+(y = −79 and −104 in a 1280×720 viewport, `scrollY` = 656, `#game-stage` top at −496). Nothing
+covered the zones; nothing was there to hit. `page.check('#touch-overlay-toggle')` scrolls the
+toggle into view, the toggle is in the Input panel below the stage, and the overlay is now
+`position: absolute` inside the stage, so reaching the toggle scrolls the controls off the top.
+Before, `position: fixed` pinned them to the viewport whatever the scroll. The 390×844 containment
+test passed because it never sends a pointer event. Fix (`web/src/ui/screens/game.ts`): switching
+the overlay on scrolls it back into view, bottom-aligned (`scrollIntoView({ block: 'end' })`, only if
+it is not already fully visible), which also keeps the zones on screen on a landscape phone where
+the stage is taller than the viewport. The two tests now also assert that `elementFromPoint` at the
+centre is the zone, so a covered or off-screen control fails with what was hit instead of a
+timeout on the readout. Whether this is the visual glitch the operator reported is still unknown.
+
+**Pixels (playable.spec.ts:30).** The bitmaps were blank *before* the canvas: read straight from
+each ImageBitmap in the page, ahead of `transferFromImageBitmap`, all three frames were
+`[0, 0, 0, 0]`, while the PRESENTED word read 3. So this was not only the `bitmaprenderer` readback:
+CI's Chromium hands the page transparent frames, consistent with render.spec.ts's THE GAP (the
+device does not survive a canvas commit there) though not separately proven to be it. The test now
+asserts what CI can: three 640×480 frames with serials 1, 2, 3, and PRESENTED = 3 (stored only after
+a `transferFromImageBitmap` that did not throw; the worker blocks until each serial is acknowledged).
+The pixel check reads the bitmap, not the canvas, and runs only with `SPIKE_CANVAS_READBACK=1`, like
+render.spec.ts's canvas pixel test. **No CI test proves that the main page shows a non-blank
+picture**; that needs a GPU that survives presenting, or the operator's device. Trace
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571` not verified by this agent; no change touches the
+simulation or `wasm/render/`.
