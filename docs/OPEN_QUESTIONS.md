@@ -198,8 +198,9 @@ C++ backend reaches them through `EM_JS` (`wasm/render/gx_webgpu.cpp`). Reason: 
 `requestDevice` resolve only after the event loop turns, the simulation is one synchronous
 `callMain`, and Asyncify is ruled out for the simulation path (`docs/AGENT_RULES.md`). The other
 option is `<webgpu/webgpu.h>` with `--use-port=emdawnwebgpu`, which still needs the device acquired
-before `callMain` and imported into C++ (whether the pinned port exposes such an import is unknown —
-needs investigation), and rests on the toolchain probe, PR #47, which has not run.
+before `callMain` and imported into C++. Both of its unknowns are now measured: the port builds, links
+and renders (PR #47), and it adopts the device JavaScript acquired (PR #52) — see the two paragraphs
+below. The choice between the two paths still belongs to the operator.
 
 **(c) When a frame reaches the screen.** A canvas transferred to a worker is committed when the
 worker's task ends, and a run is one task, so a `?canvas` run shows only its last frame. Showing
@@ -213,8 +214,37 @@ answered: the pinned Emscripten (4.0.23) compiles and links a unit that includes
 and calls into it with `--use-port=emdawnwebgpu`, and the browser this repository's CI can run gives
 the renderer a device it can render with — a texture cleared to red reads back `[255,0,0,255]` under
 `google swiftshader`, in a worker, with `--enable-unsafe-swiftshader --enable-unsafe-webgpu` (run
-`36920684654`). What is still open is the part this decision turns on: whether that port can *adopt* a
-device acquired in JavaScript, since the simulation is one synchronous `callMain` and the device has to
-be acquired before it. The probe creates an instance of its own and does not attempt the import
-(`wasm/probe/webgpu_probe.cpp` says so), so the choice between `EM_JS` and `<webgpu/webgpu.h>` is
-still the operator's, with the toolchain risk removed from it.
+`36920684654`). What was still open at that point is the part this decision turns on: whether that port
+can *adopt* a device acquired in JavaScript, since the simulation is one synchronous `callMain` and the
+device has to be acquired before it. That probe created an instance of its own and did not attempt the
+import (`wasm/probe/webgpu_probe.cpp` said so at the time), so the choice between `EM_JS` and
+`<webgpu/webgpu.h>` was left to the operator, with the toolchain risk removed from it. PR #52 measured
+the import; the answer is in the paragraph below.
+
+**(b), the import measured 2026-10-02 — PR #52, runs `36932059429` and `36932059473`.** The open half of
+(b) is answered, and the answer is yes: C++ adopts the device JavaScript acquired. The pinned port
+declares the import: `webgpu/include/webgpu/webgpu.h:2265` exports the getter `emscripten_webgpu_get_device`,
+which reads `Module['preinitializedWebGPUDevice']` in `webgpu/src/library_webgpu.js:647-660` of the
+package Emscripten 4.0.23 pins, and `wasm/probe/webgpu_probe.cpp` uses it on a device the page acquired
+before instantiating the module — exactly the order the real backend needs. It asks the adopted device
+for its queue, reads its limits (`maxTextureDimension2D 8192`), creates a 1x1 RGBA8 texture with it and
+writes a red pixel through the adopted queue. In the `WebGPU toolchain probe` job of run `36932059429`
+headless Chromium 153.0.8010.12, adapter `google swiftshader`, 1m26s, commit `9ab7f53`: **both** launch
+configurations answer `adopt: {"device":true,"queue":true,"limits":true,"wrote":true}`, with
+`adopt_device_lost: null` and `adopt_errors: []`. `wasm/probe/check.mjs` requires all four of those, so
+a rejected command — which raises a validation error and neither throws nor stops the run — cannot read
+as an answer.
+
+**What the adoption measurement does not cover.** The module is instantiated on the page in this probe,
+while the module of the renderer is instantiated in the worker, `web/src/spike/worker.ts`. What is
+measured is the import mechanism, not that mechanism in the realm of the worker; the mechanism is a
+module argument read before instantiation and does not depend on the realm, but that is reasoning, not a
+measurement. Unchanged from part c of this question and from PR #47: the Chromium of this CI loses the
+device when the canvas frame is committed, in both realms, so the canvas pixel stays a real-device
+measurement, and no CI runner can produce a game frame at all without the disc.
+
+**What is left for the operator.** The choice between `EM_JS` and `<webgpu/webgpu.h>`, with both of its
+unknowns measured instead of assumed: the toolchain builds, links and renders a WebGPU unit in PR #47,
+and the port can adopt the device the page acquired in PR #52. `EM_JS` is what step 1 shipped in
+`wasm/render/gx_webgpu.cpp`, so keeping it is the zero-change option; adopting the device instead
+would make the backend own the instance, adapter and device, and is now known to be possible.
