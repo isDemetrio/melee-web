@@ -50,15 +50,50 @@ def request(method: str, path: str, token: str, body: dict[str, Any] | None = No
 
 
 def r2_bindings(configs: dict[str, Any], environment: str) -> list[tuple[Any, Any]]:
-    """The (binding, bucket) pairs of one environment, sorted, for comparison."""
-    return sorted(
-        (item.get("name"), item.get("bucket_name"))
-        for item in (configs.get(environment, {}).get("r2_buckets") or [])
-    )
+    """The (binding, bucket) pairs of one environment, sorted, for comparison.
+
+    The API has answered this as a list of objects and, in the run of 2026-10-02, as a mapping
+    keyed by binding name. Both shapes are accepted: a guard that crashes on an unexpected shape
+    is a guard that cannot protect the write it exists for.
+    """
+    raw = configs.get(environment, {}).get("r2_buckets") or []
+    pairs: list[tuple[Any, Any]] = []
+    if isinstance(raw, dict):
+        for name, value in raw.items():
+            bucket = value.get("bucket_name") if isinstance(value, dict) else value
+            pairs.append((name, bucket))
+    else:
+        for item in raw:
+            if isinstance(item, dict):
+                pairs.append((item.get("name"), item.get("bucket_name")))
+            else:
+                pairs.append((str(item), None))
+    return sorted(pairs, key=repr)
 
 
 def env_var_names(configs: dict[str, Any], environment: str) -> list[str]:
-    return sorted((configs.get(environment, {}).get("env_vars") or {}).keys())
+    """The names of the variables already set in one environment.
+
+    Only names are returned and only names are printed: a Pages variable can hold a secret, and
+    this script never reads one back into a log.
+    """
+    raw = configs.get(environment, {}).get("env_vars") or {}
+    if isinstance(raw, dict):
+        return sorted(raw.keys())
+    return sorted(str(item) for item in raw)
+
+
+def environment_shape(configs: dict[str, Any], environment: str) -> dict[str, str]:
+    """What the environment holds, by type, so an unexpected shape is visible in the log.
+
+    The first run of this script died on a shape it did not expect and told nobody what it had
+    received. This is that answer: the keys with their types, and the bindings themselves (which
+    are identifiers, not secrets).
+    """
+    env_config = configs.get(environment) or {}
+    shape = {key: type(value).__name__ for key, value in sorted(env_config.items())}
+    shape["r2_buckets"] = json.dumps(env_config.get("r2_buckets"))[:300]
+    return shape
 
 
 def merge(configs: dict[str, Any], environment: str, new_vars: dict[str, str]) -> dict[str, Any]:
@@ -72,6 +107,12 @@ def merge(configs: dict[str, Any], environment: str, new_vars: dict[str, str]) -
             f"the project has no '{environment}' deployment configuration; it has: {sorted(configs)}"
         )
     merged = json.loads(json.dumps(configs))  # deep copy: the caller keeps the original
+    existing = merged[environment].get("env_vars")
+    if existing is not None and not isinstance(existing, dict):
+        raise SystemExit(
+            f"'{environment}.env_vars' came back as {type(existing).__name__}, not an object: "
+            "refusing to write a configuration this script does not understand"
+        )
     env_vars = merged[environment].setdefault("env_vars", {})
     for name, value in new_vars.items():
         env_vars[name] = {"value": value}
@@ -146,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
     configs_before = response["result"].get("deployment_configs") or {}
 
     print(f"project '{args.project}': environments {sorted(configs_before)}")
+    print(f"  '{args.environment}' holds: {environment_shape(configs_before, args.environment)}")
     print(f"  '{args.environment}' R2 bindings: {r2_bindings(configs_before, args.environment)}")
     print(f"  '{args.environment}' variables already set: {env_var_names(configs_before, args.environment)}")
     print(f"  would set: {sorted(new_vars)}")

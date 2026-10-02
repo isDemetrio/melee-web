@@ -16,7 +16,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from set_pages_env import merge, parse_sets, r2_bindings, verify  # noqa: E402
+from set_pages_env import (  # noqa: E402
+    env_var_names,
+    environment_shape,
+    merge,
+    parse_sets,
+    r2_bindings,
+    verify,
+)
 
 
 def project() -> dict:
@@ -72,6 +79,45 @@ class MergeTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             merge(project()["deployment_configs"], "staging", {"ACCESS_AUD": "aud-value"})
         self.assertIn("no 'staging' deployment configuration", str(caught.exception))
+
+    def test_a_non_object_env_vars_is_refused(self) -> None:
+        # The API has returned shapes this script did not expect; writing one back blindly is how
+        # a configuration gets corrupted, so an unreadable one stops the run instead.
+        configs = project()["deployment_configs"]
+        configs["preview"]["env_vars"] = ["ACCESS_AUD"]
+        with self.assertRaises(SystemExit) as caught:
+            merge(configs, "preview", {"ACCESS_AUD": "aud-value"})
+        self.assertIn("refusing to write a configuration", str(caught.exception))
+
+
+class BindingsShapeTest(unittest.TestCase):
+    """The guard has to survive the shapes the API actually returns, or it cannot guard."""
+
+    def test_a_list_of_objects_is_read(self) -> None:
+        configs = {"preview": {"r2_buckets": [{"name": "PHASE0_DISC", "bucket_name": "disc"}]}}
+        self.assertEqual(r2_bindings(configs, "preview"), [("PHASE0_DISC", "disc")])
+
+    def test_a_mapping_keyed_by_binding_name_is_read(self) -> None:
+        configs = {"preview": {"r2_buckets": {"PHASE0_DISC": {"bucket_name": "disc"}}}}
+        self.assertEqual(r2_bindings(configs, "preview"), [("PHASE0_DISC", "disc")])
+
+    def test_a_list_of_names_is_read(self) -> None:
+        configs = {"preview": {"r2_buckets": ["PHASE0_DISC"]}}
+        self.assertEqual(r2_bindings(configs, "preview"), [("PHASE0_DISC", None)])
+
+    def test_an_absent_binding_list_is_empty_not_a_crash(self) -> None:
+        self.assertEqual(r2_bindings({"preview": {}}, "preview"), [])
+
+    def test_the_shape_report_names_types_and_the_bindings(self) -> None:
+        shape = environment_shape(project()["deployment_configs"], "preview")
+        self.assertEqual(shape["compatibility_date"], "str")
+        self.assertEqual(shape["env_vars"], "dict")
+        # The bindings are reported as their own JSON rather than as the word "list": the shape of
+        # the value is what the first failing run could not see.
+        self.assertIn("PHASE0_DISC", shape["r2_buckets"])
+
+    def test_env_var_names_reads_a_mapping(self) -> None:
+        self.assertEqual(env_var_names(project()["deployment_configs"], "preview"), ["EXISTING"])
 
 
 class VerifyTest(unittest.TestCase):
