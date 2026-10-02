@@ -66,7 +66,7 @@ EM_JS(int, gxw_open, (int width, int height), {
     gpu.backendDevice = gpu.device;
     return 1;
   } catch (error) {
-    gpu.failure = "open: " + error;
+    gpu.recordFailure("open", error); gpu.failure = "open: " + error;
     return 0;
   }
 });
@@ -102,7 +102,7 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
     if (gpu.device !== gpu.backendDevice) gpu.backendDevice = null;
     return 1;
   } catch (error) {
-    gpu.failure = "copy: " + error;
+    gpu.recordFailure("copy", error); gpu.failure = "copy: " + error;
     return 0;
   }
 });
@@ -129,7 +129,7 @@ EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
     if (width) gpu.device.queue.writeTexture({texture:gpu.slots[slot].texture,mipLevel:level},
       HEAPU8.subarray(rgba,rgba+bytes),{bytesPerRow:width*4,rowsPerImage:height},[width,height]);
     return 1;
-  } catch(error) { gpu.failure = "texture: " + error; return 0; }
+  } catch(error) { gpu.recordFailure("texture", error); gpu.failure = "texture: " + error; return 0; }
 });
 
 // Texture resources are retained until submitted work completes, including error paths.
@@ -229,7 +229,7 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     d.queue.onSubmittedWorkDone().then(() => buffers.forEach(b => b.destroy()), () => buffers.forEach(b => b.destroy()));
     return 1;
   } catch(error) {
-    buffers.forEach(b => b.destroy()); gpu.failure = "draw: " + error; return 0;
+    gpu.recordFailure("draw", error); buffers.forEach(b => b.destroy()); gpu.failure = "draw: " + error; return 0;
   }
 });
 

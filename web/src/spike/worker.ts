@@ -6,7 +6,7 @@
 // (wasm/render/gx_webgpu.cpp). Without a canvas, or when any of that fails, the run is exactly the
 // headless run it always was; the reason is reported, never thrown.
 import { decoderCostReport, type DecoderCostMode } from './decoder-cost.js';
-import { fillTarget, mark, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
+import { fillTarget, mark, observeGpuEvents, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
 
 interface CoreFS {
   mkdir(path: string): void;
@@ -65,7 +65,7 @@ interface RunRequest {
    * The render test (web/tests/spike/render.spec.ts): feed the decoder `copies` clearing XFB copies.
    * `target: 'texture'` renders into an offscreen texture instead of a canvas (gpu.ts says why).
    */
-  selftest?: { argb: number; copies: number; geometry: number; sampleX: number; target?: 'canvas' | 'texture' };
+  selftest?: { argb: number; copies: number; repeats: number; geometry: number; sampleX: number; target?: 'canvas' | 'texture' };
 }
 
 /** What the renderer did, reported in the result; `null` when no canvas was handed in. */
@@ -80,6 +80,10 @@ interface RenderReport {
   readback: number[] | null;
   failure: string | null;
   errors: string[];
+  resources: SpikeGpu['resources'] | null;
+  firstFailure: SpikeGpu['firstFailure'];
+  deviceLoss: SpikeGpu['deviceLoss'];
+  validationErrors: SpikeGpu['validationErrors'];
   /** Where a failing readback died (gpu.ts, `Diagnostic`), plus who held which object. */
   diagnostic: (Diagnostic & {
     /** `Module.gxWebgpu` is the object this worker opened: the backend saw this worker's device. */
@@ -92,7 +96,7 @@ interface RenderReport {
 
 /** Attach the core's WebGPU backend to an opened device. Never throws: false and a reason instead. */
 function attach(core: MeleeCore, gpu: SpikeGpu | null, reason: string): { attached: boolean; reason: string } {
-  if (!gpu) return { attached: false, reason };
+  if (!gpu || gpu.failure) return { attached: false, reason };
   if (!core._gx_webgpu_attach) return { attached: false, reason: 'this core has no WebGPU backend' };
   try {
     return core._gx_webgpu_attach() === 1
@@ -105,12 +109,18 @@ function attach(core: MeleeCore, gpu: SpikeGpu | null, reason: string): { attach
 
 async function report(core: MeleeCore, gpu: SpikeGpu | null, attached: { attached: boolean; reason: string },
   pixel: Promise<number[] | null> | null): Promise<RenderReport> {
+  const readback = pixel ? await pixel : null;
+  if (gpu) await observeGpuEvents(gpu);
   return {
     ...attached,
     presented: attached.attached && core._gx_webgpu_presented ? core._gx_webgpu_presented() : 0,
     lastClearArgb: gpu?.lastClearArgb ?? null,
     target: gpu ? (gpu.xfb ? 'texture' : 'canvas') : null,
-    readback: pixel ? await pixel : null,
+    readback,
+    resources: gpu?.resources ?? null,
+    firstFailure: gpu?.firstFailure ?? null,
+    deviceLoss: gpu?.deviceLoss ?? null,
+    validationErrors: gpu?.validationErrors ?? [],
     failure: gpu?.failure ?? null,
     errors: gpu?.errors ?? [],
     diagnostic: gpu ? {
@@ -152,7 +162,15 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     if (selftest) {
       // Sentinel, decoder, readback: one synchronous stretch, so all three see the same canvas texture.
       if (gpu && attached?.attached) fillTarget(gpu, SENTINEL);
-      const presented = core._gx_webgpu_selftest ? core._gx_webgpu_selftest(selftest.argb >>> 0, selftest.copies, selftest.geometry) : null;
+      if (!Number.isInteger(selftest.repeats) || selftest.repeats < 1 || selftest.repeats > 2400) {
+        throw new Error('selftest repeats must be an integer in [1, 2400]');
+      }
+      let presented: number | null = null;
+      // Deliberately one synchronous task, like callMain: retirement callbacks cannot run here.
+      for (let i = 0; i < selftest.repeats; i++) {
+        presented = core._gx_webgpu_selftest ? core._gx_webgpu_selftest(selftest.argb >>> 0, selftest.copies, selftest.geometry) : null;
+        if (gpu?.failure) break;
+      }
       if (gpu) mark(gpu, `selftest returned ${presented}`);
       const pixel = gpu && attached?.attached ? readPixel(gpu, selftest.geometry ? selftest.sampleX : 0, selftest.geometry ? 240 : 0) : null;
       // Started in the same task as the readback, on a buffer that never touches the canvas.

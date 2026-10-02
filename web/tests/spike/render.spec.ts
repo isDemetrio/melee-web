@@ -1,3 +1,4 @@
+import type { ResourceCounts } from '../../src/spike/gpu-resources.js';
 import { expect, test, type Page } from '@playwright/test';
 
 /**
@@ -46,6 +47,8 @@ interface SelftestResult {
     readback: number[] | null;
     failure: string | null;
     errors: string[];
+    resources: ResourceCounts;
+    deviceLoss: { reason: string; message: string } | null;
     diagnostic: { backendUsedThisDevice: boolean; backendCopies: number } | null;
   } | null;
 }
@@ -170,3 +173,14 @@ for (const [name, geometry, expected] of [
     expect(result.render?.readback).toEqual(expected);
   });
 }
+
+// Baseline measurement, before changing resource lifetime. No disc or guest execution.
+test('measure resources across a synchronous burst of textured draws', async ({ page }) => {
+  const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=16&repeats=128`);
+  console.log('synchronous resource baseline', JSON.stringify(result.render));
+  expectReplayed(result, 384, 'texture');
+  expect(result.render?.errors).toEqual([]);
+  expect(result.render?.resources.sampler.created).toBe(3072);
+  expect(result.render?.resources.texture.peakOutstanding).toBe(3076);
+  expect(result.render?.resources.buffer.peakOutstanding).toBeGreaterThanOrEqual(1152);
+});
