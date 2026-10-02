@@ -170,3 +170,23 @@ for (const [name, geometry, expected] of [
     expect(result.render?.readback).toEqual(expected);
   });
 }
+
+// Lighting (priority 2): the XF channel controls decide where the raster colour comes from, and the
+// light blocks and the vertex normal feed it. Every expected value below differs from the raw vertex
+// colour at the probe (green: layer 1 is the layer that wins the reversed depth test) and from every
+// other case, so a shader that ignored the material registers, the light block or the normal cannot
+// satisfy them. The material register is (128, 64, 192, 255) in all five.
+for (const [name, geometry, expected] of [
+  ['the material colour, with lighting disabled on the channel', 40, [128, 64, 192, 255]],
+  ['one light with a constant diffuse function', 41, [32, 48, 96, 255]],
+  ['the vertex normal facing the light', 42, [0, 64, 0, 255]],
+  ['the vertex normal facing away from the light', 43, [0, 0, 0, 255]],
+  ['the ambient colour taken from the vertex colour', 44, [0, 64, 96, 255]],
+] as const) {
+  test(`lighting: ${name}`, async ({ page }) => {
+    const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=${geometry}&sample-x=320`);
+    expectReplayed(result, 3, 'texture');
+    expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
+    expect(result.render?.readback).toEqual(expected);
+  });
+}
