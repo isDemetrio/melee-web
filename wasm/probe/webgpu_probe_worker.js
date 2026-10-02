@@ -35,6 +35,16 @@
 // So the canvas is configured, cleared and submitted here, its commit is recorded as a measurement
 // (`canvas_commit`), and its pixel is left to a real device. The texture readback is the same backend
 // path with only the canvas commit removed, and that is what the check requires.
+//
+// THE ADOPTION, IN THE REALM THE RENDERER'S MODULE LIVES IN (2026-10-02). `docs/OPEN_QUESTIONS.md`
+// Q10(b) was answered on the page: `webgpu_probe.html` instantiates the module on the main thread and
+// C++ adopts the device JavaScript acquired there. That answer named its own gap -- the renderer
+// instantiates its module HERE, in a worker (`web/src/spike/worker.ts`), and "the import is a module
+// argument read before instantiation, so it does not depend on the realm" was reasoning, not a
+// measurement. So the same question is asked of this realm, on the device this worker acquired and
+// before the canvas step below, whose commit is where CI's Chromium loses the device: the module's
+// arguments carry `preinitializedWebGPUDevice`, C++ reads it through `emscripten_webgpu_get_device()`,
+// and the four lines it prints are the answer (`adopt_worker`).
 
 const TIMEOUT_MS = 20000;
 
@@ -49,6 +59,10 @@ const result = {
   canvas_commit: null,
   errors: [],
   device_lost: null,
+  // The adoption in this realm (docs/OPEN_QUESTIONS.md Q10(b)): the same question the page answers
+  // for its main thread, asked of the realm the renderer's module is instantiated in.
+  adopt_worker: null,
+  adopt_worker_lines: [],
   error: null,
 };
 
@@ -157,6 +171,35 @@ self.onmessage = async (event) => {
 
         result.readback = await withTimeout(clearAndRead(device, { r: 1, g: 0, b: 0, a: 1 }), 'the texture readback');
         mark(`texture readback: ${JSON.stringify(result.readback)}`);
+
+        // The realm question, asked of the realm the renderer's module is instantiated in
+        // (docs/OPEN_QUESTIONS.md Q10(b)): the page answers it for its main thread, and the renderer's
+        // module is instantiated here. The device is the one this worker acquired above -- one device,
+        // handed over in the module's arguments before the module runs, adopted by C++ through
+        // `emscripten_webgpu_get_device()`. This runs BEFORE the canvas step below on purpose: the
+        // canvas frame's commit is where CI's Chromium loses the device, and an adoption measured on a
+        // dead device answers nothing. A module that will not load in a worker is itself a result, so
+        // the failure is recorded and not thrown.
+        try {
+          const factory = (await withTimeout(import('./webgpu_probe.mjs'), 'the probe module')).default;
+          await withTimeout(
+            factory({
+              print: (line) => result.adopt_worker_lines.push(line),
+              preinitializedWebGPUDevice: device,
+            }),
+            'the probe module in the worker',
+          );
+          result.adopt_worker = {
+            device: result.adopt_worker_lines.some((line) => line.includes('adopt: device adopted')),
+            queue: result.adopt_worker_lines.some((line) => line.includes('adopt: queue ok')),
+            limits: result.adopt_worker_lines.some((line) => line.includes('adopt: limits read')),
+            wrote: result.adopt_worker_lines.some((line) => line.includes('adopt: wrote 4 bytes')),
+          };
+        } catch (error) {
+          result.adopt_worker = null;
+          result.error = result.error ? `${result.error}; adopt_worker: ${error}` : `adopt_worker: ${error}`;
+        }
+        mark(`adopt in the worker: ${JSON.stringify(result.adopt_worker)}`);
 
         // The path the renderer actually needs: a canvas configured for WebGPU, cleared, submitted.
         // The pixel is not read back -- see the header -- and the commit is recorded instead.
