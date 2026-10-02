@@ -1332,3 +1332,53 @@ target that workflow compiles reads it, it configures `wasm/core` and reads `was
 
 **Next step.** Unchanged, one unknown shorter: the decision of the operator on Q10(a), where the frames
 of the web build come from, before renderer step 2. Nothing else in the plan is autonomous and open.
+
+## The adoption is measured in the worker, where the renderer's module lives (2026-10-02, night)
+
+`probe/worker-realm-adoption`, PR #55. The 2026-10-02 night session answered
+Q10(b) on the page and wrote down what its own answer did not cover: the probe instantiated its module on
+the main thread, while the renderer instantiates its own in a worker (`web/src/spike/worker.ts`), and "the
+import is a module argument read before instantiation, so it does not depend on the realm" was reasoning,
+not a measurement. That is the last unknown standing between the operator and an informed choice between
+`EM_JS` and `<webgpu/webgpu.h>`, and it costs one probe run to remove.
+
+**What changed, in the probe only.** `wasm/probe/webgpu_probe_worker.js` asks the same question of its own
+realm, after the texture readback and **before** the canvas step: the device the worker acquired for the
+canvas is handed over in the module's arguments, C++ adopts it through `emscripten_webgpu_get_device()`,
+and the four lines it prints become `adopt_worker`. It runs before the canvas step on purpose — the canvas
+frame's commit is where CI's Chromium loses the device, and an adoption measured on a dead device answers
+nothing. `wasm/probe/check.mjs` requires the four fields individually, for the same reason it requires
+`adopt`: a rejected command raises a validation error, and a validation error is not an answer.
+`wasm/probe/webgpu_probe.html` carries the two new fields. No C++, no workflow, no build flag.
+
+**The measurement, in run `36955231521`** — job `WebGPU toolchain probe`, headless Chromium 153.0.8010.12,
+adapter `google swiftshader`, 1m19s, commit `34bcb9f`. Both launch configurations answer
+`adopt_worker: {"device":true,"queue":true,"limits":true,"wrote":true}`, in the realm
+`DedicatedWorkerGlobalScope`, with `adopt_worker_lines` holding `cxx: instance created` /
+`cxx: instance released, toolchain ok` / `adopt: device adopted` / `adopt: queue ok` /
+`adopt: limits read, maxTextureDimension2D 8192` / `adopt: wrote 4 bytes into a texture the adopted
+device created`.
+
+| Configuration | adopt in the worker | adopted at | canvas commit at | device lost at |
+| --- | --- | --- | --- | --- |
+| Playwright default (`chromium-headless-shell`) | all four true | 42.5 ms | 43.0 ms | 44.9 ms |
+| `channel: 'chromium'` (new headless, full build) | all four true | 47.3 ms | 47.6 ms | 70.3 ms |
+
+**Two answers, not one.** The first is the one asked for: C++ adopts the device JavaScript acquired, in
+the realm the renderer's module is instantiated in, so Q10(b) now holds where it has to hold. The second
+came free and is worth recording: the probe unit is compiled with `-sENVIRONMENT=web`, and it loads and
+runs in a worker with no change to that setting — the renderer does not need `worker` added to it. What is
+still not measured is unchanged: CI's Chromium loses the device when the canvas frame is committed, in both
+realms (PR #47), so the canvas pixel stays a real-device measurement, and no CI runner produces a game
+frame without the disc.
+
+**Measured in CI.**
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36955231521` (WebGPU toolchain probe, on `34bcb9f`) | **success** | job 1m19s; both configurations `PROBE OK`, `adopt_worker` all four true, `adopt_errors: []`, `adopt_device_lost: null` |
+| `36955231507` (WASM toolchain probe, on `34bcb9f`) | **success** | the FMA corpus and the bench are untouched by this change |
+| `36955231532` (CI, on `34bcb9f`) | **success** | hygiene, web shell and the browser tests are untouched by this change |
+
+**Next step.** Unchanged, one unknown shorter: the decision of the operator on Q10(a), where the frames of
+the web build come from, before renderer step 2. Nothing else in the plan is autonomous and open.
