@@ -1611,6 +1611,16 @@ touches `web/spike.html`, `web/src/spike/**`, `web/tests/spike/**`, the core, or
 itself — which is why this pull request still pays one core build: `phase0-build.yml` lists itself in
 its own paths, deliberately, so a change to the workflow is exercised by the workflow.
 
+**Measured in CI** (both on `ea92e1f`).
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36976705772` (CI) | **success** | 1m40s; hygiene `Ran 135 tests`, OK; the web job's unit tests are **22 files** (21 before) with the four new `build-config` cases green, and its build guard passes `test -f dist/spike.html` (the build log shows `dist/spike.html 1.55 kB`); browser tests and the Pages job as before |
+| `36976705807` (Phase 0 — WASM core) | **success** | job `build` 8m50s; the spike page builds around the fresh core (`spike.html` 1.55 kB in the spike dist) and the Chromium harness runs 11 tests: **10 passed, 1 skipped** in 5.7s, the skipped one being the canvas pixel (PR #47's gap) |
+
+This pull request pays one core build on purpose: `phase0-build.yml` lists **itself** in its own
+paths, so a change to the workflow is exercised by the workflow.
+
 **Next step.** Unchanged: the decision of the operator on `docs/OPEN_QUESTIONS.md` Q10(a) before
 renderer step 2, then the device rows M1 and M2 (M2 decides), then O1–O9 and M5. Nothing else in
 `docs/PHASE0_DEPLOY_PLAN.md` §5–§6 is autonomous and open, and the leftover this session was named
