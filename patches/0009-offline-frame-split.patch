@@ -1,0 +1,91 @@
+--- a/port/runtime/host/host.h
++++ b/port/runtime/host/host.h
+@@ -123,7 +123,14 @@
+ const std::vector<uint32_t>& slow_sim_frames();
+
+ // ---- simulation-thread cost accounting (per retrace; logged when a frame exceeds 20 ms) ----
+-enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_RECORD, SIM_DECODE, SIM_COST_COUNT };
++enum SimCost { SIM_DVD, SIM_AX, SIM_JUKEBOX, SIM_EXI, SIM_SNAPSHOT, SIM_QUEUE, SIM_OBSERVE, SIM_RECORD, SIM_DECODE,
++#ifdef MELEE_OFFLINE_COST
++  SIM_END_FRAME, SIM_GAME_ENTRY, SIM_GAME_EXIT = SIM_GAME_ENTRY + 7,
++  SIM_COST_COUNT = SIM_GAME_EXIT + 7
++#else
++  SIM_COST_COUNT
++#endif
++};
+ void sim_cost_add(int slot, double seconds);
+ double last_sim_frame_ms();            // work time of the most recent simulation frame (sleep excluded)
+
+--- a/port/runtime/gx/render_observer.cpp
++++ b/port/runtime/gx/render_observer.cpp
+@@ -1,6 +1,7 @@
+ // Guest execution remains authoritative. These hooks own host metadata only.
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include "render_observer.h"
++#include "host.h"
+ #include "ppc.h"
+ #include "gx_texture.h"
+ #include "authored_pose.h"
+@@ -294,6 +295,10 @@
+ }
+ }
+ RenderObserver::RenderObserver(ppc::Context& cpu, Observe kind, uint8_t* memory) : cpu_(cpu), kind_(kind) {
++#ifdef MELEE_OFFLINE_COST
++  // Measure hook work only, never the guest function between construction/destruction.
++  host::OfflineFrameCostScope cost(host::SIM_GAME_ENTRY + static_cast<int>(kind));
++#endif
+   if (kind == Observe::LoadJoint) loaded_joint_ = cpu.r[3];
+   if (kind == Observe::ReleaseJoint) joints.erase(cpu.r[3]);
+   if (kind == Observe::RigidMatrix) { rigid = true; envelope = false; rigid_vmtx = cpu.r[4]; }
+@@ -315,6 +320,9 @@
+   current_pass = hash_bytes(pass, sizeof pass); current_draw = 0;
+ }
+ RenderObserver::~RenderObserver() {
++#ifdef MELEE_OFFLINE_COST
++  host::OfflineFrameCostScope cost(host::SIM_GAME_EXIT + static_cast<int>(kind_));
++#endif
+   if (kind_ == Observe::AllocateJoint && cpu_.r[3]) joints[cpu_.r[3]] = next_generation++;
+   // JObjLoad takes the joint in r3 and returns a status, so the pointer has to come from entry.
+   if (kind_ == Observe::LoadJoint && loaded_joint_ && !joints.count(loaded_joint_)) joints[loaded_joint_] = next_generation++;
+--- a/port/runtime/gx/gx_core.cpp
++++ b/port/runtime/gx/gx_core.cpp
+@@ -547,6 +547,10 @@
+       g_frame.commands.push_back({FrameCommand::Copy, (uint32_t)g_frame.copies.size() - 1});
+       ++g_efb_copies;
+       if (c.to_xfb) {
++#ifdef MELEE_OFFLINE_COST
++        // Nested in SIM_DECODE: report separately and subtract from decode_rest.
++        host::OfflineFrameCostScope end_frame_cost(host::SIM_END_FRAME);
++#endif
+         g_frame.sequence = ++g_frame_sequence;
+         // Through the host, not guest memory: the native game keeps its scene in its own image, so
+         // a read at the console address made every native match look like a menu to the renderer.
+--- a/port/runtime/ppc/ppc.h
++++ b/port/runtime/ppc/ppc.h
+@@ -25,6 +25,12 @@
+ extern std::atomic<uint8_t> g_ram_watched[RAM_WATCH_COUNT];
+ extern std::atomic<uint32_t> g_ram_versions[RAM_WATCH_COUNT];
+
++#ifdef MELEE_OFFLINE_COST
++// Single simulation thread in the offline core. Count block hits, not bytes or time.
++inline bool offline_watch_count_enabled = false;
++inline uint64_t offline_watched_block_writes = 0;
++#endif
++
+ inline void mark_ram_write(uint32_t ea, uint32_t bytes) {
+   if (!bytes) return;
+   const uint32_t off = ea & 0x3FFFFFFFu;
+@@ -32,8 +38,12 @@
+   const uint32_t first = off >> RAM_WATCH_SHIFT;
+   const uint32_t last = (off + bytes - 1) >> RAM_WATCH_SHIFT;
+   for (uint32_t block = first; block <= last; ++block)
+-    if (g_ram_watched[block].load(std::memory_order_relaxed))
++    if (g_ram_watched[block].load(std::memory_order_relaxed)) {
+       g_ram_versions[block].fetch_add(1, std::memory_order_relaxed);
++#ifdef MELEE_OFFLINE_COST
++      if (offline_watch_count_enabled) ++offline_watched_block_writes;
++#endif
++    }
+ }
+
+ inline uint64_t watch_ram_range(uint32_t off, uint32_t bytes) {
