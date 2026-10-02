@@ -167,3 +167,94 @@ Android row. What that does and does not settle:
 
 **Not blocking**: the tailnet test path (D in `docs/PHASE0_DEPLOY_PLAN.md` §2) needs no
 Cloudflare credentials, so the iPhone run can start before Q3/O1 are answered.
+
+## Q10 — The renderer after step 1: where frames come from, who owns the device, when a frame is shown
+
+Raised 2026-10-01 by the WebGPU step 1 branch (`render/webgpu-step1`). Step 1 itself is not blocked
+by any of the three: it presents the frame's EFB copies and clears, and each choice below was made
+the smallest way and is reversible. Step 2 (draws) is blocked by (a), and (c) decides whether a real
+run shows more than its last frame.
+
+**(a) Where the web build's frames come from.** The shipped modules do not compile
+`port/runtime/gx/gx_core.cpp` at all: `native/core_sources.cmake` puts `native/headless_fifo.cpp` in
+its place, a decoder that consumes the FIFO's bytes and drops everything a renderer needs
+(`headless_fifo.cpp`, "Replaces vertex decoding, texture snapshots and draw observation").
+`gx_core.cpp` is compiled only in `wasm/core/CMakeLists.txt`'s `runtime_core` compile gate, which
+links into nothing. Step 1 records EFB copies in `headless_fifo.cpp` behind a null-by-default
+backend pointer. Draws need far more of `gx_core.cpp` (`decode_vertices`, XF/CP state, texture
+snapshots). Options:
+
+1. Link `gx_core.cpp` into the web module in place of `headless_fifo.cpp`. One decoder, the port's
+   own; but it is a change to the simulation path (it writes guest memory at the XFB copy, takes
+   texture snapshots through `ppc::watch_ram_range`, logs), its link closure (`render_observer`,
+   `native_pose_bridge`, `slippi_online`, the settings boundary of patch 0007) has never been linked
+   here, and the 2400-checkpoint comparison would have to pass again before anything else.
+2. Keep growing `headless_fifo.cpp`'s recording, display-only, one priority at a time. The
+   simulation path never changes; but it duplicates `gx_core.cpp`'s decoding and can drift from it.
+
+**(b) Who owns the GPU objects.** The brief for step 1 asked for a backend that owns the instance,
+adapter and device. In step 1 the worker acquires them in JavaScript (`web/src/spike/gpu.ts`) and the
+C++ backend reaches them through `EM_JS` (`wasm/render/gx_webgpu.cpp`). Reason: `requestAdapter` and
+`requestDevice` resolve only after the event loop turns, the simulation is one synchronous
+`callMain`, and Asyncify is ruled out for the simulation path (`docs/AGENT_RULES.md`). The other
+option is `<webgpu/webgpu.h>` with `--use-port=emdawnwebgpu`, which still needs the device acquired
+before `callMain` and imported into C++. Both of its unknowns are now measured: the port builds, links
+and renders (PR #47), and it adopts the device JavaScript acquired (PR #52) — see the two paragraphs
+below. The choice between the two paths still belongs to the operator.
+
+**(c) When a frame reaches the screen.** A canvas transferred to a worker is committed when the
+worker's task ends, and a run is one task, so a `?canvas` run shows only its last frame. Showing
+every frame needs either the simulation to return to the event loop once per retrace (a change to
+how the core is driven, not to the renderer) or a presentation thread fed with frames over shared
+memory (the module is built `MELEE_SINGLE_THREAD=1` today). Not needed to prove step 1; needed for
+anything a player would look at.
+
+**(b), probed 2026-10-01 — PR #47, runs `36912403273` and `36920684654`.** The first half of (b) is
+answered: the pinned Emscripten (4.0.23) compiles and links a unit that includes `<webgpu/webgpu.h>`
+and calls into it with `--use-port=emdawnwebgpu`, and the browser this repository's CI can run gives
+the renderer a device it can render with — a texture cleared to red reads back `[255,0,0,255]` under
+`google swiftshader`, in a worker, with `--enable-unsafe-swiftshader --enable-unsafe-webgpu` (run
+`36920684654`). What was still open at that point is the part this decision turns on: whether that port
+can *adopt* a device acquired in JavaScript, since the simulation is one synchronous `callMain` and the
+device has to be acquired before it. That probe created an instance of its own and did not attempt the
+import (`wasm/probe/webgpu_probe.cpp` said so at the time), so the choice between `EM_JS` and
+`<webgpu/webgpu.h>` was left to the operator, with the toolchain risk removed from it. PR #52 measured
+the import; the answer is in the paragraph below.
+
+**(b), the import measured 2026-10-02 — PR #52, runs `36932059429` and `36932059473`.** The open half of
+(b) is answered, and the answer is yes: C++ adopts the device JavaScript acquired. The pinned port
+declares the import: `webgpu/include/webgpu/webgpu.h:2265` exports the getter `emscripten_webgpu_get_device`,
+which reads `Module['preinitializedWebGPUDevice']` in `webgpu/src/library_webgpu.js:647-660` of the
+package Emscripten 4.0.23 pins, and `wasm/probe/webgpu_probe.cpp` uses it on a device the page acquired
+before instantiating the module — exactly the order the real backend needs. It asks the adopted device
+for its queue, reads its limits (`maxTextureDimension2D 8192`), creates a 1x1 RGBA8 texture with it and
+writes a red pixel through the adopted queue. In the `WebGPU toolchain probe` job of run `36932059429`
+headless Chromium 153.0.8010.12, adapter `google swiftshader`, 1m26s, commit `9ab7f53`: **both** launch
+configurations answer `adopt: {"device":true,"queue":true,"limits":true,"wrote":true}`, with
+`adopt_device_lost: null` and `adopt_errors: []`. `wasm/probe/check.mjs` requires all four of those, so
+a rejected command — which raises a validation error and neither throws nor stops the run — cannot read
+as an answer.
+
+**What the adoption measurement did not cover — closed 2026-10-02, PR #55, run `36955231521`.** The
+module was instantiated on the page in that probe, while the renderer's module is instantiated in the
+worker, `web/src/spike/worker.ts`: what was measured was the import mechanism, not that mechanism in the
+realm of the worker, and "the mechanism is a module argument read before instantiation and does not
+depend on the realm" was reasoning, not a measurement. The probe's worker now asks the same question of
+its own realm (`wasm/probe/webgpu_probe_worker.js`): it hands the device it acquired for the canvas to a
+module instantiated in the worker, before the canvas step whose commit is where CI's Chromium loses the
+device, and both launch configurations answer
+`adopt_worker: {"device":true,"queue":true,"limits":true,"wrote":true}` in headless Chromium 153.0.8010.12,
+adapter `google swiftshader`, realm `DedicatedWorkerGlobalScope` — adopted at 42.5 ms (default
+configuration) and 47.3 ms (full build), with the device lost at 44.9 ms and 70.3 ms, so the adoption was
+measured on a live device and not on one the canvas commit had already killed. The module is compiled with
+`-sENVIRONMENT=web` and loads and runs in the worker unchanged, so the renderer needs no new link flag for
+this. Unchanged from part c of this question and from PR #47: the Chromium of this CI loses the device when
+the canvas frame is committed, in both realms, so the canvas pixel stays a real-device measurement, and no
+CI runner can produce a game frame at all without the disc.
+
+**What is left for the operator.** The choice between `EM_JS` and `<webgpu/webgpu.h>`, with both of its
+unknowns measured instead of assumed: the toolchain builds, links and renders a WebGPU unit in PR #47,
+and the port can adopt the device the page acquired in PR #52 — in the realm of the page and, since
+PR #55, in the realm of the worker the renderer's module is instantiated in. `EM_JS` is what step 1 shipped in
+`wasm/render/gx_webgpu.cpp`, so keeping it is the zero-change option; adopting the device instead
+would make the backend own the instance, adapter and device, and is now known to be possible.

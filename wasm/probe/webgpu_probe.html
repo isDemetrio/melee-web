@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WebGPU probe</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; }
+      canvas { border: 1px solid #888; image-rendering: pixelated; width: 64px; height: 64px; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>WebGPU probe</h1>
+    <p>
+      Three questions, all answered into <code>window.__probe</code> for the CI check to read:
+      does this browser expose a usable WebGPU adapter, device and readback (<code>adapter</code>,
+      <code>device</code>, <code>round_trip</code>, <code>readback</code>), can the pinned
+      Emscripten build and run a WebGPU translation unit (<code>cxx</code>), and can C++ adopt the
+      device this page acquired in JavaScript before the module ran (<code>adopt</code>)? The
+      same adoption is asked again of the worker's own realm, where the renderer instantiates its
+      module (<code>adopt_worker</code>). The canvas is configured, cleared and submitted, and what
+      its commit did to the device is recorded in <code>canvas_commit</code> rather than required —
+      see the worker's header.
+    </p>
+    <canvas id="probe" width="64" height="64"></canvas>
+    <pre id="out">running</pre>
+
+    <script type="module">
+      // The two realms do the two halves they belong to. The browser half is a worker
+      // (webgpu_probe_worker.js): three runs of this probe lost the device at the first task
+      // boundary on the page's main thread, while this repository's own CI readback -- in a worker,
+      // in this same browser, with these same two launch flags -- gets the colour back.
+      //
+      // Run 36912403273 is why the worker's readback is not simply trusted either: it answered
+      // [0,0,0,0] from a copy WebGPU had rejected, because a rejected copy raises a validation
+      // error and a validation error is silent. The worker's header carries the whole finding; this
+      // page only collects what the worker answered.
+      //
+      // The C++ half is the page's, because it is a module load and nothing else -- and the third
+      // question needs the device acquired HERE, before the module is instantiated: the port's
+      // `emscripten_webgpu_get_device()` reads `Module['preinitializedWebGPUDevice']`, and the
+      // simulation is one synchronous `callMain` that cannot await `requestAdapter`
+      // (docs/OPEN_QUESTIONS.md Q10(b); wasm/probe/webgpu_probe.cpp holds the evidence).
+      const out = document.getElementById('out');
+      const result = {
+        timeline: [],
+        realm: null,
+        cxx: null,
+        cxx_lines: [],
+        adapter: null,
+        device: null,
+        round_trip: null,
+        readback: null,
+        canvas: null,
+        canvas_commit: null,
+        errors: [],
+        device_lost: null,
+        error: null,
+        // The third question, kept in its own fields: `errors` and `device_lost` above are the
+        // worker's, and the two realms have their own devices.
+        adopt_device: null,
+        adopt_device_lost: null,
+        adopt_errors: [],
+        adopt: null,
+        // The worker's own answer to the same question, in the realm the renderer's module is
+        // instantiated in (webgpu_probe_worker.js; docs/OPEN_QUESTIONS.md Q10(b)).
+        adopt_worker: null,
+        adopt_worker_lines: [],
+      };
+
+      const loadedMs = performance.now();
+      const mark = (event) => result.timeline.push(`${(performance.now() - loadedMs).toFixed(1)}ms ${event}`);
+
+      // 1. The browser half, in a worker, with the page's canvas transferred to it.
+      try {
+        const worker = new Worker('./webgpu_probe_worker.js', { type: 'module' });
+        const canvas = document.getElementById('probe');
+        const answer = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('the worker did not answer within 60 s')), 60000);
+          worker.onmessage = (event) => {
+            clearTimeout(timer);
+            resolve(event.data);
+          };
+          worker.onerror = (event) => {
+            clearTimeout(timer);
+            reject(new Error(`worker error: ${event.message}`));
+          };
+          const offscreen = canvas.transferControlToOffscreen();
+          worker.postMessage({ canvas: offscreen }, [offscreen]);
+        });
+        Object.assign(result, answer);
+        mark('worker answered');
+      } catch (error) {
+        result.error = `worker: ${error}`;
+        mark(`error: ${error}`);
+      }
+
+      // 2. The device the C++ half adopts. Acquired before the module is instantiated, exactly as
+      //    the real backend has to, and with the worker's fallback adapter: a runner without a GPU
+      //    refuses a hardware adapter, which is why the CI launches Chromium with
+      //    `--enable-unsafe-swiftshader --enable-unsafe-webgpu`.
+      let adoptedDevice = null;
+      try {
+        const adapter =
+          (await navigator.gpu.requestAdapter()) ?? (await navigator.gpu.requestAdapter({ forceFallbackAdapter: true }));
+        if (adapter) {
+          adoptedDevice = await adapter.requestDevice();
+          result.adopt_device = true;
+          adoptedDevice.addEventListener('uncapturederror', (event) => {
+            result.adopt_errors.push(String(event.error?.message ?? event.error));
+          });
+          adoptedDevice.lost.then((info) => {
+            result.adopt_device_lost = `${info.reason}: ${info.message}`;
+            mark(`adopted device lost: ${info.reason}: ${info.message}`);
+          });
+        }
+        mark(adoptedDevice ? 'adopted device acquired' : 'no adapter for the adopted device');
+      } catch (error) {
+        result.adopt_device = false;
+        result.adopt_errors.push(`acquisition: ${error}`);
+        mark(`error acquiring the adopted device: ${error}`);
+      }
+
+      // 3. The C++ half: a module load, the line it prints through `print`, and the device it adopts
+      //    out of the module arguments. A module that failed to compile or link is not here to load
+      //    at all, so a load failure is itself a result and not a crash.
+      try {
+        const factory = (await import('./webgpu_probe.mjs')).default;
+        await factory({
+          print: (line) => result.cxx_lines.push(line),
+          preinitializedWebGPUDevice: adoptedDevice,
+        });
+        result.cxx = result.cxx_lines.some((line) => line.includes('toolchain ok'));
+        result.adopt = {
+          device: result.cxx_lines.some((line) => line.includes('adopt: device adopted')),
+          queue: result.cxx_lines.some((line) => line.includes('adopt: queue ok')),
+          limits: result.cxx_lines.some((line) => line.includes('adopt: limits read')),
+          wrote: result.cxx_lines.some((line) => line.includes('adopt: wrote 4 bytes')),
+        };
+      } catch (error) {
+        result.cxx = false;
+        result.adopt = null;
+        result.error = result.error ? `${result.error}; cxx: ${error}` : `cxx: ${error}`;
+      }
+      mark('module loaded');
+
+      // One turn of the event loop, so that a `device.lost` that fired during the C++ half is in the
+      // answer before the check reads it.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      out.textContent = JSON.stringify(result, null, 2);
+      window.__probe = result;
+    </script>
+  </body>
+</html>

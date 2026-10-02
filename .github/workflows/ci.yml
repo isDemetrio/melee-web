@@ -5,8 +5,13 @@ name: CI
 # build there takes the machine down. See docs/AGENT_RULES.md rule 2 and 3.
 
 on:
+  # The account is on the free plan with a private repository, so Actions minutes come out of a
+  # 2,000-minute monthly allowance (docs/AGENT_RULES.md, CI budget). A `push` trigger on every
+  # branch duplicated every pull-request run: the same commit fires the push event and the
+  # pull_request event, which measured out at two runs per push. Branches are verified by their
+  # pull request; main is verified again after the merge.
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -54,6 +59,12 @@ jobs:
         # run_checkpoints.sh is the one script that writes a game-derived trace. Every case
         # ends in a refusal or in a dry run, so this needs no disc image and executes nothing.
         run: bash scripts/tests/test_phase0_runner.sh
+
+      - name: Device tunnel guards
+        # device_test_serve.sh starts the spike server and a cloudflared tunnel for a device
+        # session. cloudflared is a stub there and the disc is a sparse zero file, so no tunnel,
+        # no ISO and no game data is involved.
+        run: bash scripts/tests/test_device_test_serve.sh
 
       - name: Validate workflow files
         run: |

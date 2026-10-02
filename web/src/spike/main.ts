@@ -13,6 +13,51 @@ const discStatus = element('disc-status');
 const discProgress = element('disc-progress');
 const parameters = new URLSearchParams(location.search);
 const frames = Number(parameters.get('frames') ?? 2400);
+const screen = element('screen');
+const renderOut = element('render');
+
+/**
+ * A fresh canvas for one worker, or nothing. `?canvas` hands a run's worker an OffscreenCanvas and
+ * the core's WebGPU backend draws into it; without it -- the default -- the worker gets no canvas
+ * and the run is the headless run it has always been. A canvas can be transferred only once, so
+ * every run gets a new one.
+ */
+function offscreenCanvas(wanted: boolean): OffscreenCanvas | undefined {
+  screen.replaceChildren();
+  if (!wanted) return undefined;
+  const canvas = document.createElement('canvas');
+  canvas.width = 640;
+  canvas.height = 480;
+  screen.append(canvas);
+  return canvas.transferControlToOffscreen();
+}
+
+/**
+ * `?gx-selftest=AARRGGBB&copies=N`: no disc, no simulation. The worker feeds the core's FIFO decoder
+ * N clearing XFB copies of that colour and reads the canvas back (wasm/render/gx_webgpu.cpp,
+ * gx_webgpu_selftest). `&target=texture` renders into an offscreen texture instead of a canvas, which
+ * is what CI can read back (web/src/spike/gpu.ts says why). `&nocanvas` runs the same commands with
+ * no GPU at all, which must not fail. The answer is written into #render as JSON for
+ * web/tests/spike/render.spec.ts.
+ */
+const selftestColour = parameters.get('gx-selftest');
+if (selftestColour !== null) {
+  const argb = Number.parseInt(selftestColour, 16);
+  const copies = Number(parameters.get('copies') ?? 2);
+  const target = parameters.get('target') === 'texture' ? 'texture' : 'canvas';
+  const canvas = offscreenCanvas(target === 'canvas' && !parameters.has('nocanvas'));
+  const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+  renderOut.textContent = 'running';
+  worker.onerror = (event) => { renderOut.textContent = JSON.stringify({ error: event.message }); };
+  worker.onmessage = ({ data }) => {
+    if (data.type === 'error') renderOut.textContent = JSON.stringify({ error: data.message });
+    if (data.type !== 'selftest') return;
+    worker.terminate();
+    renderOut.textContent = JSON.stringify({ presented: data.presented, sentinel: data.sentinel, render: data.render });
+  };
+  const selftest = { argb, copies, target: parameters.has('nocanvas') ? undefined : target };
+  worker.postMessage({ selftest, canvas }, canvas ? [canvas] : []);
+}
 /**
  * The disc cache, as the page sees it: one `DiscCache` over the OPFS worker. Building it spawns
  * nothing -- the worker is created on the first request -- and every answer it cannot give is
@@ -138,6 +183,7 @@ run.onclick = async () => {
   if (resultURL) URL.revokeObjectURL(resultURL);
   download.hidden = true;
   for (const id of ['core', 'log', 'stats', 'compare']) element(id).textContent = '';
+  const canvas = offscreenCanvas(parameters.has('canvas'));
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   status.textContent = 'running…';
   /** From the worker's start to the core being callable: reported by worker.ts. */
@@ -177,12 +223,15 @@ run.onclick = async () => {
       timer_resolution_ms: data.timerResolutionMs, frames, iso_bytes: file.size,
       disc_source: discSource, storage_persisted: storagePersisted, core_load_ms: coreLoadMs,
       exit_code: data.exitCode, final_scene: data.finalScene, wall_ms: data.wallMs, trace_csv: data.trace,
-      sim_times_csv: data.simTimes, stats_all: statsAll, stats_in_match: statsInMatch, comparison };
+      sim_times_csv: data.simTimes, stats_all: statsAll, stats_in_match: statsInMatch, comparison,
+      // Only a ?canvas run has a renderer to report on; a headless result keeps its old shape.
+      ...(data.render ? { render: data.render } : {}) };
+    if (data.render) renderOut.textContent = JSON.stringify(data.render, null, 2);
     resultURL = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' }));
     download.href = resultURL;
     download.download = `spike-result-${created.replaceAll(':', '-')}.json`;
     download.hidden = false;
     run.disabled = false;
   };
-  worker.postMessage({ iso: file, frames });
+  worker.postMessage({ iso: file, frames, canvas }, canvas ? [canvas] : []);
 };

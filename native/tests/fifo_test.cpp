@@ -1,6 +1,7 @@
 // Tests byte framing and interrupt effects without copyrighted guest data.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "headless.h"
+#include "gx_core.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +13,10 @@ std::vector<uint8_t> memory(4096);
 void require(bool condition) { if (!condition) std::abort(); }
 void bytes(std::initializer_list<uint8_t> b) { for (auto v : b) host::gx_write(v, 1); }
 void bp(uint32_t v) { host::gx_write(0x61, 1); host::gx_write(v, 4); }
+struct Recorder : gx::Backend {
+  std::vector<gx::Frame> frames;
+  void submit_frame(const gx::Frame& frame) override { frames.push_back(frame); }
+};
 }
 namespace host {
 void set_pe_finish_pending() { ++finishes; }
@@ -46,5 +51,32 @@ int main() {
   memory[32]=0x61; memory[33]=0x48; memory[34]=0; memory[35]=0xAB; memory[36]=0xCD;
   bytes({0x40,0,0,0,32,0,0,0,5});
   require(tokens == 2 && last_token == 0xABCD);
-  std::puts("FIFO boundaries, masks, draw/XF payloads and display-list interrupts passed");
+  // The renderer seam. No backend is attached by default: a clearing XFB copy produces nothing.
+  Recorder recorder;
+  bp(0x52004800); require(recorder.frames.empty());
+  host::gx_set_backend(&recorder);
+  bp(0x49000000);                          // EFB_TL 0,0
+  bp(0x4A000000 | (479u << 10) | 639u);    // EFB_BR: 640x480
+  bp(0x4F00FF20);                          // CLEAR_AR: A=FF R=20
+  bp(0x50008040);                          // CLEAR_GB: G=80 B=40
+  bp(0x52000800);                          // clear only, not to XFB: recorded, not yet handed over
+  require(recorder.frames.empty());
+  bp(0x52004800);                          // to XFB with clear: the frame is handed over
+  require(recorder.frames.size() == 1);
+  const gx::Frame& first = recorder.frames[0];
+  require(first.sequence == 1 && first.draws.empty());
+  require(first.copies.size() == 2 && first.commands.size() == 2);
+  require(first.commands[0].kind == gx::FrameCommand::Copy && first.commands[0].index == 0);
+  require(first.commands[1].kind == gx::FrameCommand::Copy && first.commands[1].index == 1);
+  require(!first.copies[0].to_xfb && first.copies[0].clear);
+  const gx::EfbCopy& xfb = first.copies[1];
+  require(xfb.to_xfb && xfb.clear && xfb.clear_color == 0xFF208040u);
+  require(xfb.src_x == 0 && xfb.src_y == 0 && xfb.src_w == 640 && xfb.src_h == 480);
+  bp(0x52004000);                          // the next frame starts empty: one copy, no clear
+  require(recorder.frames.size() == 2 && recorder.frames[1].sequence == 2);
+  require(recorder.frames[1].copies.size() == 1 && !recorder.frames[1].copies[0].clear);
+  host::gx_set_backend(nullptr);
+  bp(0x52004800); require(recorder.frames.size() == 2);
+  require(finishes == 2 && tokens == 2);   // the seam raised no interrupt of its own
+  std::puts("FIFO boundaries, masks, draw/XF payloads, display-list interrupts and the renderer seam passed");
 }
