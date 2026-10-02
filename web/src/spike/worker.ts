@@ -5,6 +5,7 @@
 // WebGPU device for it before the simulation starts and attaches the core's WebGPU backend
 // (wasm/render/gx_webgpu.cpp). Without a canvas, or when any of that fails, the run is exactly the
 // headless run it always was; the reason is reported, never thrown.
+import { decoderCostReport, type DecoderCostMode } from './decoder-cost.js';
 import { fillTarget, mark, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
 
 interface CoreFS {
@@ -17,6 +18,7 @@ interface CoreFS {
 interface MeleeCore {
   FS: CoreFS;
   callMain(args: string[]): number;
+  _melee_decoder_cost?(mode: number): number;
   // Absent from a core built before the WebGPU backend existed, which then simply runs headless.
   _gx_webgpu_attach?(): number;
   _gx_webgpu_presented?(): number;
@@ -57,6 +59,7 @@ function timerResolutionMs(): number {
 interface RunRequest {
   iso?: File;
   frames?: number;
+  decoderCost?: DecoderCostMode;
   canvas?: OffscreenCanvas;
   /**
    * The render test (web/tests/spike/render.spec.ts): feed the decoder `copies` clearing XFB copies.
@@ -123,7 +126,7 @@ async function report(core: MeleeCore, gpu: SpikeGpu | null, attached: { attache
 const SENTINEL = [255, 0, 255, 255];
 
 scope.onmessage = async (event: MessageEvent<RunRequest>) => {
-  const { iso, frames, canvas, selftest } = event.data;
+  const { iso, frames, canvas, selftest, decoderCost = 'off' } = event.data;
   try {
     const head = await fetch(`${CORE}melee_core_web.js`, { method: 'HEAD' });
     const type = head.headers.get('content-type') ?? '';
@@ -170,6 +173,11 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     const args = ['--iso', `/disc/${iso.name}`, '--headless', '--fast', '--frames', String(frames),
       '--time-base', '1', '--volume', '0', '--script', '/work/script.txt', '--card-dir', '/work/card',
       '--state-trace', '/work/trace.csv', '--sim-times', '/work/sim_times.csv'];
+    const costAvailable = typeof core._melee_decoder_cost === 'function';
+    if (decoderCost !== 'off' && !costAvailable) throw new Error('this core has no decoder-cost instrumentation');
+    if (costAvailable && core._melee_decoder_cost!(decoderCost === 'profile' ? 1 : decoderCost === 'legacy' ? 2 : 0) !== 1) {
+      throw new Error('decoder-cost setup failed');
+    }
     const started = performance.now();
     const exitCode = core.callMain(args);
     const wallMs = performance.now() - started;
@@ -181,6 +189,7 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
       type: 'done', exitCode, wallMs, coreCommit: meta.commit, coreOpt: meta.opt, coreLoadMs,
       timerResolutionMs: resolution, crossOriginIsolated: scope.crossOriginIsolated,
       finalScene: lines.find((line) => line.startsWith('final scene:')) ?? null,
+      decoderCost: decoderCostReport(decoderCost, costAvailable, decoderCost === 'profile' ? read('/work/decoder_cost.csv') : ''),
       trace: read('/work/trace.csv'), simTimes: read('/work/sim_times.csv'), render,
     });
   } catch (error) {

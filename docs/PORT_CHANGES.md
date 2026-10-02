@@ -102,3 +102,14 @@ arithmetic may differ; these changes remove divergences our shim invented, and e
 in Q7 required them gone. The Q7 question is now moot for this corpus: nothing diverges, so
 there is nothing to exempt. `docs/OPEN_QUESTIONS.md` Q7 records that.
 
+
+### 0008 — optional offline WASM decoder phase accounting
+
+`0008-offline-decoder-cost.patch` specializes `host::SimCostScope` only under
+`MELEE_OFFLINE_COST`, defined by the Emscripten core build. It reuses the pinned
+GX scopes (`SIM_RECORD`, `SIM_SNAPSHOT`, `SIM_OBSERVE`, `SIM_DECODE`), with portable
+nanosecond conversion independent of the offline host's zero `tsc_seconds`.
+`native/headless_host.cpp` collects durations and invocation counts only when the
+browser explicitly enables profiling before `callMain`. Native compilation keeps
+the existing scope and no-op accumulator. No GX command, validation, guest write,
+texture version, observer counter or floating-point option changes.
