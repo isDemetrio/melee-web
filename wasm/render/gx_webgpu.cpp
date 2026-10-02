@@ -64,6 +64,16 @@ EM_JS(int, gxw_open, (int width, int height), {
     gpu.pipelineLayout = gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.textureLayout]});
     gpu.pipelines = new Map();
     gpu.samplers = new Map();
+    // Views have no destroy(): one per persistent texture, made here or when its texture is.
+    gpu.efbView = gpu.efb.createView();
+    gpu.depthView = gpu.depth.createView();
+    gpu.whiteEntry = {id:0, texture:gpu.white, view:gpu.white.createView()};
+    // Draw resources are persistent and rewritten through the queue (gxw_texture, gxw_draw).
+    gpu.uniforms = gpu.device.createBuffer({size:105*16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+    gpu.vertexBuffer = null; gpu.indexBuffer = null;
+    gpu.texturePool = new Map(); gpu.texturePoolBytes = 0; gpu.textureSerial = 0;
+    gpu.bindGroups = new Map();
+    gpu.drawSerial = 0;
     gpu.backendDevice = gpu.device;
     return 1;
   } catch (error) {
@@ -91,9 +101,9 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
     if (clear) {
       const c = argb >>> 0;
       const pass = encoder.beginRenderPass({ colorAttachments: [{
-        view: gpu.efb.createView(), loadOp: "clear", storeOp: "store",
+        view: gpu.efbView, loadOp: "clear", storeOp: "store",
         clearValue: { r: ((c >>> 16) & 255) / 255, g: ((c >>> 8) & 255) / 255, b: (c & 255) / 255, a: (c >>> 24) / 255 },
-      }], depthStencilAttachment: {view: gpu.depth.createView(), depthLoadOp: "clear",
+      }], depthStencilAttachment: {view: gpu.depthView, depthLoadOp: "clear",
         depthStoreOp: "store", depthClearValue: 1 - (clear_z >>> 0) / 16777215} });
       pass.end();
       gpu.lastClearArgb = c;
@@ -117,10 +127,42 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
 // The descriptor is a pure function of mode0 bits 0-7 and mode1 bits 0-15, which is the key, so
 // a hit is the sampler a miss would create. Bounded: past SAMPLER_CACHE_LIMIT distinct
 // keys the oldest is dropped (to garbage collection). render.spec.ts's sampler count is the misses.
+//
+// The textures the pixels go into are pooled, so that bind groups (no destroy() either) can be
+// reused: a bind group names its textures, and a texture made for one draw makes every bind group
+// single-use. A pool texture is keyed by slot and shape -- slot, so two slots of one draw never
+// share one -- and every level is rewritten on every use. Queue operations run in order, so a
+// writeTexture after a submit does not reach the draws already submitted.
+// https://www.w3.org/TR/webgpu/#queue-timeline
+// Bounded by count and bytes, least recently used first; an evicted texture is destroyed and its
+// id is never reused, so a cached bind group naming it is never hit again. Textures of the draw
+// being uploaded are never evicted: such a draw may exceed the budget rather than lose a slot.
 EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
                        const void* rgba, int bytes, int mode0, int mode1), {
   const gpu = Module["gxWebgpu"];
   const SAMPLER_CACHE_LIMIT = 256;
+  const TEXTURE_POOL_LIMIT = 128, TEXTURE_POOL_BYTES = 32 << 20;
+  const pooled = () => {
+    const key = slot + ":" + width + "x" + height + "x" + levels;
+    let entry = gpu.texturePool.get(key);
+    if (entry) gpu.texturePool.delete(key);
+    else {
+      let size = 0;
+      for (let l = 0; l < levels; l++) size += Math.max(1, width >> l) * Math.max(1, height >> l) * 4;
+      for (const [oldKey, old] of gpu.texturePool) {
+        if (gpu.texturePool.size < TEXTURE_POOL_LIMIT && gpu.texturePoolBytes + size <= TEXTURE_POOL_BYTES) break;
+        if (old.draw === gpu.drawSerial) break; // this draw's own: everything after it is too
+        gpu.texturePool.delete(oldKey); gpu.texturePoolBytes -= old.size; old.texture.destroy();
+      }
+      const texture = gpu.device.createTexture({size:[width,height],mipLevelCount:levels,
+        format:"rgba8unorm",usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
+      entry = {id:++gpu.textureSerial, texture, view:texture.createView(), size};
+      gpu.texturePoolBytes += size;
+    }
+    entry.draw = gpu.drawSerial;
+    gpu.texturePool.set(key, entry);
+    return entry;
+  };
   try {
     if (level === 0) {
       const minf = (mode0 >>> 5) & 7, mip = minf & 3;
@@ -137,35 +179,42 @@ EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
         if (gpu.samplers.size >= SAMPLER_CACHE_LIMIT) gpu.samplers.delete(gpu.samplers.keys().next().value);
         gpu.samplers.set(key, sampler);
       }
-      const texture = width ? gpu.device.createTexture({size:[width,height],mipLevelCount:levels,
-        format:"rgba8unorm",usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST}) : gpu.white;
-      gpu.slots[slot] = {texture,sampler};
+      gpu.slots[slot] = {entry:width ? pooled() : gpu.whiteEntry, sampler, key};
     }
-    if (width) gpu.device.queue.writeTexture({texture:gpu.slots[slot].texture,mipLevel:level},
+    if (width) gpu.device.queue.writeTexture({texture:gpu.slots[slot].entry.texture,mipLevel:level},
       HEAPU8.subarray(rgba,rgba+bytes),{bytesPerRow:width*4,rowsPerImage:height},[width,height]);
     return 1;
   } catch(error) { gpu.recordFailure("texture", error); gpu.failure = "texture: " + error; return 0; }
 });
 
-// Destroy after submission, including error paths. WebGPU retains allocations needed by
-// previously submitted work. Waiting for a JS completion callback retains every draw's resources
-// for the entire synchronous callMain (measured by render.spec.ts).
-// https://www.w3.org/TR/webgpu/#texture-destruction
-EM_JS(void, gxw_retire_textures, (), {
-  const gpu = Module["gxWebgpu"];
-  const textures = gpu.slots.map(s => s.texture).filter(t => t !== gpu.white);
-  gpu.slots = [];
-  textures.forEach(t => t.destroy());
+EM_JS(int, gxw_texture_count, (), {
+  const gpu = Module["gxWebgpu"]; return gpu && gpu.texturePool ? gpu.texturePool.size + 1 : 0;
 });
 
 // Explicit float4 rows: no dependency on an unverified C++/WGSL struct ABI.
+//
+// Nothing here is created per draw except what WebGPU makes single-use (encoder, pass, command
+// buffer). Uniform, vertex and index data are written into persistent buffers: the queue orders
+// each writeBuffer after the submits before it, as for the pooled textures above. Vertex and
+// index buffers grow by doubling; a replaced one is destroyed, which already-submitted draws
+// survive. https://www.w3.org/TR/webgpu/#buffer-destruction
+//
+// Bind groups have no destroy() and were the next call to fail on the iPhone (one per draw:
+// 22,514 in 2400 frames, first createBindGroup failure at 6755 ms). Their descriptor is the fixed
+// layout, the persistent uniform buffer, and per slot a pooled texture's view and a cached
+// sampler, so the pool id and sampler key of the eight slots are the key: a hit is the bind group
+// a miss would create. Bounded like the samplers, least recently used dropped (to garbage
+// collection). The pipeline key keeps only the bits the pipeline descriptor reads.
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
                      const float* constants, const float* raster, int lines, int cull, int zmode, int components), {
   const gpu = Module["gxWebgpu"];
-  const buffers = [];
+  const BIND_GROUP_CACHE_LIMIT = 256;
+  // The uploads before this call were draw drawSerial's; the next draw's get a new serial.
+  gpu.drawSerial++;
   try {
     const d = gpu.device;
     const r = HEAPF32.slice(raster >> 2, (raster >> 2) + 10);
+    components &= 1024 | 8192 | 16384; zmode &= 31;
     const key = [lines,cull,zmode,components].join(":");
     let pipeline = gpu.pipelines.get(key);
     if (!pipeline) {
@@ -221,34 +270,42 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
           depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}});
       gpu.pipelines.set(key,pipeline);
     }
-    const upload = (ptr,size,usage) => {
-      const b = d.createBuffer({size,usage:usage|GPUBufferUsage.COPY_DST});
-      buffers.push(b); d.queue.writeBuffer(b,0,HEAPU8,ptr,size); return b;
+    const grow = (name,size,usage) => {
+      const old = gpu[name];
+      if (old && old.size >= size) return old;
+      const b = d.createBuffer({size:Math.max(size,old ? 2*old.size : 0),usage:usage|GPUBufferUsage.COPY_DST});
+      if (old) old.destroy();
+      return gpu[name] = b;
     };
-    const vb = upload(vertices,vertex_bytes,GPUBufferUsage.VERTEX);
-    const ib = upload(indices,count*4,GPUBufferUsage.INDEX);
-    const ub = upload(constants,105*16,GPUBufferUsage.UNIFORM);
-    const entries = [{binding:0,resource:{buffer:ub}}];
-    for (let i=0;i<8;i++) {
-      entries.push({binding:1+2*i,resource:gpu.slots[i].texture.createView()});
-      entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
+    const vb = grow("vertexBuffer",vertex_bytes,GPUBufferUsage.VERTEX);
+    const ib = grow("indexBuffer",count*4,GPUBufferUsage.INDEX);
+    d.queue.writeBuffer(vb,0,HEAPU8,vertices,vertex_bytes);
+    d.queue.writeBuffer(ib,0,HEAPU8,indices,count*4);
+    d.queue.writeBuffer(gpu.uniforms,0,HEAPU8,constants,105*16);
+    const groupKey = gpu.slots.map(s => s.entry.id + "/" + s.key).join(",");
+    let group = gpu.bindGroups.get(groupKey);
+    if (group) gpu.bindGroups.delete(groupKey);
+    else {
+      const entries = [{binding:0,resource:{buffer:gpu.uniforms}}];
+      for (let i=0;i<8;i++) {
+        entries.push({binding:1+2*i,resource:gpu.slots[i].entry.view});
+        entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
+      }
+      group = d.createBindGroup({layout:gpu.textureLayout,entries});
+      if (gpu.bindGroups.size >= BIND_GROUP_CACHE_LIMIT) gpu.bindGroups.delete(gpu.bindGroups.keys().next().value);
     }
-    const group = d.createBindGroup({layout:gpu.textureLayout,entries});
+    gpu.bindGroups.set(groupKey,group);
     const encoder = d.createCommandEncoder();
-    const pass = encoder.beginRenderPass({colorAttachments:[{view:gpu.efb.createView(),loadOp:"load",storeOp:"store"}],
-      depthStencilAttachment:{view:gpu.depth.createView(),depthLoadOp:"load",depthStoreOp:"store"}});
+    const pass = encoder.beginRenderPass({colorAttachments:[{view:gpu.efbView,loadOp:"load",storeOp:"store"}],
+      depthStencilAttachment:{view:gpu.depthView,depthLoadOp:"load",depthStoreOp:"store"}});
     pass.setPipeline(pipeline); pass.setBindGroup(0,group);
     pass.setViewport(0,0,gpu.efb.width,gpu.efb.height,r[4],r[5]);
     pass.setScissorRect(r[6],r[7],r[8],r[9]);
     pass.setVertexBuffer(0,vb); pass.setIndexBuffer(ib,"uint32"); pass.drawIndexed(count); pass.end();
     d.queue.submit([encoder.finish()]);
-    // No future submissions use these buffers. destroy() permits the driver to reclaim them
-    // after its queued work, without waiting for callMain to yield to a JS promise callback.
-    // https://www.w3.org/TR/webgpu/#buffer-destruction
-    buffers.forEach(b => b.destroy());
     return 1;
   } catch(error) {
-    gpu.recordFailure("draw", error); buffers.forEach(b => b.destroy()); gpu.failure = "draw: " + error; return 0;
+    gpu.recordFailure("draw", error); gpu.failure = "draw: " + error; return 0;
   }
 });
 
@@ -331,11 +388,9 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
     const auto& t=dc.textures[i];
     u[103+i/4][i%4]=t.used ? float(gx::sbits(t.mode0,9,8))/32.0f : 0;
   }
-  if (!upload_textures(dc)) { gxw_retire_textures(); return false; }
-  const bool ok = gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
+  if (!upload_textures(dc)) return false;
+  return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
                   &u[0][0],r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),dc.components);
-  gxw_retire_textures();
-  return ok;
 }
 
 
@@ -367,7 +422,7 @@ class WebGpuBackend final : public gx::Backend {
   void presentation_stats(uint32_t* frames, uint32_t* pipelines, uint32_t* textures) const override {
     if (frames) *frames = presented_;
     if (pipelines) *pipelines = gxw_pipeline_count();
-    if (textures) *textures = 1; // only the persistent white fallback; draw textures retire after submission
+    if (textures) *textures = gxw_texture_count(); // the texture pool plus the white fallback
   }
 
  private:
@@ -484,8 +539,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         }
       }
       dc.first_vertex=frame.vertices.size(); dc.first_segment=frame.segments.size(); dc.segment_count=1;
-      for(int i=0;i<3;i++) {
-        gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1];
+      // geometry 6: each layer repeats its triangle twice as often, growing the vertex and index
+      // buffers between submitted draws.
+      const int vertices=geometry==6 ? 3<<layer : 3;
+      for(int i=0;i<vertices;i++) {
+        gx::Vertex v{}; v.pos[0]=xy[i%3][0]; v.pos[1]=xy[i%3][1];
         v.pos[2]=layer==1 ? -0.8f : -0.3f; v.posmtx=3; v.nrm[2]=1;
         v.col0[layer]=255; v.col0[3]=255; v.col1[3]=255;
         if(geometry>=10) {
@@ -494,7 +552,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         }
         frame.vertices.push_back(v);
       }
-      frame.segments.push_back({dc.first_vertex,3,dc.primitive});
+      frame.segments.push_back({dc.first_vertex,uint32_t(vertices),dc.primitive});
       frame.draws.push_back(dc); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
     }
     gx::EfbCopy copy{}; copy.src_w=640; copy.src_h=480; copy.to_xfb=true;
