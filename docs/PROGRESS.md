@@ -1837,3 +1837,31 @@ The largest single item turned out to be **our own instrumentation**, not the re
 "safe, small" changes beat any clever change to the drawing path by a wide margin. Measure
 first — the analysis that ranked draw recording and texture snapshots as the top suspects was
 wrong by an order of magnitude (together 7% of the frame).
+
+## 2026-10-02 — guest code baseline, no justified optimization
+
+Branch `perf/guest-code`, base `6dd96f4`. Python recompiler successfully ran locally
+on the verified external DOL with patches 0001–0009, offline and release, without
+compiling. External outputs: `/home/hermes/incoming/guest-code-baseline-{offline,release}`.
+Full reader audit, reproduction, aggregates and next measurement:
+[Guest code audit](GUEST_CODE_AUDIT.md). Added aggregate-only counter
+`scripts/analysis/count_guest_code.py`.
+
+Offline/release respectively: 137/144 TUs, 19,827/20,076 functions,
+962,305/1,019,597 instruction-comment sites, 19,713/19,962 function-entry sites,
+56,348,251/62,764,846 numbered C++ TU bytes. **Zero per-instruction PC stores**;
+`last_pc` is assigned once per executed function entry by inline `enter()`.
+**Zero local-block returns to a central dispatcher**: local gotos and C++ calls
+already connect the code. Explicit C++ returns: 22,317/23,623, not dispatcher exits.
+Dynamic entry counts per frame remain unknown; no estimate invented from static counts.
+
+No optimization implemented: dropping entry instrumentation would change diagnostic
+history/hooks/watchdog, and backedge polling delivers simulation events. The proposed
+DolRecomp transformations do not apply to the pinned emitter. Next: per-frame delta
+of existing `g_enter_count` plus symbolized guest/helper profile on the same workload,
+then one justified exact-semantics optimization and clean iPhone A/B.
+
+Not verified: 2400-checkpoint SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`
+(operator owns execution), phone mean/p99, module size, preview, or native/WASM
+compilation of the generated outputs. No local build or test suite was run.
+Delivery is a draft analysis PR, no merge; CI status reported with delivery.
