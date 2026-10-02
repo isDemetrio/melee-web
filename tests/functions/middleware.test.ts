@@ -23,6 +23,7 @@ const fetchJwks = vi.fn(async (_url: string) => Response.json({ keys: [jwk] }));
 const middleware = createMiddleware(fetchJwks);
 
 beforeEach(() => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
   fetchJwks.mockReset().mockImplementation(async () => Response.json({ keys: [jwk] }));
 });
@@ -35,6 +36,18 @@ async function denied(jwt?: string, overrides = {}) {
   expect(await response.json()).toEqual({ error: 'Forbidden' });
   expect(response.headers.get('Cache-Control')).toBe('no-store');
   expect(ctx.next).not.toHaveBeenCalled();
+  expect(console.error).not.toHaveBeenCalled();
+}
+
+async function unavailable(reason: string, overrides = {}) {
+  const ctx = context(token(), overrides);
+  const response = await middleware(ctx);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: 'Service Unavailable', reason });
+  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  expect(ctx.next).not.toHaveBeenCalled();
+  expect(console.error).toHaveBeenCalledOnce();
+  expect(console.error).toHaveBeenCalledWith('Access verification unavailable:', reason);
 }
 
 describe('Access JWT', () => {
@@ -53,7 +66,19 @@ describe('Access JWT', () => {
     { exp: now - 31 }, { exp: now - 30 }, { exp: undefined }, { exp: 'tomorrow' }, { exp: null },
     { nbf: now + 31 }, { nbf: 'later' }, { nbf: null },
   ])('rejects invalid claims %j', async claims => { await denied(token(claims)); });
-  it('rejects missing header', async () => { await denied(); });
+  it('rejects missing header', async () => {
+    await denied();
+    expect(fetchJwks).not.toHaveBeenCalled();
+  });
+  it('keeps missing tokens generic even without trust configuration', async () => {
+    await denied(undefined, { ACCESS_AUD: undefined, ACCESS_TEAM_DOMAIN: undefined });
+    expect(fetchJwks).not.toHaveBeenCalled();
+  });
+  it('does not fetch JWKS for malformed tokens during an outage', async () => {
+    fetchJwks.mockRejectedValue(new Error('private network detail'));
+    await denied('invalid');
+    expect(fetchJwks).not.toHaveBeenCalled();
+  });
   it('rejects a tampered signature', async () => {
     const parts = token().split('.');
     const signature = Buffer.from(parts[2], 'base64url');
@@ -67,27 +92,34 @@ describe('Access JWT', () => {
     await denied(jwt);
   });
   it.each([
-    { ACCESS_AUD: '' }, { ACCESS_TEAM_DOMAIN: undefined }, { ACCESS_TEAM_DOMAIN: 'evil.test' },
+    { ACCESS_AUD: undefined }, { ACCESS_AUD: '' }, { ACCESS_TEAM_DOMAIN: undefined }, { ACCESS_TEAM_DOMAIN: 'evil.test' },
     { ACCESS_TEAM_DOMAIN: 'https://test.cloudflareaccess.com' },
-  ])('rejects invalid configuration %j', async overrides => { await denied(token(), overrides); });
+  ])('rejects invalid configuration %j', async overrides => {
+    await unavailable('access_configuration_missing', overrides);
+    expect(fetchJwks).not.toHaveBeenCalled();
+  });
   it.each([
-    {}, { keys: 'wrong' }, { keys: [] }, { keys: [jwk, jwk] }, { keys: [null] },
+    { keys: [] }, { keys: [jwk, jwk] },
     { keys: [{ ...jwk, kty: 'EC' }] }, { keys: [{ ...jwk, n: 'invalid' }] },
   ])('rejects unusable JWKS %j', async body => {
     fetchJwks.mockResolvedValue(Response.json(body));
     await denied(token());
   });
+  it.each([{}, null, [], { keys: 'wrong' }, { keys: [null] }].map(body => ({ body })))('diagnoses malformed JWKS %j', async ({ body }) => {
+    fetchJwks.mockResolvedValue(Response.json(body));
+    await unavailable('access_jwks_invalid');
+  });
   it('fails closed on JWKS HTTP errors', async () => {
     fetchJwks.mockResolvedValue(new Response('private upstream error', { status: 500 }));
-    await denied(token());
+    await unavailable('access_jwks_unavailable');
   });
   it('fails closed on JWKS network errors', async () => {
     fetchJwks.mockRejectedValue(new Error('private network detail'));
-    await denied(token());
+    await unavailable('access_jwks_unavailable');
   });
   it('fails closed on malformed JWKS JSON', async () => {
     fetchJwks.mockResolvedValue(new Response('{'));
-    await denied(token());
+    await unavailable('access_jwks_invalid');
   });
   it('uses global fetch in the Pages entry point', async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ keys: [jwk] }));

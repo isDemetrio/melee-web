@@ -1625,3 +1625,59 @@ paths, so a change to the workflow is exercised by the workflow.
 renderer step 2, then the device rows M1 and M2 (M2 decides), then O1–O9 and M5. Nothing else in
 `docs/PHASE0_DEPLOY_PLAN.md` §5–§6 is autonomous and open, and the leftover this session was named
 for is now closed.
+
+## 2026-10-02 — Real GX decoder spike handoff (`spike/renderer-real-decoder`)
+
+Shared native/Node/web sources now select the upstream real decoder plus observer/pose/audit
+dependencies and an offline FIFO/backend adapter. Source review found an unresolved
+`render_observer -> authored_stats -> authored_pose/subframe` closure; stopped before extending
+the porting scope, with no fake statistics implementation or relaxed check. Details and exact
+evidence are under Q10(a) in `docs/OPEN_QUESTIONS.md`. Legacy FIFO tests remain unchanged.
+No local build, Node, ISO operation, CI polling or checkpoint comparison. This is an unmeasured,
+not-for-merge experiment; the parent session owns CI results and same-commit 2400-checkpoint
+validation if link closure is subsequently resolved.
+
+2026-10-02 — Q10(a) follow-up: confirmed direct GX observer calls; supplied portable offline `authored_stats()` counter storage without the subframe solver. Known symbol closure addressed at source level; build/link/parity unmeasured, legacy FIFO tests and CI unchanged; draft PR #63 updated, no CI polling.
+
+**Measured the same day — the spike holds, and the answer is the best of the three possible.** Both builds of the branch are green (`Phase 0 — Linux headless reference (offline)` run `36999621064`, `Phase 0 — WASM core` run `36999621081`), so the real decoder links for the native reference and for the web module **from one commit**. Both were then dispatched with their opt-in private artifacts (`37000659238` → `melee-core-headless`, `37000662755` → `melee-core-wasm-node`) and run on the operator's own disc through `scripts/phase0/run_checkpoints.sh` with `parity_vs_onett.txt`, 2400 retraces:
+
+| Run | trace SHA-1 | final scene |
+| --- | --- | --- |
+| native, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| web module, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| reference of 2026-09-30, legacy decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+
+2401 rows each, and `diff` reports no differing line. **The real decoder does not change the simulated state**: the parity guarantee survives the substitution, and it is the third column that makes the claim strong — the trace taken *before* the substitution is the trace taken after it. `native_fifo_test` still exercises the legacy decoder only and is not evidence for this path; no CI check, guest read/write or texture RAM watch was relaxed. **Option 1 is adopted**, the branch is mergeable, and renderer step 2 is no longer blocked by Q10(a).
+
+
+### 2026-10-02 — Baseline WebGPU geometry (`render/webgpu-geometry`)
+
+Implemented only in `wasm/render/gx_webgpu.cpp`: packed 108-byte vertex uploads (offset
+assertions against `gx::Vertex`), per-segment upstream index conversion, triangles/lines,
+unsupported-primitive logging, position/normal XF transforms, projection, vertex colors,
+viewport/scissor, D3D clockwise culling and reversed depth comparisons. A persistent D32
+attachment clears with reversed `clear_z`; like the existing color clear this still covers
+all of the EFB. The shader samples a neutral white 1×1 texture in slot 0. Pipelines belong
+to this device and do not use `DrawCall::cached_pipeline`; submitted transient buffers retire
+on queue completion. No source-set, simulation, native or Node backend changes.
+
+`gx_webgpu_selftest` now optionally submits synthetic recorded Frame/DrawCall/Vertex data
+following the existing real-FIFO clear test. `web/tests/spike/render.spec.ts` checks a green
+transformed triangle against blue clear, red/far and blue/far overlapping triangles, an outside
+probe, scissor rejection, culling and unsupported points. Removing draws cannot pass the green
+assertion; disabling depth lets blue win. Canvas submission assertions remain without pixel
+assertions. The synthetic draws test the backend ABI, not FIFO vertex decoding.
+
+Verification performed: source review and `git diff --check` only. No local compilation,
+browser run, CI result, preview, game frame or 2400-checkpoint parity was verified. The parent
+session owns parity. Per operator instruction this session pushes a draft and does not pursue CI.
+
+Known limits: lighting/channel controls and texgen remain unfinished priority 2 work; transformed
+normals and col1 are carried but the fragment shader uses col0. Priority 3 TEV, alpha test,
+blend/write masks, fog and destination alpha, and priority 4 real textures remain absent.
+Line conversion is implemented but has no pixel fixture yet; perspective, inverted/outside
+viewports, all matrix indices and normal lighting behavior need further GPU coverage. Viewport
+mapping uses full-EFB rasterization plus original clip-coordinate rejection in the fragment
+shader; edge/sample equivalence with D3D needs comparison. No performance measurement or device
+loss/recreation validation; per-segment uploads/submissions and unbounded pipeline residency
+are provisional. Resource completion callbacks need the worker event loop to turn.

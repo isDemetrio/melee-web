@@ -55,7 +55,7 @@ if (selftestColour !== null) {
     worker.terminate();
     renderOut.textContent = JSON.stringify({ presented: data.presented, sentinel: data.sentinel, render: data.render });
   };
-  const selftest = { argb, copies, target: parameters.has('nocanvas') ? undefined : target };
+  const selftest = { argb, copies, geometry: Number(parameters.get('geometry') ?? 0), sampleX: Number(parameters.get('sample-x') ?? 320), target: parameters.has('nocanvas') ? undefined : target };
   worker.postMessage({ selftest, canvas }, canvas ? [canvas] : []);
 }
 /**

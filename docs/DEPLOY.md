@@ -3,7 +3,7 @@
 How the three deployable pieces of this project get to Cloudflare, what the operator has to
 set up once, and how to undo a deploy.
 
-**Nothing in this file has been executed.** There is no Cloudflare account login and no API
+**The deployment commands below have not been executed by this implementation agent.** There is no Cloudflare account login and no API
 token in this repository's CI, so every command below is written from the documentation and
 reviewed, not run (`docs/OPEN_QUESTIONS.md` Q3). What *is* verified by CI is the part that
 decides whether an unattended run can publish anything: the guard tests in
@@ -132,6 +132,58 @@ The Phase 0 spike page is published as a **preview** of the same Pages project, 
 service worker, no site data). It is not the product: `docs/PHASE0_DEPLOY_PLAN.md` section 3 says
 why, and section 5 PR 5 is the change that added the step.
 
+### Access configuration and “consenso, poi Error Forbidden”
+
+Operator report (2026-10-02): the preview at
+`https://phase0-spike.melee-web.pages.dev/spike.html` shows **“consenso, poi Error Forbidden”**
+after a successful Access login. The old middleware returned `403 {"error":"Forbidden"}`
+even when its trust configuration was missing; the login alone does not configure the Function.
+
+In **Cloudflare → Workers & Pages → `melee-web` → Settings → Variables and Secrets**,
+select the **Preview (anteprima)** environment and set both:
+
+| Variable | Format | Preview value reported on 2026-10-02 |
+| --- | --- | --- |
+| `ACCESS_AUD` | Access application's audience tag, a nonempty string (one AUD, no JSON array or quotes) | `a3079f1bb92f23c5299cc29d4436377594caa9cfc3b655c3571206548028906d` |
+| `ACCESS_TEAM_DOMAIN` | Team hostname only, `<team>.cloudflareaccess.com`, no `https://`, path or trailing slash | `jolly-frost-8cc9.cloudflareaccess.com` |
+
+These are dated operator-provided values, not values independently checked by this change.
+To recheck the AUD, inspect the `kid` parameter in the Access **login URL** and the `aud`
+claim of the `meta` token in that login flow; compare with the intended application's
+Application Audience (AUD) tag in the Access dashboard. The login URL's `kid` is not the
+JWT header's signing-key `kid`. Recheck the team hostname against the Access dashboard too.
+Decoded token data is only an operator diagnostic, never a trusted runtime configuration
+source; do not copy tokens into logs or issues. The middleware uses only the configured
+team's certificate endpoint and verifies the JWT signature, issuer, audience and lifetime.
+
+**Changes apply from the next deployment: republish the preview after saving the variables.**
+Use the existing workflow below once publication is authorized; changing settings does not
+repair an already published deployment. Do not enable `ACCESS_DEV_BYPASS` to fix this failure.
+
+**The dashboard is not where they belong.** `wrangler pages deploy` writes the project's
+configuration from `wrangler.toml`, so a variable set only in the dashboard is overridden by the
+next deploy (`developers.cloudflare.com/workers/wrangler/configuration/`, "Source of truth").
+That is what happened here: the variables were set, the preview was republished, and the
+deployment still answered `403 {"error":"Forbidden"}`. They are declared in `wrangler.toml` now,
+in `[vars]` and again in `[env.preview.vars]` (Pages *overrides* `vars` for a preview deployment
+rather than merging them, so the preview has to state them too), which is what makes the deploy
+carry them. The dashboard copy can stay; the file is the source of truth.
+
+With the updated middleware, a request carrying a token gets these deployment diagnostics:
+
+| HTTP | Exact JSON response | Meaning / action |
+| --- | --- | --- |
+| 503 | `{"error":"Service Unavailable","reason":"access_configuration_missing"}` | AUD missing/empty or team domain missing/invalid; correct Preview settings and republish. |
+| 503 | `{"error":"Service Unavailable","reason":"access_jwks_unavailable"}` | Configured team's certificate endpoint failed (network or non-success HTTP); check team configuration and endpoint availability. |
+| 503 | `{"error":"Service Unavailable","reason":"access_jwks_invalid"}` | Certificate response is not valid JSON/JWKS structure; check the configured endpoint. |
+| 403 | `{"error":"Forbidden"}` | Missing or rejected token; no token-specific details are exposed. |
+
+All these responses have `Cache-Control: no-store`. The 503 reasons also appear in Function
+logs as `Access verification unavailable: <reason>`, without tokens, key IDs or upstream
+error bodies. With valid trust configuration, token checks happen before fetching certificates, so malformed tokens
+receive the generic 403 without probing JWKS. Unknown/ambiguous signing-key IDs and failed
+key import/signature checks also remain generic 403 responses.
+
 From the CI:
 
     gh workflow run phase0-build.yml --ref main \
@@ -164,7 +216,8 @@ Three things this cannot settle on its own:
 - **The address format.** `https://phase0-spike.<project>.pages.dev` is expected, not verified; the
   run summary carries whatever wrangler reports.
 
-None of this has ever run against a real account.
+The deployment procedure was not run by this implementation agent; the dated operator report
+above records a live preview and its Access failure.
 
 **Verified while writing this** (on the VPS, 2026-09-30):
 
