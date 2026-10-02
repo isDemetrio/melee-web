@@ -217,7 +217,7 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
           // A vertex colour is unorm8 in the shader, so the register path needs the same 0..255 scale.
           const vc = (w) => (components & (8192 << j)) ? `round(${vcol[j]}${w} * 255.0)`
             : (components & 8192) ? `round(color${w} * 255.0)` : (w ? "255.0" : "vec4f(255.0)");
-          body.push(`  { // colour channel ${j}`);
+          body.push(`  { ` + "// colour channel " + j);
           body.push(`    var mat: vec4f = ${cm ? vc("") : `u.rows[${107 + j}]`};`);
           if (am !== cm) body.push(`    mat = vec4f(mat.xyz, ${am ? vc(".w") : `u.rows[${107 + j}].w`});`);
           body.push(`    var lacc: vec4f = ${litC ? (ambC ? vc("") : `u.rows[${105 + j}]`) : "vec4f(255.0)"};`);
@@ -254,7 +254,7 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
   clip = vec4f(clip.xy * sign(u.rows[4].zw * vec2f(-1,1)) + clip.w * u.rows[4].zw, clip.zw);
   if (clip.w == 1) { clip = vec4f(round(clip.xy * u.rows[5].xy) * u.rows[5].zw,clip.zw); }
   let originalClip = clip;
-  // Emulate the D3D viewport in clip space, allowing viewports outside the EFB.
+  ${"// Emulate the D3D viewport in clip space, allowing viewports outside the EFB."}
   clip = vec4f(clip.xy * u.rows[102].xy + clip.w * u.rows[102].zw,clip.zw);
   var o: Out;
   o.pos = clip; o.clip = originalClip;
