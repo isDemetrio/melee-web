@@ -113,8 +113,9 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
 //
 // Samplers are cached instead. They have no destroy(), so a fresh one per slot per draw (8 per
 // draw, unused slots included) was released only by garbage collection, whose timing nothing
-// here controls; createSampler is the call that failed on the iPhone after 81 copies (7296478). The descriptor is a pure function of mode0 bits 0-7 and mode1 bits 0-15, which is the
-// key, so a hit is the sampler a miss would create. Bounded: past SAMPLER_CACHE_LIMIT distinct
+// here controls; createSampler is the call that failed on the iPhone after 81 copies (7296478).
+// The descriptor is a pure function of mode0 bits 0-7 and mode1 bits 0-15, which is the key, so
+// a hit is the sampler a miss would create. Bounded: past SAMPLER_CACHE_LIMIT distinct
 // keys the oldest is dropped (to garbage collection). render.spec.ts's sampler count is the misses.
 EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
                        const void* rgba, int bytes, int mode0, int mode1), {
