@@ -68,7 +68,8 @@ async function playSelftest(page: Page): Promise<Presentation> {
 test('main page presents consecutive real core frames while worker stays synchronous', async ({ page }) => {
   const { presented, frames } = await playSelftest(page);
   // Three heartbeats, each a 640x480 bitmap, in order. The worker blocks after each until the
-  // page acknowledges that serial, so reaching "ended" at all needs every acknowledgement.
+  // page acknowledges that serial, so reaching "ended" at all needs every acknowledgement. Each
+  // selftest frame also draws three triangles, whose -1 beats must not present (worker.ts).
   expect(frames.map(({ serial, width, height }) => ({ serial, width, height }))).toEqual(
     [1, 2, 3].map((serial) => ({ serial, width: 640, height: 480 })));
   // The acknowledgement follows a transferFromImageBitmap that did not throw (session.ts).
