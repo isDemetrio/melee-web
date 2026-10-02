@@ -7,10 +7,11 @@ test('main page presents consecutive real core frames while worker stays synchro
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
-      override postMessage(message: unknown, transfer?: Transferable[]): void {
+      override postMessage(message: unknown, transfer?: Transferable[] | StructuredSerializeOptions): void {
         const request = message as { pad?: SharedArrayBuffer; selftest?: boolean };
         if (request.pad) request.selftest = true;
-        super.postMessage(message, transfer ?? []);
+        if (Array.isArray(transfer)) super.postMessage(message, transfer);
+        else super.postMessage(message, transfer);
       }
     };
   });
