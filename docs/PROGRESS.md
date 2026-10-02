@@ -1625,3 +1625,27 @@ paths, so a change to the workflow is exercised by the workflow.
 renderer step 2, then the device rows M1 and M2 (M2 decides), then O1–O9 and M5. Nothing else in
 `docs/PHASE0_DEPLOY_PLAN.md` §5–§6 is autonomous and open, and the leftover this session was named
 for is now closed.
+
+## 2026-10-02 — Real GX decoder spike handoff (`spike/renderer-real-decoder`)
+
+Shared native/Node/web sources now select the upstream real decoder plus observer/pose/audit
+dependencies and an offline FIFO/backend adapter. Source review found an unresolved
+`render_observer -> authored_stats -> authored_pose/subframe` closure; stopped before extending
+the porting scope, with no fake statistics implementation or relaxed check. Details and exact
+evidence are under Q10(a) in `docs/OPEN_QUESTIONS.md`. Legacy FIFO tests remain unchanged.
+No local build, Node, ISO operation, CI polling or checkpoint comparison. This is an unmeasured,
+not-for-merge experiment; the parent session owns CI results and same-commit 2400-checkpoint
+validation if link closure is subsequently resolved.
+
+2026-10-02 — Q10(a) follow-up: confirmed direct GX observer calls; supplied portable offline `authored_stats()` counter storage without the subframe solver. Known symbol closure addressed at source level; build/link/parity unmeasured, legacy FIFO tests and CI unchanged; draft PR #63 updated, no CI polling.
+
+**Measured the same day — the spike holds, and the answer is the best of the three possible.** Both builds of the branch are green (`Phase 0 — Linux headless reference (offline)` run `36999621064`, `Phase 0 — WASM core` run `36999621081`), so the real decoder links for the native reference and for the web module **from one commit**. Both were then dispatched with their opt-in private artifacts (`37000659238` → `melee-core-headless`, `37000662755` → `melee-core-wasm-node`) and run on the operator's own disc through `scripts/phase0/run_checkpoints.sh` with `parity_vs_onett.txt`, 2400 retraces:
+
+| Run | trace SHA-1 | final scene |
+| --- | --- | --- |
+| native, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| web module, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| reference of 2026-09-30, legacy decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+
+2401 rows each, and `diff` reports no differing line. **The real decoder does not change the simulated state**: the parity guarantee survives the substitution, and it is the third column that makes the claim strong — the trace taken *before* the substitution is the trace taken after it. `native_fifo_test` still exercises the legacy decoder only and is not evidence for this path; no CI check, guest read/write or texture RAM watch was relaxed. **Option 1 is adopted**, the branch is mergeable, and renderer step 2 is no longer blocked by Q10(a).
+

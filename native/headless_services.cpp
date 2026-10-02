@@ -6,7 +6,7 @@
 #include "user_gecko.h"
 #include "exi_slippi.h"
 #include "slippi_online.h"
-#include "render_observer.h"
+#include "pc_settings_guest.h"
 namespace host {
 // Replaces WinMM output only. hle_stubs/audio_tick and AX still mix into real RAM/ARAM.
 void audio_push(const uint8_t*, size_t) {}
@@ -23,6 +23,8 @@ namespace user_gecko { void apply() {} }
 namespace slippi::online {
 bool is_online_match() { return false; }
 int local_player_slot() { return -1; }
+// Offline guest: there are no online display names to overlay.
+std::array<std::string, 4> player_names_for_overlay() { return {}; }
 }
 namespace slippi {
 // TODO(portability): implement the real Slippi EXI service before accepting Slippi translations.
@@ -33,8 +35,7 @@ void imm_write(uint32_t, uint32_t) { host::die("TODO(portability): Slippi EXI im
 uint32_t imm_read(uint32_t) { host::die("TODO(portability): Slippi EXI immediate read"); }
 }
 namespace gx {
-// Replaces renderer identity/pose observation around translated functions. The declared hooks
-// observe guest state; headless has no draw identity or authored pose consumer.
-RenderObserver::RenderObserver(ppc::Context& c, Observe kind, uint8_t*) : cpu_(c), kind_(kind) {}
-RenderObserver::~RenderObserver() = default;
+// Patch 0007 separates this UI notification from the guest-memory write in gx_core.
+// This target has no desktop PC Settings window to open; gx_core retains the write.
+void settings_guest_options_frame(uint8_t, uint16_t, uint32_t) {}
 }

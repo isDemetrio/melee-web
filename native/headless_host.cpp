@@ -61,6 +61,8 @@ void log_flush() { fflush(stderr); }
 // Cost accounting is diagnostic only; replace Windows calibrated TSC profiling.
 const double tsc_seconds = 0;
 void sim_cost_add(int, double) {}
+// No adapter/presentation latency instrumentation in the offline host.
+TickTiming& tick_timing() { static TickTiming timing; return timing; }
 double now_seconds() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }

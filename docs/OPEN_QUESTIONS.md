@@ -175,7 +175,7 @@ by any of the three: it presents the frame's EFB copies and clears, and each cho
 the smallest way and is reversible. Step 2 (draws) is blocked by (a), and (c) decides whether a real
 run shows more than its last frame.
 
-**(a) Where the web build's frames come from.** The shipped modules do not compile
+**(a) Where the web build's frames come from.** Before the spike below, the shipped modules did not compile
 `port/runtime/gx/gx_core.cpp` at all: `native/core_sources.cmake` puts `native/headless_fifo.cpp` in
 its place, a decoder that consumes the FIFO's bytes and drops everything a renderer needs
 (`headless_fifo.cpp`, "Replaces vertex decoding, texture snapshots and draw observation").
@@ -191,6 +191,77 @@ snapshots). Options:
    here, and the 2400-checkpoint comparison would have to pass again before anything else.
 2. Keep growing `headless_fifo.cpp`'s recording, display-only, one priority at a time. The
    simulation path never changes; but it duplicates `gx_core.cpp`'s decoding and can drift from it.
+
+**Option 1 implementation spike — 2026-10-02, `spike/renderer-real-decoder` (not for merge).**
+The operator selected the real decoder, shared across the native oracle and both WASM modules.
+`native/core_sources.cmake` now selects `gx_core.cpp`, `gx_texture.cpp`, `render_observer.cpp`,
+`native_pose_bridge.cpp` and `native_draw_audit.cpp`; the old empty `RenderObserver` definitions
+are removed. The upstream native header directory supplies `PackedAnimation.h` to the pose types.
+`native/real_fifo.cpp` forwards host FIFO writes to `gx::write_fifo`; a stable forwarding backend
+initializes GX once and allows WebGPU to detach during submission without resetting GX state.
+The native and Node targets still have no presentation backend, but now perform real decoding
+and capture. This does not implement draw rasterization in the step-1 WebGPU backend.
+
+The offline service boundary supplies empty online overlay names (no online match), ignores the
+patch-0007 desktop Settings UI notification, and supplies default diagnostic `TickTiming`.
+The guest Settings memory write remains in the real decoder; Slippi EXI fatal guards remain.
+Neither the decoder's guest reads/writes nor its texture RAM watches have been bypassed.
+`native_fifo_test` is unchanged and still tests the legacy decoder, **not** this new path;
+its passing would not establish real-decoder correctness. No CI check or link error flag is relaxed.
+
+**Follow-up source review — 2026-10-02, observer required; diagnostic closure supplied.**
+At upstream pin `3aab717`, `gx_core.cpp` directly calls `observed_draw_identity` (457),
+`observed_owner` (465), `observed_skinned` (470), `capture_authored_pose` (471), and
+`finish_observed_frame` (580). These affect draw metadata/capture and frame bookkeeping;
+removing the observer would not be a valid source-set reduction. `gx_texture.cpp` has no
+observer reference, and `native_draw_audit.cpp` does not require it either: the dependency
+comes from the decoder itself, independently of native draw auditing.
+
+`authored_stats()` is also called directly by `gx_core.cpp` (473–476, 822–823), not only by
+`render_observer.cpp`. Its definition in `authored_pose.cpp:15` simply returns a static
+`AuthoredStats`: atomic counters declared in `authored_pose.h:70–81`. Every use in the
+selected decoder/observer sources increments a capture, rejection, feature or draw count;
+none reads a counter to decide a draw, pose or simulation outcome. For example, the observer
+increments `capture[1]` after the capture eligibility condition has already failed. The
+condition and return remain unchanged. These are diagnostic counts, not solver state.
+
+`native/offline_authored_stats.cpp` supplies the same static counter storage for the shared
+native/Node/web offline source set. It retains actual increments rather than fabricating
+zero statistics; it performs no animation sampling and has no simulation/drawing side effects.
+The upstream `authored_pose.cpp` stays excluded, so there is exactly one selected definition.
+No upstream modification or numbered patch is needed: this is an offline host implementation
+of the existing declaration. Observer capture, guest reads/writes, texture RAM watches,
+`native_fifo_test`, and all CI/link checks remain unchanged.
+
+The known `authored_stats` symbol dependency is now supplied at source level; executable link
+success is still unmeasured. Bringing in the full sampler would instead require
+`port/runtime/gx/authored_pose.cpp`, `NativeMelee::SamplePacked` and
+`SubFrameSolver::{interpolate_matrix,extrapolate_matrix}` from `port/runtime/gx/subframe.cpp`,
+including its unconditional `<windows.h>` and solver thread pool. That would be a separate
+porting task; it is neither required for counter storage nor attempted here.
+
+**Link and parity evidence — 2026-10-02, the experiment is measured.** The link closure compiles and
+links: on branch `spike/renderer-real-decoder` the `Phase 0 — Linux headless reference (offline)` job
+(run `36999621064`) and the `Phase 0 — WASM core` job (run `36999621081`) both completed green, so
+the real decoder builds for the native reference and for the web module from the same commit. Both
+were then dispatched with their opt-in private artifacts (`37000659238` → `melee-core-headless`,
+`37000662755` → `melee-core-wasm-node`) and run **on the operator's own disc** with
+`scripts/phase0/run_checkpoints.sh` and the project's `parity_vs_onett.txt` script, 2400 retraces:
+
+| Run | trace SHA-1 | final scene |
+| --- | --- | --- |
+| native, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| web module, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| reference of 2026-09-30, legacy decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+
+All three traces are 2401 rows and `diff` reports **no differing line**. The real decoder therefore
+does not change the simulated state: the parity guarantee that the legacy decoder made possible
+survives the substitution, and it survives it for the same reason on both sides — the comparison is
+between the web module and the native reference **of one commit**, both now on the real decoder, and
+it is *also* identical to the trace taken before the substitution. `native_fifo_test` still exercises
+the legacy decoder only and is not evidence for this path; no CI check, guest read/write or texture
+RAM watch was relaxed to reach this point. Option 1 is adopted.
+
 
 **(b) Who owns the GPU objects.** The brief for step 1 asked for a backend that owns the instance,
 adapter and device. In step 1 the worker acquires them in JavaScript (`web/src/spike/gpu.ts`) and the
