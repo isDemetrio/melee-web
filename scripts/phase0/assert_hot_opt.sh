@@ -25,7 +25,8 @@ import json, re, sys
 
 path, expected = sys.argv[1], sys.argv[2]
 wanted = ("runtime/ppc/ppc_runtime.cpp", "runtime/ppc/interp.cpp",
-          "runtime/gx/gx_core.cpp", "runtime/gx/gx_texture.cpp")
+          "runtime/gx/gx_core.cpp", "runtime/gx/gx_texture.cpp",
+          "runtime/gx/render_observer.cpp")
 entries = json.load(open(path))
 found, problems = {}, []
 for entry in entries:

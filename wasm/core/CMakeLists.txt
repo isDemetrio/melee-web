@@ -72,7 +72,8 @@ if(EMSCRIPTEN)
   set(MELEE_HOT_SOURCES
     "${PORT}/runtime/ppc/ppc_runtime.cpp" "${PORT}/runtime/ppc/interp.cpp"
     "${PORT}/runtime/gx/gx_core.cpp"
-    "${PORT}/runtime/gx/gx_texture.cpp")
+    "${PORT}/runtime/gx/gx_texture.cpp"
+    "${PORT}/runtime/gx/render_observer.cpp")
   set_source_files_properties(${MELEE_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
   foreach(platform IN ITEMS node web)
     add_executable(melee_core_${platform} $<TARGET_OBJECTS:offline_core>)
