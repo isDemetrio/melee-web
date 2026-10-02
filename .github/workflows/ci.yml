@@ -10,8 +10,17 @@ on:
   # branch duplicated every pull-request run: the same commit fires the push event and the
   # pull_request event, which measured out at two runs per push. Branches are verified by their
   # pull request; main is verified again after the merge.
+  #
+  # TEMPORARY (2026-10-02): pull-request events stopped producing runs at 13:47 — none has been
+  # created since, for any branch, while pushes to `main` and manual dispatches work normally, so
+  # this is not the minutes allowance. Branch protection on `main` requires three of this
+  # workflow's jobs, and with no check run the merge is blocked on a commit whose CI is green
+  # (PR #72, PR #73, both merged with --admin after a manual dispatch). Until the cause is found,
+  # every branch push runs these checks automatically; that costs exactly what the manual
+  # dispatches were costing, and no more. Restore `branches: [main]` once pull-request events
+  # report again.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
