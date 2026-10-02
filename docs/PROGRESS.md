@@ -1739,3 +1739,44 @@ is not expected to redirect, so a redirect is **refused** rather than followed, 
 `!upstream.ok` check maps it to 502 — no final-host check is needed where nothing is followed. Its
 test's expected request options were updated to match, and a repository-wide search confirms no
 other live occurrence of the option remains.
+
+### 2026-10-02 — Disabled decoder clocks and GX optimisation (`perf/decoder-cost-2`)
+
+Based on `471a96c`; scope is P2/P4 from the decoder cost analysis. Patch 0008 now
+checks `offline_cost_mode` before either scope clock read. Mode 1 retains both reads,
+nanosecond conversion, slots and accumulation; mode 2 retains the legacy discarded
+reads. The mode is selected before simulation starts. Native `MELEE_HEADLESS` without
+`MELEE_OFFLINE_COST` uses an empty scope, matching its existing no-op collector;
+the profiling-enabled desktop implementation stays intact. Actual timing values and
+profiling overhead have not been compared; unchanged accounting is not a measurement.
+
+Added GX files to `MELEE_HOT_SOURCES` one per commit, and extended the existing
+compile-command assertion to cover them. `-ffp-contract=off`, `-fno-fast-math`, the
+remaining sources and link optimisation settings are unchanged. No draw preparation,
+palette generation, DrawCall, validation or game-state changes were made.
+
+| Cumulative web configuration | Commit | Web WASM bytes |
+| --- | --- | --- |
+| Main baseline (operator supplied) | `471a96c` | 16,323,255 (not remeasured) |
+| P2 only; size comparison baseline | `f9abfb8` | Not measured |
+| Add `gx_core.cpp` at `-O2` | `417104e` | Not measured |
+| Also add `gx_texture.cpp` at `-O2` | `3d2fe87` | Not measured |
+| Also add `render_observer.cpp` at `-O2` | `c712fe6` | Not measured |
+
+**Size gate remains unresolved.** Local builds are forbidden and the operator explicitly
+requested stopping before CI. Build the above revisions in CI with identical inputs to
+measure each increment. If the module exceeds 20 MiB (20,971,520 bytes), remove `-O2`
+from the largest contributor and rebuild before accepting the change. No contributor
+has been identified or reverted without measurements. Cloudflare's 25 MiB limit is
+26,214,400 bytes; the baseline alone cannot establish safety of this draft.
+
+Verification performed: source review, `git diff --check`, and sequential application
+of all eight patches to temporary copies of the affected files from pinned upstream
+`3aab717`, without modifying the upstream checkout or compiling anything.
+**Not executed:** build, automated tests, CI dispatch/inspection, preview, module-size
+measurement, iPhone performance/p99, enabled-profiler comparison, or native/WASM
+2400-checkpoint parity. The required trace SHA-1 remains
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571`; the operator owns that check and this draft
+makes no parity claim. The mean <= 3 ms / p99 <= 6 ms target is unverified.
+Delivery is a draft PR only; no merge. PR-triggered workflows may start automatically;
+this session does not dispatch, monitor or claim their results.
