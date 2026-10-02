@@ -1434,3 +1434,65 @@ frame without the disc.
 
 **Next step.** Unchanged, one unknown shorter: the decision of the operator on Q10(a), where the frames of
 the web build come from, before renderer step 2. Nothing else in the plan is autonomous and open.
+
+## The device tunnel guards land, and the live defects they found on `main` are gone (2026-10-02, night)
+
+`phase0/device-tunnel-guards`, PR #36, merged `348f4717`. The branch was written and pushed on
+2026-10-01 morning and left open; this session landed it. Two entries in this file ended with the same
+gap — `scripts/phase0/device_test_serve.sh` has no test, because it needs `cloudflared` and a real
+tunnel and no runner has either — and `scripts/tests/test_device_test_serve.sh` closes it: six cases,
+with a stub `cloudflared` on `PATH`, a stub `curl` that answers the stub address, and a sparse zero file
+of the 1,459,978,240 bytes the server insists on, outside the checkout. The real `serve_spike.py` runs
+on an ephemeral port, so the readiness loop, the manifest handover, the basic-auth user and the cleanup
+after Ctrl-C are exercised for real. No tunnel, no ISO, no game data.
+
+**The two defects were still live on `main` when this session started** — the branch's fixes had never
+been merged:
+
+| Defect | On `main` before | After |
+| --- | --- | --- |
+| a password drawn from one 64-byte read, guarding an address that is public while the script runs | measured over 200 draws on the VPS: 110 shorter than ten characters, mean 8.28, shortest **two** | a 4096-byte read (518 to 595 usable characters), truncated by the shell, refused unless exactly ten |
+| the manifest line interpolated into the user line | a run with a manifest printed `manifest <url>  user  fabri` on one line | the manifest line is printed on a line of its own, and only when the route answered |
+
+**Measured locally before the push** (pure bash, python and HTTP on loopback: no build, no ISO, no game
+data): `bash scripts/tests/test_device_test_serve.sh` — six cases, all assertions pass; `python3 -m
+unittest discover -s scripts/tests` — `Ran 135 tests`, `OK`; `bash scripts/tests/test_deploy_guard.sh` —
+all guards hold; `bash scripts/tests/test_phase0_runner.sh` — 44 guards hold.
+
+**Measured in CI.**
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36960450525` (CI, on `d2300eb`, the merge of `main` into the branch) | **success** | all four jobs green; the new `Device tunnel guards` step is green in `Repo hygiene and workflow lint` |
+| `phase0-build.yml` | not triggered, on purpose | its path filter lists only the scripts the WASM build itself uses, so this cost about two runner-minutes instead of a 35-minute core build |
+
+**How it was landed.** The branch was rebased onto `main` locally and then updated by a merge of `main`
+instead: a rebase rewrites the remote branch, and a history-rewriting push is refused in this session's
+sandbox. The tree after the merge is byte-identical to the tree after the rebase (`git diff --stat
+1e6a2bc` empty), and the diff against `main` is exactly the four files the pull request describes. The
+two CI failures recorded on the branch's older commits (`36847849760`, `36847803330`) were the
+`Cloudflare Pages` job on a base that predates the explicit `CF_DEPLOY_SHELL` switch of PR #35:
+unrelated to this change, and they do not recur on the merge.
+
+**Still open, and now named rather than implied.** The claim this file has repeated — "nothing else in
+the plan is autonomous and open" — holds for `docs/PHASE0_DEPLOY_PLAN.md` §6, whose remaining steps are
+the operator's: M1, M2 and M5 on a device, O1's legal call, O2–O9's credentials, and Q10(a)'s decision
+before renderer step 2. It does **not** hold for the repository's open pull requests, which this session
+checked one by one:
+
+- **PR #42 (`fix/build-output-dir`) is a live defect on `main`**, not a stale branch: `web/vite.config.ts`
+  sets `outDir: '../dist'`, so `npx vite build` writes the shell to `<repo>/dist`, while
+  `scripts/deploy.sh` (default `--dist-dir web/dist`), `scripts/build_web.sh` and `wrangler.toml`
+  (`pages_build_output_dir = "web/dist"`) all read `web/dist`. The shell deploy of step 11 would refuse
+  with `web/dist/_headers is missing`, exactly as run `36843140022` did, and the documented local build
+  command fails the same way. It is not landed here because landing it costs a 35-minute WASM core
+  build: `web/vite.config.ts` is in `phase0-build.yml`'s `pull_request.paths`, although no target that
+  workflow compiles reads it — the same argument that removed `wasm/probe/**` from that list in PR #55.
+- **PR #38, #39 and #40 are superseded**: #38's two Cloudflare claims were landed by #53, and #39/#40 are
+  two copies of one frame-time consultation whose substance is in this file's "Where the frame time
+  goes" and "Three levers, measured" entries. They are left open for the operator to close rather than
+  closed by a worker session.
+
+**Next step.** Unchanged, and now the only thing left that is not a leftover: the decision of the
+operator on `docs/OPEN_QUESTIONS.md` Q10(a) before renderer step 2, then the device rows M1 and M2 (M2
+decides), which no autonomous session can produce.
