@@ -2229,3 +2229,53 @@ render.spec.ts's canvas pixel test. **No CI test proves that the main page shows
 picture**; that needs a GPU that survives presenting, or the operator's device. Trace
 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` not verified by this agent; no change touches the
 simulation or `wasm/render/`.
+
+## The technical maps' citations become a check (2026-10-02, night)
+
+**Why this and not something else.** `docs/PLAN_BREAKDOWN.md` T1 lists `scripts/check_docs.py` and
+`scripts/tests/test_check_docs.py` among its deliverables, and T10's acceptance is
+"`scripts/check_docs.py` green". Neither file has ever existed -- `git log --all -- scripts/check_docs.py`
+is empty -- so the one plan item that was neither done, nor credential-gated, nor waiting on a device or
+an operator decision was T1's own checker. The renderer was left alone on purpose: its open branch
+(`render/webgpu-lighting`, PR #70) owns `wasm/render/gx_webgpu.cpp`, `web/tests/spike/render.spec.ts`
+and `scripts/tests/test_em_js_bodies.py`, and it has been open since 13:42 UTC on 2026-10-02, so
+priority 3 of `docs/RENDERER_MAP.md` would have put two sessions on one file. Nothing under
+`wasm/`, `web/` or `native/` is touched here.
+
+**What it checks, and what it does not.** T1 gives four machine criteria. Two of them describe the maps as
+they were planned, not as they were written: "every file matched by
+`port/runtime/{ppc,hle,host,gx,abi}/*.{cpp,h}` appears exactly once in RUNTIME_MAP's table" and "every
+disposition cell is in the fixed vocabulary". `docs/RUNTIME_MAP.md` groups files into narrative rows
+whose columns are responsibility, dependencies, Windows APIs and browser replacement, so there is no
+`keep`/`shim`/`replace`/`stub`/`drop` cell to read, and the document's own header says the groups
+carry their headers. Those two are recorded here instead of enforced, and a test asserts the deviation so
+it cannot be mistaken for an oversight. The other two are implemented: every backticked path under
+`port/`, `tools/` or `sourceport/` exists in the submodule checkout, and every `path:N` or
+`path:N-M` citation is inside the file's line count.
+The first is scoped to those prefixes because `docs/PLAN_BREAKDOWN.md` is a plan: it names files this
+repository is meant to grow (`web/src/lobby/signaling.ts`, `.github/workflows/deploy.yml`) and shapes
+that are not files (`*.iso`, `windows.h`) -- 266 of them, counted in the summary rather than checked.
+The abbreviations the maps' headers define (`gx/` means `port/runtime/gx/`), a bare file name resolved
+by name, and a citation to this repository's own files resolve the rest. Nothing is skipped in silence:
+the summary line counts the citations read, the generated-output paths (the recompiler's
+`port/generated*`), the tokens that are not source files (`mm.slippi.gg:43113`) and the paths outside
+the submodule cited without a line.
+
+**Measured, and the two defects it found.** On `main` at `8305929`, `python scripts/check_docs.py`
+reads **210 citations** across the four documents and reported **2 violations**, both corrected here:
+`docs/RENDERER_MAP.md:37` cited `gx_backend_dispatch.cpp:6–27` in a 25-line file (the four wrappers run
+6–24), and `docs/NETCODE_MAP.md:14` cited `slippi_net.cpp:792–1097` in a 1090-line file (the matchmaking
+section runs from its banner at 785 to the end of the file, 1090). Both were claims that could not be true
+of the pinned upstream, which is the class this gate exists for. Locally on the VPS, with Python only
+(rules 2 and 3): `python3 -m unittest discover -s scripts/tests` -- **189 tests, OK**, 1 skipped (22 new; the skipped case is the one that reads the pinned submodule, which this checkout does not have and CI does);
+`python3 scripts/check_no_game_data.py --all` -- clean, 234 tracked files; `git diff --check` -- clean.
+In CI: PLACEHOLDER_CI.
+
+**NOT verified.** Nothing about the renderer, the phone, the disc or the module: this change compiles
+nothing and uploads nothing. The checker reads the submodule's text, so it is silent about whether the
+cited lines still *say* what the map claims -- it catches a citation that cannot exist, not one that has
+gone stale in meaning.
+
+**Next step.** Unchanged, with one fewer leftover: T9 is credential-gated, T10 depends on it, and what
+remains for the plan is the operator's -- O1's legal call, O2-O9's credentials, the device rows M1, M2 and
+M5, and the renderer thread that PR #70 holds.

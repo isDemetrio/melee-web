@@ -47,6 +47,14 @@ jobs:
       - name: Reject game data in the git index
         run: python scripts/check_no_game_data.py --all
 
+      - name: The technical maps cite files and lines that exist
+        # docs/PLAN_BREAKDOWN.md T1's machine acceptance, in the job that already checks the
+        # submodule out: a citation is a claim about the pinned upstream, so a `path:N-M` that runs
+        # past the end of its file is a wrong claim, not a formatting slip. The two criteria T1
+        # states for the maps as they were planned -- a row per file, a disposition cell -- do not
+        # apply to the narrative maps that were written; scripts/check_docs.py says so.
+        run: python scripts/check_docs.py
+
       - name: Unit tests for the hygiene gate
         run: python -m unittest discover -s scripts/tests -v
 
