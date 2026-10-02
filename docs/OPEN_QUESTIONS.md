@@ -235,16 +235,26 @@ configurations answer `adopt: {"device":true,"queue":true,"limits":true,"wrote":
 a rejected command — which raises a validation error and neither throws nor stops the run — cannot read
 as an answer.
 
-**What the adoption measurement does not cover.** The module is instantiated on the page in this probe,
-while the module of the renderer is instantiated in the worker, `web/src/spike/worker.ts`. What is
-measured is the import mechanism, not that mechanism in the realm of the worker; the mechanism is a
-module argument read before instantiation and does not depend on the realm, but that is reasoning, not a
-measurement. Unchanged from part c of this question and from PR #47: the Chromium of this CI loses the
-device when the canvas frame is committed, in both realms, so the canvas pixel stays a real-device
-measurement, and no CI runner can produce a game frame at all without the disc.
+**What the adoption measurement did not cover — closed 2026-10-02, PR #55, run `36955231521`.** The
+module was instantiated on the page in that probe, while the renderer's module is instantiated in the
+worker, `web/src/spike/worker.ts`: what was measured was the import mechanism, not that mechanism in the
+realm of the worker, and "the mechanism is a module argument read before instantiation and does not
+depend on the realm" was reasoning, not a measurement. The probe's worker now asks the same question of
+its own realm (`wasm/probe/webgpu_probe_worker.js`): it hands the device it acquired for the canvas to a
+module instantiated in the worker, before the canvas step whose commit is where CI's Chromium loses the
+device, and both launch configurations answer
+`adopt_worker: {"device":true,"queue":true,"limits":true,"wrote":true}` in headless Chromium 153.0.8010.12,
+adapter `google swiftshader`, realm `DedicatedWorkerGlobalScope` — adopted at 42.5 ms (default
+configuration) and 47.3 ms (full build), with the device lost at 44.9 ms and 70.3 ms, so the adoption was
+measured on a live device and not on one the canvas commit had already killed. The module is compiled with
+`-sENVIRONMENT=web` and loads and runs in the worker unchanged, so the renderer needs no new link flag for
+this. Unchanged from part c of this question and from PR #47: the Chromium of this CI loses the device when
+the canvas frame is committed, in both realms, so the canvas pixel stays a real-device measurement, and no
+CI runner can produce a game frame at all without the disc.
 
 **What is left for the operator.** The choice between `EM_JS` and `<webgpu/webgpu.h>`, with both of its
 unknowns measured instead of assumed: the toolchain builds, links and renders a WebGPU unit in PR #47,
-and the port can adopt the device the page acquired in PR #52. `EM_JS` is what step 1 shipped in
+and the port can adopt the device the page acquired in PR #52 — in the realm of the page and, since
+PR #55, in the realm of the worker the renderer's module is instantiated in. `EM_JS` is what step 1 shipped in
 `wasm/render/gx_webgpu.cpp`, so keeping it is the zero-change option; adopting the device instead
 would make the backend own the instance, adapter and device, and is now known to be possible.

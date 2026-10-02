@@ -51,6 +51,14 @@
 // `device.lost` on that device and an uncaptured error on it are failures here, because the page's
 // device exists only for this question.
 //
+// THE SAME ADOPTION IN THE WORKER (2026-10-02). The answer above named its own gap: the probe's module
+// is instantiated on the page, the renderer's is instantiated in a worker
+// (`web/src/spike/worker.ts`), and "the import does not depend on the realm" was reasoning. The worker
+// now asks the same question of its own realm -- the device it acquired for the canvas is handed to a
+// module instantiated there, before the canvas step whose commit is where CI's Chromium loses the
+// device -- and `adopt_worker` is required for the same reason `adopt` is: a rejected command raises a
+// validation error, and a validation error is not an answer.
+//
 // The two configurations are the remaining variable: Playwright launches the `chromium-headless-shell`
 // build for `headless: true` unless a channel is named (microsoft/playwright#33566), while
 // `channel: 'chromium'` selects the new headless mode on the full Chromium build. The check passes if
@@ -164,6 +172,15 @@ function shortfalls(result) {
   }
   if (result.adopt_device_lost) missing.push(`adopt: the device the page acquired was lost: ${result.adopt_device_lost}`);
   if (result.adopt_errors?.length > 0) missing.push(`adopt: uncaptured GPU errors: ${JSON.stringify(result.adopt_errors)}`);
+  // The same question in the realm the renderer's module is instantiated in. A null `adopt_worker`
+  // means the module did not load in the worker at all, and that is the answer, not a shrug.
+  if (result.adopt_worker?.device !== true) {
+    missing.push(`adopt_worker: C++ did not adopt the worker's device (${JSON.stringify(result.adopt_worker)}; lines ${JSON.stringify(result.adopt_worker_lines)})`);
+  } else {
+    if (result.adopt_worker.queue !== true) missing.push('adopt_worker: the adopted device gave no queue');
+    if (result.adopt_worker.limits !== true) missing.push('adopt_worker: the adopted device refused to report its limits');
+    if (result.adopt_worker.wrote !== true) missing.push('adopt_worker: the adopted device created no texture, or wrote no pixel');
+  }
   if (result.pageErrors.length > 0) missing.push(`page errors: ${JSON.stringify(result.pageErrors)}`);
   return missing;
 }
@@ -181,6 +198,7 @@ function diagnostics(result) {
     `uncaptured errors: ${JSON.stringify(result.errors)}`,
     `device lost: ${JSON.stringify(result.device_lost)}`,
     `adopt: device ${JSON.stringify(result.adopt)}; page device ${JSON.stringify(result.adopt_device)}; lost ${JSON.stringify(result.adopt_device_lost)}; errors ${JSON.stringify(result.adopt_errors)}`,
+    `adopt in the worker: ${JSON.stringify(result.adopt_worker)}; lines ${JSON.stringify(result.adopt_worker_lines)}`,
     `error: ${JSON.stringify(result.error)}`,
   ];
 }
@@ -214,3 +232,4 @@ console.log(`  browser: ${winner.browser_version} (${winner.user_agent})`);
 console.log(`  realm: ${winner.realm}; adapter: ${winner.adapter}; readback: ${JSON.stringify(winner.readback)}; canvas: ${winner.canvas}`);
 console.log(`  canvas commit: ${winner.canvas_commit}`);
 console.log(`  adopt: ${JSON.stringify(winner.adopt)}; page device lost: ${JSON.stringify(winner.adopt_device_lost)}`);
+console.log(`  adopt in the worker: ${JSON.stringify(winner.adopt_worker)}`);
