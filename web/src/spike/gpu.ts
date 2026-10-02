@@ -17,13 +17,15 @@
  * The device is acquired here, before the simulation starts, because the simulation is one
  * synchronous `callMain` and `requestAdapter` / `requestDevice` resolve only once the event loop
  * turns. Nothing here throws: a browser without WebGPU, a null adapter, a device that cannot be
- * created or a canvas that will not configure all come back as `{ gpu: null, reason }`, and the
- * run goes on headless exactly as it does without a canvas.
+ * created come back as `{ gpu: null, reason }`. Configuration failures keep the diagnostic
+ * object, refuse attachment, and let the run proceed headless.
  *
  * The WebGPU declarations are the few this file uses, written out because the shell carries no
  * `@webgpu/types` (the same choice `platform/capabilities.ts` makes). The numeric flags are the
  * WebGPU specification's values for `GPUTextureUsage`, `GPUBufferUsage` and `GPUMapMode`.
  */
+
+import { countResources, snapshotResources, type ResourceCounts } from './gpu-resources.js';
 
 const TEXTURE_COPY_SRC = 0x01;
 const TEXTURE_COPY_DST = 0x02;
@@ -33,7 +35,7 @@ const BUFFER_COPY_DST = 0x0008;
 const MAP_READ = 0x0001;
 
 interface GpuTexture { readonly width: number; readonly height: number; createView(): unknown }
-interface GpuBuffer { mapAsync(mode: number): Promise<void>; getMappedRange(): ArrayBuffer; unmap(): void }
+interface GpuBuffer { mapAsync(mode: number): Promise<void>; getMappedRange(): ArrayBuffer; unmap(): void; destroy(): void }
 interface GpuRenderPass { end(): void }
 interface GpuCommandEncoder {
   beginRenderPass(descriptor: unknown): GpuRenderPass;
@@ -46,7 +48,7 @@ interface GpuDevice {
   createCommandEncoder(): GpuCommandEncoder;
   queue: { submit(buffers: unknown[]): void; writeBuffer(buffer: GpuBuffer, offset: number, data: Uint8Array): void };
   lost: Promise<{ message: string; reason?: string }>;
-  addEventListener(type: 'uncapturederror', listener: (event: { error: { message: string } }) => void): void;
+  addEventListener(type: 'uncapturederror', listener: (event: { error: { message: string; constructor?: { name?: string } } }) => void): void;
 }
 interface GpuAdapter { requestDevice(): Promise<GpuDevice> }
 interface Gpu { requestAdapter(options?: { forceFallbackAdapter?: boolean }): Promise<GpuAdapter | null> }
@@ -72,6 +74,11 @@ export interface SpikeGpu {
   failure?: string;
   /** Written here: validation errors and device loss, which WebGPU reports without throwing. */
   errors: string[];
+  resources: ResourceCounts;
+  firstFailure: GpuFailure | null;
+  deviceLoss: (GpuFailure & { reason: string }) | null;
+  validationErrors: (GpuFailure & { type: string })[];
+  recordFailure(operation: string, error: unknown): void;
   /** Where the readback dies, for the CI log: see `Diagnostic`. */
   diagnostic: Diagnostic;
   /** Written by gx_webgpu.cpp's gxw_open/gxw_copy: the device object it rendered with, and how often. */
@@ -92,6 +99,14 @@ export interface SpikeGpu {
  * - `realm`: the global scope's constructor at open and at readback (a worker reports
  *   `DedicatedWorkerGlobalScope`, a page `Window`).
  */
+export interface GpuFailure {
+  atMs: number;
+  operation: string;
+  message: string;
+  backendCopies: number;
+  resources: ResourceCounts;
+}
+
 export interface Diagnostic {
   timeline: { atMs: number; event: string }[];
   probes: { stage: string; result: string }[];
@@ -129,6 +144,7 @@ async function roundTrip(device: GpuDevice): Promise<string> {
       return JSON.stringify(bytes) === JSON.stringify(expected) ? 'ok' : `wrong bytes ${JSON.stringify(bytes)}`;
     } finally {
       live.mapping.delete(buffer);
+      buffer.destroy();
     }
   } catch (error) {
     return String(error);
@@ -165,38 +181,67 @@ export async function openGpu(canvas: OffscreenCanvas | null): Promise<GpuOpenin
     if (!adapter) return { gpu: null, reason: 'requestAdapter returned null, hardware and fallback' };
     const device = await adapter.requestDevice();
     const deviceMs = performance.now() - loadedMs;
-    // Before the canvas is touched: separates the instance from the canvas (`Diagnostic`).
-    const beforeCanvas = await roundTrip(device);
-    // COPY_DST for the XFB copy into the target, COPY_SRC for readPixel.
-    const usage = TEXTURE_RENDER_ATTACHMENT | TEXTURE_COPY_SRC | TEXTURE_COPY_DST;
-    let context: GpuCanvasContext | null = null;
-    let xfb: GpuTexture | null = null;
-    if (canvas) {
-      context = (canvas as unknown as { getContext(id: 'webgpu'): GpuCanvasContext | null }).getContext('webgpu');
-      if (!context) return { gpu: null, reason: 'the canvas has no webgpu context' };
-      context.configure({ device, format: 'rgba8unorm', alphaMode: 'opaque', usage });
-    } else {
-      xfb = device.createTexture({ size: [XFB_WIDTH, XFB_HEIGHT], format: 'rgba8unorm', usage });
-    }
+    // Install observers before the first probe/configuration, not after those can fail.
     const opened: SpikeGpu = {
-      gpu, adapter, canvas, device, context, xfb, format: 'rgba8unorm', errors: [],
+      gpu, adapter, canvas, device, context: null, xfb: null, format: 'rgba8unorm', errors: [],
+      resources: {} as ResourceCounts, firstFailure: null, deviceLoss: null, validationErrors: [],
+      recordFailure(operation, error) {
+        if (!opened.firstFailure) opened.firstFailure = failureSnapshot(opened, operation, String(error));
+      },
       diagnostic: {
         timeline: [{ atMs: Math.round(deviceMs * 10) / 10, event: 'device created' }],
-        probes: [{ stage: 'after device, before canvas', result: beforeCanvas }],
-        realm: { open: realmName(), readback: null },
+        probes: [], realm: { open: realmName(), readback: null },
       },
     };
-    live.opened.add(opened);
-    mark(opened, 'device configured');
-    device.addEventListener('uncapturederror', (event) => { opened.errors.push(event.error.message); });
+    opened.resources = countResources(device, (operation, error) => opened.recordFailure(operation, error));
+    device.addEventListener('uncapturederror', (event) => {
+      const type = event.error.constructor?.name ?? 'GPUError';
+      const detail = failureSnapshot(opened, 'uncapturederror', event.error.message);
+      opened.validationErrors.push({ ...detail, type });
+      opened.recordFailure('uncapturederror', `${type}: ${event.error.message}`);
+      opened.errors.push(`${type}: ${event.error.message}`);
+      mark(opened, `uncapturederror ${type}: ${event.error.message}`);
+    });
     void device.lost.then((info) => {
+      opened.deviceLoss = { ...failureSnapshot(opened, 'device.lost', info.message), reason: info.reason ?? 'unknown' };
+      opened.recordFailure('device.lost', info.message);
       opened.errors.push(`device lost: ${info.message}`);
       mark(opened, `device lost (reason ${info.reason ?? 'none'}): ${info.message}`);
     });
+    live.opened.add(opened);
+    await probe(opened, 'after device, before canvas');
+    const usage = TEXTURE_RENDER_ATTACHMENT | TEXTURE_COPY_SRC | TEXTURE_COPY_DST;
+    try {
+      if (canvas) {
+        opened.context = (canvas as unknown as { getContext(id: 'webgpu'): GpuCanvasContext | null }).getContext('webgpu');
+        if (!opened.context) throw new Error('the canvas has no webgpu context');
+        opened.context.configure({ device, format: 'rgba8unorm', alphaMode: 'opaque', usage });
+      } else {
+        opened.xfb = device.createTexture({ size: [XFB_WIDTH, XFB_HEIGHT], format: 'rgba8unorm', usage });
+      }
+    } catch (error) {
+      opened.failure = `configure: ${error}`;
+      opened.recordFailure('configure', error);
+      return { gpu: opened, reason: opened.failure };
+    }
+    mark(opened, 'device configured');
     return { gpu: opened, reason: 'device ready' };
   } catch (error) {
     return { gpu: null, reason: `WebGPU unavailable: ${error}` };
   }
+}
+
+function failureSnapshot(gpu: SpikeGpu, operation: string, message: string): GpuFailure {
+  return { atMs: Math.round((performance.now() - loadedMs) * 10) / 10, operation, message,
+    backendCopies: gpu.backendCopies ?? 0, resources: snapshotResources(gpu.resources) };
+}
+
+/** The core blocks this worker's task. Let queued GPU events run before serializing/terminating.
+ * This is a bounded observation window, not proof that a device cannot be lost later. */
+export async function observeGpuEvents(gpu: SpikeGpu): Promise<void> {
+  mark(gpu, 'GPU event observation started (50ms minimum)');
+  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  mark(gpu, 'GPU event observation ended');
 }
 
 /** The XFB target the backend copies into: the offscreen texture, or the canvas's current texture. */
@@ -245,10 +290,11 @@ export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] |
     buffer.unmap();
     return pixel;
   } catch (error) {
+    gpu.recordFailure('readback', error);
     gpu.errors.push(`readback: ${error}`);
     mark(gpu, `readback failed: ${error}`);
     return null;
   } finally {
-    if (buffer) live.mapping.delete(buffer);
+    if (buffer) { live.mapping.delete(buffer); buffer.destroy(); }
   }
 }
