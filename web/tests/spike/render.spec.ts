@@ -42,6 +42,7 @@ interface SelftestResult {
     attached: boolean;
     reason: string;
     presented: number;
+    textureUploads: number;
     lastClearArgb: number | null;
     target: 'canvas' | 'texture' | null;
     readback: number[] | null;
@@ -204,15 +205,17 @@ for (const repeats of [128, 800]) {
     expect(result.render?.deviceLoss).toBeNull();
     expect(result.render?.readback).toEqual([128, 64, 32, 192]);
     const resources = result.render!.resources;
-    // Nothing scales with the draw count. Every draw has the same eight slots (one 8x8 shape,
-    // mode0=mode1=0), so after the first draw everything is a pool or cache hit.
+    // Nothing scales with the draw count. Every draw binds one snapshot in all eight slots
+    // (mode0=mode1=0), so after the first draw everything is a pool or cache hit, and the texture
+    // is decoded and written once: the per-draw rewrite was 117 MB per in-match frame (9b08acf).
     expect(resources.sampler.created).toBe(1);
     expect(resources.bindGroup.created).toBe(1);
     expect(resources.pipeline.created).toBe(1);
-    expect(resources.texture.created).toBe(8 + 4); // pool (one per slot); XFB, EFB, depth, white
+    expect(result.render?.textureUploads).toBe(1);
+    expect(resources.texture.created).toBe(1 + 4); // the one content; XFB, EFB, depth, white
     expect(resources.texture.destroyed).toBe(0);
-    expect(resources.texture.outstanding).toBe(12);
-    expect(resources.texture.peakOutstanding).toBe(12);
+    expect(resources.texture.outstanding).toBe(5);
+    expect(resources.texture.peakOutstanding).toBe(5);
     expect(resources.buffer.created).toBe(3 + 5); // uniform, vertex, index; four probes + readback
     expect(resources.buffer.destroyed).toBe(5);
     expect(resources.buffer.outstanding).toBe(3);
@@ -220,3 +223,21 @@ for (const repeats of [128, 800]) {
     for (const count of Object.values(resources)) expect(count.failed).toBe(0);
   });
 }
+
+// Geometry 39 is geometry 16 with a new snapshot for every layer of every repetition, so 1200
+// draws ask for 1200 contents: past the pool's 1024 the least recently used are evicted and
+// destroyed while draws that used them are already submitted. Evicting a texture the current draw
+// still binds, or forgetting the snapshot of one still pooled, shows up as a validation error or
+// a wrong pixel here.
+test('texture pool evicts past its limit without breaking submitted draws', async ({ page }) => {
+  const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=39&repeats=400`);
+  expectReplayed(result, 1200, 'texture');
+  expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
+  expect(result.render?.deviceLoss).toBeNull();
+  expect(result.render?.readback).toEqual([128, 64, 32, 192]);
+  const resources = result.render!.resources;
+  expect(result.render?.textureUploads).toBe(1200); // a new snapshot is a new content
+  expect(resources.texture.created).toBe(1200 + 4);
+  expect(resources.texture.destroyed).toBe(1200 - 1024); // TEXTURE_POOL_LIMIT in gx_webgpu.cpp
+  for (const count of Object.values(resources)) expect(count.failed).toBe(0);
+});

@@ -399,6 +399,7 @@ static uint64_t g_next_retrace_tb = TB_PER_FRAME;
 static bool g_in_retrace = false;
 void (*native_retrace)() = nullptr;
 void (*native_state_snapshot)(MuStatePod*) = nullptr;
+void (*retrace_heartbeat)(uint32_t) = nullptr;
 bool retrace_due() { return cpu->tb >= g_next_retrace_tb && !g_in_retrace; }
 uint64_t next_retrace_tb() { return g_next_retrace_tb; }
 void advance_time(uint64_t ticks) { cpu->tb += ticks; }
@@ -636,6 +637,8 @@ void retrace() {
 #ifdef MELEE_OFFLINE_COST
   if (offline_cost_mode == 1) reset_decoder_cost();
 #endif
+  // Before the resume stamp, so a beat's cost is in no frame's sim_ms, like the hashing above.
+  if (retrace_heartbeat) retrace_heartbeat(g_retraces);
   if (g_sim_times) g_sim_resume = std::chrono::steady_clock::now();
   if (options.frames && g_retraces >= options.frames) request_exit(0);
   if (g_exit) throw ExitRequested{g_exit_code.load()};

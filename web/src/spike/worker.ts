@@ -7,6 +7,7 @@
 // headless run it always was; the reason is reported, never thrown.
 import { decoderCostReport, type DecoderCostMode } from './decoder-cost.js';
 import { fillTarget, mark, observeGpuEvents, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
+import { heartbeatSender, type RenderProgress } from './heartbeat.js';
 
 interface CoreFS {
   mkdir(path: string): void;
@@ -29,6 +30,8 @@ interface CoreOptions {
   printErr(line: string): void;
   /** Becomes `Module.gxWebgpu`, which is where gx_webgpu.cpp looks for its device. */
   gxWebgpu?: SpikeGpu;
+  /** Becomes `Module.heartbeat`, called by wasm/core/heartbeat.cpp and gx_webgpu.cpp (heartbeat.ts). */
+  heartbeat?: (retraces: number) => void;
 }
 type CoreFactory = (options: CoreOptions) => Promise<MeleeCore>;
 
@@ -73,6 +76,8 @@ interface RenderReport {
   attached: boolean;
   reason: string;
   presented: number;
+  /** Texture levels the backend wrote (gx_webgpu.cpp, gxw_upload): one per new content, not per draw. */
+  textureUploads: number;
   lastClearArgb: number | null;
   /** What the backend copied into: the canvas, or an offscreen texture. */
   target: 'canvas' | 'texture' | null;
@@ -92,6 +97,16 @@ interface RenderReport {
     backendUsedThisDevice: boolean;
     backendCopies: number;
   }) | null;
+}
+
+/** The renderer's counts for a heartbeat (heartbeat.ts), read off the object gx_webgpu.cpp writes. */
+function renderProgress(gpu: SpikeGpu): RenderProgress {
+  return {
+    draws: gpu.drawSerial ?? 0, copies: gpu.backendCopies ?? 0,
+    texturePool: gpu.texturePool?.size ?? null, bindGroupCache: gpu.bindGroups?.size ?? null,
+    texturesCreated: gpu.resources.texture.created, bindGroupsCreated: gpu.resources.bindGroup.created,
+    failure: gpu.failure ?? null,
+  };
 }
 
 /** Attach the core's WebGPU backend to an opened device. Never throws: false and a reason instead. */
@@ -114,6 +129,7 @@ async function report(core: MeleeCore, gpu: SpikeGpu | null, attached: { attache
   return {
     ...attached,
     presented: attached.attached && core._gx_webgpu_presented ? core._gx_webgpu_presented() : 0,
+    textureUploads: gpu?.textureUploads ?? 0,
     lastClearArgb: gpu?.lastClearArgb ?? null,
     target: gpu ? (gpu.xfb ? 'texture' : 'canvas') : null,
     readback,
@@ -153,7 +169,9 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     const gpu = opening?.gpu ?? null;
     // Diagnostic probes (gpu.ts, `Diagnostic`): before the module exists, and once it does.
     if (gpu) await probe(gpu, 'after device, before core');
-    const core = await factory(gpu ? { print: log, printErr: log, gxWebgpu: gpu } : { print: log, printErr: log });
+    // The options object is the module's `Module`: what is set on it later, the core sees.
+    const options: CoreOptions = gpu ? { print: log, printErr: log, gxWebgpu: gpu } : { print: log, printErr: log };
+    const core = await factory(options);
     const coreLoadMs = performance.now() - startedMs;
     scope.postMessage({ type: 'core', commit: meta.commit, opt: meta.opt, coreLoadMs });
     if (gpu) { mark(gpu, 'core instantiated'); await probe(gpu, 'after core, before attach'); }
@@ -196,6 +214,9 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     if (costAvailable && core._melee_decoder_cost!(decoderCost === 'profile' ? 1 : decoderCost === 'legacy' ? 2 : 0) !== 1) {
       throw new Error('decoder-cost setup failed');
     }
+    // From here until callMain returns, the page hears from this run only through the log and these.
+    options.heartbeat = heartbeatSender((beat) => scope.postMessage({ type: 'beat', beat }),
+      () => performance.now(), () => (gpu && attached?.attached ? renderProgress(gpu) : null));
     const started = performance.now();
     const exitCode = core.callMain(args);
     const wallMs = performance.now() - started;
