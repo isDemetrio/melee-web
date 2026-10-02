@@ -1802,3 +1802,38 @@ is based on `perf/decoder-cost-2`, so only this measurement change is in its dif
 Next: operator authorizes CI/build, runs the trace and iPhone measurement with
 `?decoder-cost`, and reviews residuals/overhead before any optimization. Same-build
 observer on/off comparison remains unavailable under the reader constraint.
+
+## 2026-10-02 — the decoder cost measured, and two cheap fixes that paid for it
+
+The phone measurement put the simulation at **12.51 ms** per in-match frame (iPhone 16 Pro,
+2400 frames, no canvas, no backend), against the declared cap of mean <= 3 ms / p99 <= 6 ms.
+The opt-in phase profiler (`?decoder-cost`, PR #69) then split the frame: draw recording
+0.61 ms, textures 0.45 ms, per-draw observer 0.09 ms, decoder work outside those 4.83 ms, and
+everything **outside** the decoder 9.90 ms. The profiler's own clock reads cost about 3.4 ms
+per frame (15.88 instrumented against 12.51 clean) — tens of thousands of clock reads per
+frame, because `SimCostScope` read the clock even with profiling off.
+
+Two changes followed (PR #71), both safe by construction and both verified before merge:
+
+- **P2** — the simulation-cost scope no longer reads the clock when profiling is off.
+- **P4** — `gx_core.cpp`, `gx_texture.cpp` and `render_observer.cpp` move to `-O2`.
+
+Measured on the same device, same test, clean run, commit `d624d06`: in-match mean **4.35 ms**
+(was 12.51), p99 **6.20 ms** (was 14.02), all-frame mean 2.74 ms (was 7.22), wall 26.8 s (was
+38.4 s). The module came out **smaller**: 15,229,664 bytes against 16,323,657 — `-Oz` was
+costing both speed and size on those three files.
+
+Verified, not claimed: the 2400-checkpoint trace is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`
+with the new module under Node against the operator's disc, 0 differing rows of 2401, and it
+stays identical with the frame-split instrumentation (PR #72) inside. CI was green on the exact
+merged commits.
+
+Remaining gap: the in-match mean is 45% above the 3 ms cap and the p99 3% above the 6 ms cap.
+PR #72 adds `observer_game_ms`, `end_frame_ms` and watched-RAM counters so the next phone run
+attributes the remainder; the observer switch was **not** implemented because readers of those
+values exist, including offline GX statistics (see `docs/PORT_CHANGES.md` §0009).
+
+The largest single item turned out to be **our own instrumentation**, not the renderer: the two
+"safe, small" changes beat any clever change to the drawing path by a wide margin. Measure
+first — the analysis that ranked draw recording and texture snapshots as the top suspects was
+wrong by an order of magnitude (together 7% of the frame).

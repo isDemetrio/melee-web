@@ -75,6 +75,20 @@ the spending limit is zero. The cost of waste is therefore stalled work, not mon
 - **One run per push, not two.** A branch with an open pull request used to fire both the `push`
   and the `pull_request` events, so every push cost two full CI runs. `ci.yml` now triggers on
   pull requests and on pushes to `main` only.
+- **`[skip ci]` in a delivery commit suppresses the pull-request checks for good.** The event never
+  fires for that head commit, and neither a later empty commit nor closing and reopening the pull
+  request brings the checks back — so the branch-protection gate blocks the merge on a commit whose
+  CI is in fact green. PR #72 hit this: its delivery commit carried `[skip ci]`, the checks never
+  appeared, and `ci.yml` had to be dispatched on the branch (`gh workflow run ci.yml --ref
+  perf/frame-split`, run `37019777761`, all four jobs green) before the merge, which then needed
+  `--admin` because GitHub had no check run to look at. Tell the delivering agent to **stop before
+  the CI without skipping it**; "stop before CI" was read as "skip CI", which is the opposite.
+- **A `type: boolean` workflow input needs a typed value, not `-f`.** `gh workflow run -f
+  upload_module=true` sends the string `"true"`, the step's `if:` sees it as false, and the artifact
+  upload is **skipped in silence** — the run still reports success and has no artifacts (run
+  `37015365284`). Use the API with a typed field: `gh api -X POST
+  .../actions/workflows/phase0-build.yml/dispatches -F ref=<branch> -F
+  'inputs[upload_module]=true'` (run `37016378716`, upload succeeded).
 
 ## Secrets
 
