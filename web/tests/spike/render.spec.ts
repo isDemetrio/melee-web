@@ -176,6 +176,17 @@ for (const [name, geometry, expected] of [
   });
 }
 
+// Samplers are cached by mode (gx_webgpu.cpp, gxw_texture). Layers 0 and 2 clamp, the visible
+// layer 1 repeats, in one task: a key that ignored the wrap bits would hand layer 1 the clamp
+// sampler and read back the clamp pixel [32, 64, 32, 192] instead.
+test('texture: a cached sampler is not reused for another wrap mode', async ({ page }) => {
+  const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=38&sample-x=320`);
+  expectReplayed(result, 3, 'texture');
+  expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
+  expect(result.render?.readback).toEqual([128, 64, 32, 192]);
+  expect(result.render?.resources.sampler.created).toBe(2);
+});
+
 // Real backend, one synchronous task, no disc. 800 repetitions yield 2400 XFB copies.
 // This tests submitted work and its pixel, not 2400 browser presentation tasks or the game.
 for (const repeats of [128, 800]) {
@@ -188,7 +199,7 @@ for (const repeats of [128, 800]) {
     expect(result.render?.deviceLoss).toBeNull();
     expect(result.render?.readback).toEqual([128, 64, 32, 192]);
     const resources = result.render!.resources;
-    expect(resources.sampler.created).toBe(copies * 8);
+    expect(resources.sampler.created).toBe(1); // one key (mode0=mode1=0) for all eight slots, every draw
     expect(resources.bindGroup.created).toBe(copies);
     expect(resources.pipeline.created).toBe(1);
     expect(resources.texture.created).toBe(copies * 8 + 4);
