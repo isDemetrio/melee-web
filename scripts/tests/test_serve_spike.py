@@ -204,8 +204,19 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(body, DISC[:2048])
 
     def test_both_disc_routes_serve_the_same_file(self):
-        self.assertEqual(self.request(ISO_ROUTE, 'bytes=100-199'),
-                         self.request(DISC_ROUTE, 'bytes=100-199'))
+        # The same object served twice: the claim is that a request for the same range gets the
+        # same answer from either route. `date` is stamped per response, so two requests that
+        # straddle a second boundary differ on it alone -- which is how this failed on `main`
+        # (run `37047462284`, 18:26:56 against 18:26:57) and passed on the rerun of the same
+        # tree. It is dropped, and its presence is asserted, so the exclusion is named rather
+        # than silent; the status, every other header and the bytes are still compared.
+        iso_status, iso_headers, iso_body = self.request(ISO_ROUTE, 'bytes=100-199')
+        disc_status, disc_headers, disc_body = self.request(DISC_ROUTE, 'bytes=100-199')
+        for headers in (iso_headers, disc_headers):
+            self.assertIn('date', headers)
+            del headers['date']
+        self.assertEqual((iso_status, iso_headers, iso_body),
+                         (disc_status, disc_headers, disc_body))
 
     def test_the_disc_route_wins_over_a_file_of_the_same_name_in_the_dist(self):
         # The Function reads the disc out of the bucket, never out of the dist; a dist that
