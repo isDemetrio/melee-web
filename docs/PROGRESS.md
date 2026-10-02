@@ -2025,3 +2025,91 @@ whether WebKit stalls on `writeBuffer`/`writeTexture` into resources in flight. 
 sampler that fails validation is cached and reused: errors arrive as `uncapturederror` events,
 which cannot run during `callMain`, so the first one is still what the report shows. No local
 build; CI is the only build.
+
+## 2026-10-02 — the #79 regression is upload volume, not pool thrash; textures cached by snapshot; a run heartbeat
+
+Branch `fix/gpu-pool-thrash`, base `9b08acf` (main, PR #79 merged), PR #80. Operator evidence on
+`9b08acf`, `?canvas`, 2400 frames, iPhone 16 Pro: the log stops at `scene: major 02 minor 02
+(frame 1395)`, no report, minutes without progress ("o si blocca o ci mette una cifra"); on
+`d45a1fd` the same run reached 2400.
+
+**How it was measured.** CI built the web core of `9b08acf` as the private `melee-spike-dist`
+artifact (`phase0-build.yml`, dispatch with `upload_spike`, run 37037610934). On the VPS, outside
+the repository (`~/incoming/phase0/gpu-census/census.mjs`), that core ran under Node against the
+operator's disc: a WORKERFS polyfill, and a mock WebGPU device that counts every call, records the
+eight slots of every submitted draw and fingerprints every level-0 `writeTexture`. It is the real
+game and the real `gx_webgpu.cpp` JavaScript; only the GPU is fake, so these are counts and CPU
+costs, **not iPhone GPU timings**.
+
+**The thrash hypothesis is refuted.** 2400 frames, 2,021,706 draws: the `(slot, w, h, levels)` pool
+created **122 textures and evicted none** (peak 118 of 128, 6.8 MB); **157 bind groups** in the
+whole run; no destroyed texture was ever bound or written. Pipelines: 19.
+
+**What changed between d45a1fd and 9b08acf is how far the backend gets.** On `d45a1fd` the backend
+died at the first `createBindGroup` failure (22,514 draws, ~124 copies, at 6.7 s) and
+`gx_set_backend(nullptr)` made the rest of the run headless: the match was never rendered. #79
+removed that failure, so the backend now reaches the match, where the draw path is far heavier:
+
+| per frame (census, 9b08acf) | before scene 02:02 (frames 1–1394) | from frame 1395 (match) |
+| --- | ---: | ---: |
+| draws (one `submit` each) | 257 | **1,880** |
+| `writeTexture` bytes | 2.85 MB | **117 MB** |
+| `writeBuffer` bytes | 0.84 MB | 6.7 MB |
+| Node ms, mock GPU | 34 | **276** |
+
+Every draw decoded and rewrote every texture it binds, though a match frame uses only 140–154
+distinct texture contents (≤6.2 MiB). The same core under Node: 80 s without the backend, 293 s
+with it and no GPU at all. On the phone those 117 MB per frame also cross Safari's GPU-process
+boundary. That is consistent with "ci mette una cifra"; whether the phone was slow or truly
+stuck cannot be told from the evidence: the scene line is printed only at scene changes and the
+next one is after frame 2400. WebKit's current `Queue.mm` does not wait on in-flight resources in
+`writeBuffer`/`writeTexture` (it stages and blits); the iOS 18.7 WebKit was not checked.
+
+**Fix.** Textures are cached by content. `upload_textures` gives each immutable `TextureSnapshot`
+(with format, TLUT format, size, levels) an id and pins the snapshot while its texture is pooled;
+`gxw_bind` keys the pool by that id, so a hit is neither decoded nor written. Snapshot identity is
+sound because the decoder's `TextureSnapshotCache` returns the same object for the same bytes and
+a new one when bytes change (memcmp, not hash/address). Eviction queues the id, and C++ forgets
+the snapshot right after the bind that evicted it. Pool limits 1024 textures / 64 MiB; bind group
+cache 256 → 1024 (817 distinct keys in the run; 256 missed 2383 times, 1024 only the 817
+compulsory ones). The selftest fixture now returns one snapshot per distinct fixture texture, as
+the decoder does.
+
+Measured with the PR's core (artifact run 37041002424), same Node harness:
+
+| | 9b08acf | this PR |
+| --- | ---: | ---: |
+| Node wall, 2400 frames (headless: 80 s) | 293 s | **109 s** |
+| match frames, Node ms/frame | 285 | **73** |
+| match frames, `writeTexture` per frame | 117 MB | **0.019 MB** |
+| texture levels written, whole run | one set per draw | 1,818 |
+| textures created / destroyed | 122 / 0 | 1,776 / 748 |
+| bind groups created | 157 | 3,716 |
+| trace SHA-1 (Node, mock GPU) | `c79c53b9…` | `c79c53b9…` |
+
+1,776 textures, not 481: the decoder drops a snapshot unused for 3 frames, so content that returns
+later is a new snapshot. In the match about 0.85 new contents per frame (an animated texture),
+each evicting an old menu texture once the pool is full: steady, not thrash.
+
+**Heartbeat.** `retrace()` calls `host::retrace_heartbeat` before the sim-time resume stamp (null
+by default; set only by `wasm/core/heartbeat.cpp` in the web core; reads no guest state), and every
+`gxw_draw` beats too. The worker posts at most one beat per 500 ms (frame, time, draws, copies,
+pool, textures/bind groups created, backend failure). The page shows `heartbeat: frame N …`, says
+`STALLED IN FRAME N+1` when beats arrive but the frame does not move, `SILENT` when nothing
+arrives, keeps the record in `localStorage` (a reload shows where an unfinished run stopped),
+offers a partial report, and puts the beat history in the result JSON. Under Node the hook was
+called 2400 times, in order.
+
+CI on PR #80: all checks green; the new browser test evicts past the pool limit in Chromium
+(1200 contents, 176 destroyed, correct pixel, no validation error); 2400 identical textured draws
+write the texture once.
+
+**NOT verified:** the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` on the phone (the operator
+runs it; only the Node run above matched); anything on the iPhone: whether the match now runs at
+an acceptable speed, whether the 9b08acf run was stuck or slow, real GPU time of ~1,880
+`submit`s and ~5,600 `writeBuffer`s per frame (the next suspect if the phone is still slow:
+one encoder per frame needs per-draw uniform/vertex offsets), and whether ~1 new bind group per
+match frame (dropped from the cache to GC, as samplers were) fails again in a long session. A
+census fingerprint samples bytes, so "481 contents" is an estimate; the snapshot counts are
+exact. Not reverted: the diagnosis exonerates the pool, and reverting it would only bring back
+the `createBindGroup` failure that turned rendering off before the match.
