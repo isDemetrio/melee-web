@@ -38,6 +38,10 @@ scope.onmessage = async (event: MessageEvent<{ iso: File; pad: SharedArrayBuffer
       livePad: () => readPad(shared),
       heartbeat: (retraces: number) => {
         if (gpu.failure) throw new Error(gpu.failure);
+        // The renderer also beats, with -1, before every draw (gx_webgpu.cpp: the spike's stall
+        // report). Only a completed retrace presents: presenting on a draw beat would transfer the
+        // canvas between two XFB copies and wait out a 60 Hz period, ~900 times per match frame.
+        if (retraces < 0) return;
         // callMain never yields. Explicit bitmap presentation releases the WebGPU canvas
         // image every retrace, instead of waiting for the worker's task to return.
         const bitmap = canvas.transferToImageBitmap();
@@ -57,7 +61,8 @@ scope.onmessage = async (event: MessageEvent<{ iso: File; pad: SharedArrayBuffer
     if (event.data.selftest) {
       if (!core._gx_webgpu_selftest) throw new Error('Core has no renderer selftest');
       for (let frame = 1; frame <= 3; frame++) {
-        core._gx_webgpu_selftest(0xff2080c0, 2, 0);
+        // Geometry 1 draws three triangles, so the renderer's per-draw beats run here too.
+        core._gx_webgpu_selftest(0xff2080c0, 2, 1);
         options.heartbeat(frame);
       }
       scope.postMessage({ type: 'ended', exitCode: 0 });
