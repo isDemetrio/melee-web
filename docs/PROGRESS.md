@@ -1379,6 +1379,7 @@ frame without the disc.
 | `36955231521` (WebGPU toolchain probe, on `34bcb9f`) | **success** | job 1m19s; both configurations `PROBE OK`, `adopt_worker` all four true, `adopt_errors: []`, `adopt_device_lost: null` |
 | `36955231507` (WASM toolchain probe, on `34bcb9f`) | **success** | the FMA corpus and the bench are untouched by this change |
 | `36955231532` (CI, on `34bcb9f`) | **success** | hygiene, web shell and the browser tests are untouched by this change |
+| `36955443541`, `36955443531`, `36955443529` (the same three, on `3833c0a`, the docs commit) | **success** | the probe answers `adopt_worker` all four true again, in both configurations; a probe this repository has seen fail four times for harness reasons is worth running twice before its answer is recorded |
 
 **Next step.** Unchanged, one unknown shorter: the decision of the operator on Q10(a), where the frames of
 the web build come from, before renderer step 2. Nothing else in the plan is autonomous and open.
