@@ -170,9 +170,11 @@ jobs:
           # project is C++ and the ring is the one probe that also has to be readable from
           # TypeScript, through web/src/net/sab_ring.ts and Node's type stripping.
           mkdir -p wasm-probe/out/ring
+          # NODERAWFS: the driver reads the ring image this program writes with Node fs,
+          # so the filesystem has to be the real one: MEMFS is invisible to Node (run 37006046793).
           emcc -std=c11 -O2 -Wall -Wextra -Werror \
             wasm/net/sab_ring_test.c -o wasm-probe/out/ring/sab_ring_test.js \
-            -sENVIRONMENT=node -sEXIT_RUNTIME=1
+            -sNODERAWFS=1 -sENVIRONMENT=node -sEXIT_RUNTIME=1
           # The same file compiled with threads, compile only: this is the branch of the header
           # that publishes the two indices with __atomic_load_n/__atomic_store_n, and it is the
           # branch the real netcode thread will use. The layout test above cannot compile it,
