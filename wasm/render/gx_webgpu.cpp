@@ -6,9 +6,10 @@
 // source rectangle to the canvas, then a copy with `clear` set clears the EFB to its clear colour.
 // So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console.
 //
-// Geometry uses a baseline shader with snapshot texture-0 MODULATE.
-// Lighting, texgen and full TEV remain open. Clears cover the whole EFB;
-// half-scale, Y scale, gamma and copy formats remain open (priorities 2-5).
+// Geometry uses a baseline shader with snapshot texture-0 MODULATE, and the XF channel controls'
+// lighting: the material and ambient registers, the eight light blocks and the vertex normal, with
+// gen_lighting/gen_light's arithmetic (gx_shader.cpp:63-147). Texgen and full TEV remain open.
+// Clears cover the whole EFB; half-scale, Y scale, gamma and copy formats remain open (priorities 2-5).
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
 // offscreen texture, which is how CI reads the backend's output back without committing a canvas
@@ -143,13 +144,19 @@ EM_JS(void, gxw_retire_textures, (), {
 
 // Explicit float4 rows: no dependency on an unverified C++/WGSL struct ABI.
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
-                     const float* constants, const float* raster, int lines, int cull, int zmode, int components), {
+                     const float* constants, const float* raster, int lines, int cull, int zmode, int components, const int* lighting), {
   const gpu = Module["gxWebgpu"];
   const buffers = [];
   try {
     const d = gpu.device;
+    // 0-4 projection/viewport, 5 depth, 6-69 transform matrices, 70-101 normal matrices, 102
+    // viewport, 103-104 texture bias, 105-108 ambient/material, 109-148 eight light blocks.
+    const ROWS = 149;
     const r = HEAPF32.slice(raster >> 2, (raster >> 2) + 10);
-    const key = [lines,cull,zmode,components].join(":");
+    // The channel controls, the same seven words the C++ side derives (lighting_uid_of).
+    const lp = HEAP32.slice(lighting >> 2, (lighting >> 2) + 7);
+    // Two draws with different lighting are two pipelines, not one shader.
+    const key = [lines,cull,zmode,components].concat(lp).join(":");
     let pipeline = gpu.pipelines.get(key);
     if (!pipeline) {
       const attributes = [
@@ -160,8 +167,77 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
       for (let i=0;i<8;i++) attributes.push({shaderLocation:4+i,offset:32+8*i,format:"float32x2"});
       for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
       // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
+      // The vertex shader is specialised per pipeline, the way gx_shader.cpp specialises the D3D
+      // shaders. The material and light rows are the packing fill_vs_constants writes
+      // (gx_shader.cpp:716-790); the emitted lighting is gen_lighting/gen_light (gx_shader.cpp:63-147)
+      // transcribed to WGSL, down to its round/clamp/shift arithmetic.
+      const chans = lp[0], matsource = lp[1], enablelighting = lp[2], ambsource = lp[3],
+            diffusefunc = lp[4], attnfunc = lp[5], lightmask = lp[6] >>> 0;
+      const vcol = ["color", "color1"];
+      const bit = (v, lo, n) => (v >>> lo) & ((1 << n) - 1);
+      const body = [];
+      body.push("  let nidx = select(m, m - 32u, m >= 32u);");
+      body.push(`  let _norm0 = ${components & 1024
+        ? "normalize(vec3f(dot(u.rows[70+nidx].xyz,normal),dot(u.rows[71+nidx].xyz,normal),dot(u.rows[72+nidx].xyz,normal)))"
+        : "vec3f(0)"};`);
+      if (chans > 0) {
+        body.push("  var dist = 0.0;");
+        body.push("  var dist2 = 0.0;");
+        // One light reaching one lit channel (colour j, or alpha j+2): gen_light's two functions.
+        const light = (i, chan, alpha) => {
+          const L = 109 + 5 * i, sw = alpha ? "a" : "rgb";
+          const af = bit(attnfunc, 2 * chan, 2), df = bit(diffusefunc, 2 * chan, 2);
+          const lines = ["  {", `    var ldir = u.rows[${L + 3}].xyz - p.xyz;`, "    var attn = 1.0;"];
+          if (af === 1) {
+            lines.push("    ldir = normalize(ldir);");
+            lines.push(`    attn = select(0.0, max(0.0, dot(_norm0, u.rows[${L + 4}].xyz)), dot(_norm0, ldir) >= 0.0);`);
+            lines.push(`    attn = max(0.0, dot(u.rows[${L + 1}].xyz, vec3f(1.0, attn, attn * attn))) / dot(${df === 0 ? "" : "normalize("}u.rows[${L + 2}].xyz${df === 0 ? "" : ")"}, vec3f(1.0, attn, attn * attn));`);
+          } else if (af === 3) {
+            lines.push("    dist2 = dot(ldir, ldir);");
+            lines.push("    dist = sqrt(dist2);");
+            lines.push("    ldir = ldir / dist;");
+            lines.push(`    attn = max(0.0, dot(ldir, u.rows[${L + 4}].xyz));`);
+            lines.push(`    attn = max(0.0, dot(u.rows[${L + 1}].xyz, vec3f(1.0, attn, attn * attn))) / dot(u.rows[${L + 2}].xyz, vec3f(1.0, dist, dist2));`);
+          } else {
+            lines.push("    ldir = normalize(ldir);");
+            lines.push("    attn = 1.0;");
+            lines.push("    if (length(ldir) == 0.0) { ldir = _norm0; }");
+          }
+          const term = df === 0
+            ? `round(attn * u.rows[${L}].${sw})`
+            : `round(attn * ${df === 1 ? "" : "max(0.0, "}dot(ldir, _norm0)${df === 1 ? "" : ")"} * u.rows[${L}].${sw})`;
+          lines.push(alpha ? `    lacc = vec4f(lacc.rgb, lacc.a + ${term});` : `    lacc = vec4f(lacc.rgb + ${term}, lacc.a);`);
+          lines.push("  }");
+          return lines.join("\n");
+        };
+        for (let j = 0; j < chans; j++) {
+          const cm = bit(matsource, j, 1), am = bit(matsource, j + 2, 1);
+          const litC = bit(enablelighting, j, 1), litA = bit(enablelighting, j + 2, 1);
+          const ambC = bit(ambsource, j, 1), ambA = bit(ambsource, j + 2, 1);
+          // A vertex colour is unorm8 in the shader, so the register path needs the same 0..255 scale.
+          const vc = (w) => (components & (8192 << j)) ? `round(${vcol[j]}${w} * 255.0)`
+            : (components & 8192) ? `round(color${w} * 255.0)` : (w ? "255.0" : "vec4f(255.0)");
+          body.push(`  { // colour channel ${j}`);
+          body.push(`    var mat: vec4f = ${cm ? vc("") : `u.rows[${107 + j}]`};`);
+          if (am !== cm) body.push(`    mat = vec4f(mat.xyz, ${am ? vc(".w") : `u.rows[${107 + j}].w`});`);
+          body.push(`    var lacc: vec4f = ${litC ? (ambC ? vc("") : `u.rows[${105 + j}]`) : "vec4f(255.0)"};`);
+          body.push(`    lacc = vec4f(lacc.xyz, ${litA ? (ambA ? vc(".w") : `u.rows[${105 + j}].w`) : "255.0"});`);
+          if (litC) for (let i = 0; i < 8; i++) if (bit(lightmask, i + 8 * j, 1)) body.push(light(i, j, false));
+          if (litA) for (let i = 0; i < 8; i++) if (bit(lightmask, i + 8 * (j + 2), 1)) body.push(light(i, j + 2, true));
+          body.push("    var ilacc = clamp(vec4i(trunc(lacc)), vec4i(0), vec4i(255));");
+          body.push("    ilacc = ilacc + (ilacc >> 7u);");
+          body.push(`    o.${j === 0 ? "color" : "color1"} = vec4f((vec4i(trunc(mat)) * ilacc) >> 8u) / vec4f(255.0);`);
+          body.push("  }");
+        }
+        if (chans < 2) body.push(`  o.color1 = ${components & 16384 ? "color1" : "o.color"};`);
+      } else {
+        body.push(`  o.color = ${components & 8192 ? "color" : "vec4f(1)"};`);
+        body.push(`  o.color1 = ${components & 16384 ? "color1" : "o.color"};`);
+      }
+      body.push("  o.normal = _norm0;");
+      body.push("  o.uv = uv;");
       const code = `
-struct Constants { rows: array<vec4f, 105> }
+struct Constants { rows: array<vec4f, ${ROWS}> }
 @group(0) @binding(0) var<uniform> u: Constants;
 ${Array.from({length:8}, (_,n) => `@group(0) @binding(${1+2*n}) var tex${n}: texture_2d<f32>;
 @group(0) @binding(${2+2*n}) var samp${n}: sampler;`).join("\n")}
@@ -182,12 +258,7 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
   clip = vec4f(clip.xy * u.rows[102].xy + clip.w * u.rows[102].zw,clip.zw);
   var o: Out;
   o.pos = clip; o.clip = originalClip;
-  o.color = ${components & 8192 ? "color" : "vec4f(1)"};
-  o.color1 = ${components & 16384 ? "color1" : "o.color"};
-  o.normal = vec3f(0);
-  ${components & 1024 ? `let n = select(m,m-32u,m>=32u);
-  o.normal = normalize(vec3f(dot(u.rows[70+n].xyz,normal),dot(u.rows[71+n].xyz,normal),dot(u.rows[72+n].xyz,normal)));` : ""}
-  o.uv = uv;
+${body.join("\n")}
   return o;
 }
 @fragment fn fs(i: Out) -> @location(0) vec4f {
@@ -210,7 +281,7 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     };
     const vb = upload(vertices,vertex_bytes,GPUBufferUsage.VERTEX);
     const ib = upload(indices,count*4,GPUBufferUsage.INDEX);
-    const ub = upload(constants,105*16,GPUBufferUsage.UNIFORM);
+    const ub = upload(constants,ROWS*16,GPUBufferUsage.UNIFORM);
     const entries = [{binding:0,resource:{buffer:ub}}];
     for (let i=0;i<8;i++) {
       entries.push({binding:1+2*i,resource:gpu.slots[i].texture.createView()});
@@ -285,7 +356,7 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
   float vp[6], proj[6];
   std::memcpy(vp, dc.xf_regs+0x1A, sizeof vp); std::memcpy(proj, dc.xf_regs+0x20, sizeof proj);
   if (!std::isfinite(vp[0]) || !std::isfinite(vp[1]) || vp[0] == 0 || vp[1] == 0) return true;
-  float u[105][4] = {};
+  float u[149][4] = {};
   u[0][0]=proj[0]; u[1][1]=proj[2]; u[2][2]=proj[4]; u[2][3]=proj[5];
   if (dc.xf_regs[0x26] == 0) { u[0][2]=proj[1]; u[1][2]=proj[3]; u[3][2]=-1; }
   else { u[0][3]=proj[1]; u[1][3]=proj[3]; u[3][3]=1; }
@@ -312,9 +383,58 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
     const auto& t=dc.textures[i];
     u[103+i/4][i%4]=t.used ? float(gx::sbits(t.mode0,9,8))/32.0f : 0;
   }
+  // XF channel controls and the light blocks, packed exactly as fill_vs_constants packs them for
+  // the D3D backend (gx_shader.cpp:716-790). The shader is specialised on the same uid that
+  // lighting_uid derives there (gx_shader.cpp:46-70), so both backends take the same branch on the
+  // same register state. Rows: 105-106 ambient 0/1, 107-108 material 0/1, 109-148 the eight light
+  // blocks, five rows each (colour, cosatt, distatt, dpos, normalised ddir).
+  const uint32_t chans = dc.xf_regs[0x09] & 3;
+  uint32_t matsource = 0, enablelighting = 0, ambsource = 0, diffusefunc = 0, attnfunc = 0, light_mask = 0;
+  for (uint32_t j = 0; j < chans; ++j) {
+    const uint32_t color = dc.xf_regs[0x0E + j], alpha = dc.xf_regs[0x10 + j];
+    matsource |= gx::bits(color,0,1) << j; matsource |= gx::bits(alpha,0,1) << (j+2);
+    enablelighting |= gx::bits(color,1,1) << j; enablelighting |= gx::bits(alpha,1,1) << (j+2);
+    if (enablelighting & (1u << j)) {
+      ambsource |= gx::bits(color,6,1) << j;
+      attnfunc |= gx::bits(color,9,2) << (2*j);
+      diffusefunc |= gx::bits(color,7,2) << (2*j);
+      light_mask |= (gx::bits(color,1,1) ? (gx::bits(color,2,4) | (gx::bits(color,11,4) << 4)) : 0u) << (8*j);
+    }
+    if (enablelighting & (1u << (j+2))) {
+      ambsource |= gx::bits(alpha,6,1) << (j+2);
+      attnfunc |= gx::bits(alpha,9,2) << (2*(j+2));
+      diffusefunc |= gx::bits(alpha,7,2) << (2*(j+2));
+      light_mask |= (gx::bits(alpha,1,1) ? (gx::bits(alpha,2,4) | (gx::bits(alpha,11,4) << 4)) : 0u) << (8*(j+2));
+    }
+  }
+  for (int i = 0; i < 2; ++i) {
+    const uint32_t amb = dc.xf_regs[0x0A + i], mat = dc.xf_regs[0x0C + i];
+    for (int k = 0; k < 4; ++k) {
+      u[105 + i][k] = float((amb >> (24 - 8*k)) & 0xFF);
+      u[107 + i][k] = float((mat >> (24 - 8*k)) & 0xFF);
+    }
+  }
+  // Only a shader with lighting enabled reads these rows, so they are only packed then.
+  if (enablelighting) for (int i = 0; i < 8; ++i) {
+    const uint8_t* L = dc.lights[i];
+    uint32_t colorword; std::memcpy(&colorword, L + 12, 4);
+    for (int k = 0; k < 4; ++k) u[109 + 5*i][k] = float((colorword >> (24 - 8*k)) & 0xFF);
+    float f[9]; std::memcpy(f, L + 16, sizeof f);          // cosatt, distatt, dpos
+    u[110 + 5*i][0] = f[0]; u[110 + 5*i][1] = f[1]; u[110 + 5*i][2] = f[2];
+    if (std::fabs(f[3]) < 0.00001f && std::fabs(f[4]) < 0.00001f && std::fabs(f[5]) < 0.00001f) {
+      u[111 + 5*i][0] = 0.00001f; u[111 + 5*i][1] = f[4]; u[111 + 5*i][2] = f[5];
+    } else { u[111 + 5*i][0] = f[3]; u[111 + 5*i][1] = f[4]; u[111 + 5*i][2] = f[5]; }
+    u[112 + 5*i][0] = f[6]; u[112 + 5*i][1] = f[7]; u[112 + 5*i][2] = f[8];
+    float d[3]; std::memcpy(d, L + 52, sizeof d);           // ddir
+    const double norm = double(d[0])*d[0] + double(d[1])*d[1] + double(d[2])*d[2];
+    const float nf = norm > 0 ? float(1.0 / std::sqrt(norm)) : 0.0f;
+    u[113 + 5*i][0] = d[0]*nf; u[113 + 5*i][1] = d[1]*nf; u[113 + 5*i][2] = d[2]*nf;
+  }
+  const int32_t lighting[7] = {int32_t(chans), int32_t(matsource), int32_t(enablelighting), int32_t(ambsource),
+                               int32_t(diffusefunc), int32_t(attnfunc), int32_t(light_mask)};
   if (!upload_textures(dc)) { gxw_retire_textures(); return false; }
   const bool ok = gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
-                  &u[0][0],r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),dc.components);
+                  &u[0][0],r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),dc.components,lighting);
   gxw_retire_textures();
   return ok;
 }
@@ -449,9 +569,30 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     dc.bp.reg[gx::BP_ZMODE]=1|2|16; // GX LESS -> reversed GREATER, writes enabled.
     if (geometry==2) dc.bp.reg[gx::BP_SCISSORBR]=(159u<<12)|479u;
     if (geometry==3) dc.bp.reg[gx::BP_GENMODE]=2u<<14; // front cull (clockwise triangle)
+    // Lighting fixtures (priority 2): one colour channel, the material and ambient registers, and
+    // one light block. The control bits are gx_regs.h's lit_* fields: bit 0 material source, bit 1
+    // lighting enable, bits 2-5 light mask, bit 6 ambient source, bits 7-8 diffuse function, bits
+    // 9-10 attenuation function, bits 11-14 the upper half of the light mask. The visible layer at
+    // the probe is layer 1, whose vertex colour is green.
+    if (geometry >= 40 && geometry <= 44) {
+      dc.xf_regs[0x09] = 1;                 // NUMCOLORS: one colour channel
+      dc.xf_regs[0x0A] = 0;                 // AMB0
+      dc.xf_regs[0x0C] = 0x8040C0FFu;       // MAT0: (128, 64, 192, 255)
+      uint32_t control = 0, light_argb = 0; float light_z = 1000.0f;
+      if (geometry == 41) { control = 0x0006u; light_argb = 0x40C08000u; } // one light, constant
+      if (geometry == 42) { control = 0x0106u; light_argb = 0x00FF0000u; } // clamped dot, facing
+      if (geometry == 43) { control = 0x0106u; light_argb = 0x00FF0000u; light_z = -1000.0f; }
+      if (geometry == 44) { control = 0x0046u; light_argb = 0x00408000u; } // ambient from vertex
+      dc.xf_regs[0x0E] = control;           // COLOR0CNTRL
+      dc.xf_regs[0x10] = 0;                 // ALPHA0CNTRL: no alpha lighting
+      uint8_t* light = dc.lights[0];
+      std::memcpy(light + 12, &light_argb, 4);
+      const float light_pos[3] = {0.0f, 0.0f, light_z};
+      std::memcpy(light + 40, light_pos, sizeof light_pos);
+    }
     const float xy[3][2]={{-0.9f,-0.6f},{-0.5f,0.6f},{-0.1f,-0.6f}};
     for(int layer=0;layer<3;layer++) {
-      if (geometry>=10) {
+      if (geometry>=10 && geometry<40) {
         static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
         const uint32_t format=geometry<=20?formats[geometry-10]:geometry==32?8:6;
         const auto texture=fixture_texture(format,layer==1 && (geometry==31 || geometry==32),geometry==33,geometry>=34);
@@ -468,7 +609,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1];
         v.pos[2]=layer==1 ? -0.8f : -0.3f; v.posmtx=3; v.nrm[2]=1;
         v.col0[layer]=255; v.col0[3]=255; v.col1[3]=255;
-        if(geometry>=10) {
+        if(geometry>=10 && geometry<40) {
           for(auto& c:v.col0) c=geometry==30?128:255;
           v.uv[0][0]=(geometry>=34 && geometry<=36)?1.25f:0.5f; v.uv[0][1]=0.5f;
         }
