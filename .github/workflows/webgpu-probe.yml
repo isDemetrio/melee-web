@@ -1,0 +1,67 @@
+name: WebGPU toolchain probe
+
+# docs/RENDERER_MAP.md makes a WebGPU backend the first priority of the renderer, and the plan
+# rests on two assumptions. Both are cheap to check once and expensive to assume for a whole
+# backend:
+#
+#   1. The pinned Emscripten (EMSDK_VERSION) builds and links a translation unit that includes
+#      <webgpu/webgpu.h> and calls into it, with --use-port=emdawnwebgpu.
+#   2. The browser this repository's CI can run — headless Chromium, software rendering — exposes a
+#      usable WebGPU adapter and device. A renderer whose tests cannot run in CI cannot be verified
+#      by this repository at all.
+#
+# wasm/probe/webgpu_probe.cpp holds the reasoning; this workflow is the answer. It is deliberately
+# cheap: one small compilation and one browser run, no WASM core build.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'wasm/probe/**'
+      - '.github/workflows/webgpu-probe.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webgpu-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    # A harness that hangs answers nothing: run 36911030437 sat in the runner for seven minutes
+    # with its check finished at 168 ms, and was cancelled by hand.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read emsdk pin
+        run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+      - name: Compile the probe
+        working-directory: wasm/probe
+        run: |
+          emcc --use-port=emdawnwebgpu -O1 -sMODULARIZE=1 -sEXPORT_ES6=1 \
+            -sEXPORT_NAME=createWebgpuProbe \
+            -sENVIRONMENT=web -sEXIT_RUNTIME=1 -o webgpu_probe.mjs webgpu_probe.cpp
+          ls -l webgpu_probe.mjs webgpu_probe.wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Playwright has to be resolvable from the file that imports it: Node resolves a bare
+      # specifier from the importing module's own directory upwards, not from the working
+      # directory, and NODE_PATH does not apply to ES modules. Installing it in the runner's
+      # temp directory therefore does not work; it is installed in the workspace instead.
+      # Nothing is committed: the checkout is thrown away with the runner.
+      - name: Install Playwright and its Chromium
+        working-directory: ${{ github.workspace }}
+        run: |
+          npm init -y >/dev/null
+          npm install playwright@latest
+          npx playwright install --with-deps chromium
+      - name: Run the probe in headless Chromium
+        timeout-minutes: 5
+        working-directory: ${{ github.workspace }}
+        run: node wasm/probe/check.mjs

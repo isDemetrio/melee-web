@@ -36,11 +36,11 @@ Vengono prima di tutto perché cambiano l'ordine dei lavori.
    il core è ancora `-O1` e pesa circa 87 MB. Il primo passo è quindi portare il branch in `main`.
 3. **16.323.657 byte è il modulo Node, non quello web.** La tabella di `docs/PROGRESS.md` (ultima
    sezione) confronta con 87.118.511 byte, che nella sezione S6 è il **modulo Node**; il modulo web
-   a `-O1` era 87.118.045. La dimensione del modulo **web** a `-Oz` non è scritta in nessun file del
-   repository: **da verificare** nel log della run `36743835141`, alla riga di
-   `scripts/phase0/wasm_report.py` per `melee_core_web.wasm` (campi `wasm_bytes` e
-   `within_pages_limit`). A `-O1` i due moduli differivano di 466 byte, quindi ci si aspetta
-   ≈ 16,3 MB, ma va letto, non dedotto.
+   a `-O1` era 87.118.045. La dimensione del modulo **web** a `-Oz` è stata letta il 2026-10-01 nel
+   log della run `36743835141`, alla riga di `scripts/phase0/wasm_report.py`, che riporta due
+   moduli: `"wasm_bytes": 16323657` (Node) e `"wasm_bytes": 16323255` (web), entrambi con
+   `"within_pages_limit": true`. I due differiscono di 402 byte, e il valore atteso era giusto: il
+   modulo web è **16.323.255 byte**, il 62% del limite per file di Pages (§1).
 4. **Mettere il modulo su Cloudflare non è ancora permesso.** Il modulo è derivato dal DOL (codice
    del gioco). L'eccezione D3 (`docs/PHASE0_TASKS.md`) copre solo artefatti **privati di GitHub,
    3 giorni**, e la sua estensione alla pagina web (Q8 in `docs/OPEN_QUESTIONS.md`) non ha ancora
@@ -53,10 +53,11 @@ Vengono prima di tutto perché cambiano l'ordine dei lavori.
    disco, caricati su R2 e messi in cache nel browser uno per uno (`docs/SPEC_PIANO.md`, righe 178–179).
    Qui il disco intero va sul telefono **solo perché il core di Fase 0 legge una ISO**. La scelta
    della sezione 2 è quindi fatta per la misura, e non va trattata come base del prodotto.
-6. **Il 25 MiB per file di Pages non è stato verificato oggi.** Il numero è nel repository
-   (`scripts/phase0/wasm_report.py`, riga 83: `25 * 1024 * 1024` = 26.214.400 byte) ma è stato
-   scritto a partire dalla documentazione. **Da verificare** su
-   `https://developers.cloudflare.com/pages/platform/limits/` prima del primo deploy.
+6. **Il 25 MiB per file di Pages era stato scritto dalla documentazione, non letto.** Il numero è
+   nel repository (`scripts/phase0/wasm_report.py`, riga 83: `25 * 1024 * 1024` = 26.214.400 byte).
+   **Verificato** il 2026-10-01 su `https://developers.cloudflare.com/pages/platform/limits/`:
+   "The maximum file size for a single Cloudflare Pages site asset is 25 MiB". Il modulo web a
+   `-Oz` (16.323.255 byte) è il 62% di quel limite.
 
 Due difetti del repository che il piano corregge (sezione 5), trovati leggendo i file:
 
@@ -77,8 +78,8 @@ Un telefono, per fare una corsa, deve avere tre cose.
 
 | Cosa | File | Dimensione | Da dove viene |
 | --- | --- | --- | --- |
-| **La pagina** | `spike.html` più il JavaScript costruito da `web/src/spike/main.ts`, `compare.ts`, `worker.ts` | piccola, non misurata (**da verificare** con `ls -l` sul `dist`) | `vite build` nella workflow `phase0-build.yml` |
-| **Il modulo** (il gioco compilato in WebAssembly, *WASM*) | `spike-core/melee_core_web.wasm` + `melee_core_web.js` (il codice JavaScript che lo carica), `core.json`, `parity_vs_onett.txt` | `.wasm`: 87.118.045 byte a `-O1`; ≈ 16,3 MB a `-Oz` (numero esatto **da verificare**, §0.3) | stessa workflow, righe 122–129 |
+| **La pagina** | `spike.html` più il JavaScript costruito da `web/src/spike/main.ts`, `compare.ts`, `worker.ts` | **misurata**: il `dist` della spike ha 21 file per 18.005.796 byte, di cui 16.389.654 sono `spike-core`; senza il core e senza le mappe dei sorgenti restano 13 file per **268.162 byte** (`spike.html` da solo: 690 byte) | `vite build` nella workflow `phase0-build.yml` |
+| **Il modulo** (il gioco compilato in WebAssembly, *WASM*) | `spike-core/melee_core_web.wasm` + `melee_core_web.js` (il codice JavaScript che lo carica), `core.json`, `parity_vs_onett.txt` | `.wasm`: 87.118.045 byte a `-O1`; a `-Oz` **16.323.255 byte** per il modulo web e 16.323.657 per quello Node (§0.3) | stessa workflow, righe 122–129 |
 | **Il disco** | la ISO di Melee NTSC 1.02 | **1.459.978.240 byte** (1,46 GB; 1,36 GiB), SHA-1 `d4e70c064cc714ba8400a849cf299dbd1aa326fc` | solo sulla VPS, `/home/hermes/incoming/melee-ntsc102.iso` (`docs/OPEN_QUESTIONS.md` Q1); mai nel repository |
 
 In memoria il modulo parte con 256 MB (`-sINITIAL_MEMORY=256MB`, `wasm/core/CMakeLists.txt`
@@ -95,15 +96,17 @@ oppure costringe a cambiare file system.
 
 | Limite | Valore | Stato | Tocca |
 | --- | --- | --- | --- |
-| Dimensione massima di un file su Cloudflare Pages | 25 MiB = 26.214.400 byte | nel repo (`wasm_report.py` riga 83), **da verificare** sulla pagina dei limiti di Pages | il modulo: a `-O1` è 3,3 volte sopra, a `-Oz` sotto. Il disco è 55 volte sopra: **non può stare su Pages**, in nessun caso |
-| Numero di file per sito Pages | non noto | **da verificare**, stessa pagina | non ci tocca (la pagina spike è una decina di file) |
-| Caricamento su R2 (lo spazio di archiviazione di Cloudflare) con `wrangler r2 object put` | 315 MB per oggetto | scritto in `docs/DEPLOY.md` §3, preso dalla documentazione, **da verificare** | il disco (1,46 GB) non si carica con `wrangler`: serve l'interfaccia compatibile S3 di R2 (sezione 2) |
-| Dimensione massima di un oggetto R2 e di un singolo caricamento senza *multipart* (caricamento a pezzi) | non noti | **da verificare** su `https://developers.cloudflare.com/r2/platform/limits/` | il disco |
-| Livello gratuito di R2 (spazio, operazioni, traffico in uscita) | non noto nei numeri; la spec dice "Egress gratuito" (`docs/SPEC_PIANO.md` riga 287) | **da verificare** su `https://developers.cloudflare.com/r2/pricing/`, anche se serve una carta di pagamento per attivare R2 | il disco (1,46 GB fermi) |
-| Utenti di Cloudflare Access gratis | "piano gratuito fino a 50 utenti" (`docs/SPEC_PIANO.md` riga 288) | dalla spec, **da verificare** | la protezione di pagina e disco |
-| Richieste gratuite al giorno delle Pages Functions (piccoli programmi eseguiti da Cloudflare) | non noto | **da verificare** sui limiti di Workers | il disco servito a pezzi (88 richieste per un download completo, sezione 2) |
+| Dimensione massima di un file su Cloudflare Pages | 25 MiB = 26.214.400 byte | **verificato** il 2026-10-01: "The maximum file size for a single Cloudflare Pages site asset is 25 MiB" (pagina dei limiti di Pages); il numero di `wasm_report.py` riga 83 è quello documentato | il modulo: a `-O1` è 3,3 volte sopra, a `-Oz` sotto. Il disco è 55 volte sopra: **non può stare su Pages**, in nessun caso |
+| Numero di file per sito Pages | 20.000 (piano Free), 100.000 (piani a pagamento) | **verificato** il 2026-10-01, stessa pagina | non ci tocca: il `dist` della spike ha 21 file (misurati, §1) |
+| Caricamento su R2 (lo spazio di archiviazione di Cloudflare) con `wrangler r2 object put` | 315 MB per oggetto, un oggetto alla volta | **verificato** il 2026-10-01: "Wrangler supports uploading files up to 315 MB and only allows one object at a time" (pagina "Upload objects" di R2); il numero di `docs/DEPLOY.md` §3 è quello documentato | il disco (1,46 GB) non si carica con `wrangler`: serve l'interfaccia compatibile S3 di R2 (sezione 2) |
+| Dimensione massima di un oggetto R2 e di un singolo caricamento senza *multipart* (caricamento a pezzi) | oggetto: 5 TiB (4,995 TiB); caricamento singolo: **5 GiB**; multipart: 4,995 TiB in al più 10.000 parti da 5 MiB–5 GiB | **verificato** il 2026-10-01 sulla pagina dei limiti di R2 | il disco (1,46 GB = 1,36 GiB) **sta** in un PUT singolo per il limite documentato, ma è fuori dalla fascia che la guida di R2 raccomanda per il PUT singolo ("small to medium files (under ~100 MB)"): per un file così il percorso documentato è il multipart, che `rclone` fa da sé (sezione 2) |
+| Livello gratuito di R2 (spazio, operazioni, traffico in uscita) | 10 GB-mese di spazio, 1 milione di operazioni di Classe A, 10 milioni di Classe B, uscita **gratuita** | **verificato** il 2026-10-01 su `https://developers.cloudflare.com/r2/pricing/`: la spec diceva il vero sull'uscita. Resta vero che serve una carta di pagamento per attivare R2 | il disco (1,36 GiB fermi) **sta** dentro i 10 GB-mese: tenerlo in R2 non si paga. Un download completo costa 88 operazioni di Classe B, quindi i 10 milioni al mese coprono circa 113.000 download completi |
+| Utenti di Cloudflare Access gratis | 50 utenti | **verificato** il 2026-10-01 sulla pagina Access di `cloudflare.com`: il piano gratuito è descritto come "Best for teams under 50 users" e la tabella di confronto riporta "50 user limit"; la spec diceva il vero | la protezione di pagina e disco |
+| Richieste gratuite al giorno delle Pages Functions (piccoli programmi eseguiti da Cloudflare) | 100.000 richieste al giorno e 10 ms di CPU per richiesta (piano Workers Free) | **verificato** il 2026-10-01 sui limiti di Workers, che valgono per le Functions: "Requests to Pages functions count towards your quota for Workers plans" (limiti di Pages) | il disco servito a pezzi (88 richieste per un download completo, sezione 2): la quota giornaliera copre circa 1.100 download completi |
 | Spazio del browser per un sito (quota di OPFS) | non documentato, varia per browser e telefono | si misura sul device con `navigator.storage.estimate()` | il disco, se messo nel browser |
 | Memoria per tab | non documentata, varia per modello | si osserva sul device (`docs/PHASE0_DEVICE_PLAN.md` §3) | modulo e memoria del core |
+
+**Come sono stati verificati i numeri di questa tabella (2026-10-01).** Non con un account: leggendo le pagine, ognuna citata nella riga che chiude. `developers.cloudflare.com/pages/platform/limits/` (dimensione per file, numero di file per sito, e la riga che dice che le Functions contano sulla quota di Workers), `developers.cloudflare.com/r2/platform/limits/` (dimensione dell'oggetto e del caricamento), `developers.cloudflare.com/r2/pricing/` (livello gratuito, Classi A e B), `developers.cloudflare.com/r2/objects/upload-objects/` (la nota sui 315 MB di Wrangler e la tabella "PUT singolo contro multipart"), `cloudflare.com/zero-trust/products/access` (i 50 utenti di Access). Le due dimensioni locali non vengono da una stima ma dagli artefatti: il `dist` della spike in `/home/hermes/incoming/phase0/spike-dist` (misurato con `find . -type f -printf '%s'`), e il log della run `36743835141` per il modulo. Restano **da verificare**, perché solo il primo deploy le può mostrare: gli header davvero serviti, la compressione del modulo, la copertura di Access sugli indirizzi `*.pages.dev`, il binding R2 dell'ambiente di anteprima e il formato dell'indirizzo (sezione 3).
 
 ---
 
@@ -455,5 +458,9 @@ Alla fine della Fase 0: cancellare il disco dal bucket (o il bucket), togliere i
   medio", non "regge sugli Android medi".
 - **Niente prova che i tempi vengano davvero da quel device.** La traccia prova che il core ha
   girato correttamente; device e tempi sono dichiarati (`docs/PHASE0_DEVICE_PLAN.md` §5).
-- **Niente verifica dei limiti Cloudflare** fino al primo deploy: tutti quelli marcati "da
-  verificare" in §1 e §3 restano ipotesi finché il passo 11 non li ha controllati.
+- **Niente verifica dei limiti Cloudflare** fino al primo deploy. Dal 2026-10-01 i numeri che la
+  **documentazione** poteva chiudere non sono più ipotesi: sono letti e citati (§1, "Come sono stati
+  verificati i numeri di questa tabella"). Restano ipotesi, perché solo il passo 11 le può
+  controllare, le cose che la documentazione non dice: header realmente serviti, compressione del
+  modulo, copertura di Access su `*.pages.dev`, binding R2 dell'ambiente di anteprima, formato
+  dell'indirizzo.

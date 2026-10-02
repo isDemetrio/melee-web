@@ -5,8 +5,13 @@ name: CI
 # build there takes the machine down. See docs/AGENT_RULES.md rule 2 and 3.
 
 on:
+  # The account is on the free plan with a private repository, so Actions minutes come out of a
+  # 2,000-minute monthly allowance (docs/AGENT_RULES.md, CI budget). A `push` trigger on every
+  # branch duplicated every pull-request run: the same commit fires the push event and the
+  # pull_request event, which measured out at two runs per push. Branches are verified by their
+  # pull request; main is verified again after the merge.
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
