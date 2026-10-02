@@ -41,16 +41,18 @@ typedef struct {
   size_t count;
 } fifo;
 
+/* A real queue: appending at `count` would overwrite the entry a `take` has just uncovered, and
+ * this FIFO is the sequence's own oracle, so that would report a ring bug that is not one. */
 static void fifo_push(fifo *queue, frame_ref item) {
   if (queue->count >= FIFO_CAPACITY) abort();
-  queue->items[queue->count] = item;
+  queue->items[(queue->head + queue->count) % FIFO_CAPACITY] = item;
   queue->count++;
 }
 
 static int fifo_take(fifo *queue, frame_ref *out) {
   if (queue->count == 0u) return 0;
   *out = queue->items[queue->head];
-  queue->head++;
+  queue->head = (queue->head + 1u) % FIFO_CAPACITY;
   queue->count--;
   return 1;
 }
