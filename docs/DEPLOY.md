@@ -174,7 +174,8 @@ With the updated middleware, a request carrying a token gets these deployment di
 | HTTP | Exact JSON response | Meaning / action |
 | --- | --- | --- |
 | 503 | `{"error":"Service Unavailable","reason":"access_configuration_missing"}` | AUD missing/empty or team domain missing/invalid; correct Preview settings and republish. |
-| 503 | `{"error":"Service Unavailable","reason":"access_jwks_unavailable"}` | Configured team's certificate endpoint failed (network or non-success HTTP); check team configuration and endpoint availability. |
+| 503 | `{"error":"Service Unavailable","reason":"access_jwks_unavailable"}` | Certificate response is non-success HTTP, or its final URL is missing, invalid or outside the exact configured team host. |
+| 503 | `{"error":"Service Unavailable","reason":"access_jwks_unreachable"}` | Fetch threw before returning a response; check endpoint reachability in the deployed runtime. |
 | 503 | `{"error":"Service Unavailable","reason":"access_jwks_invalid"}` | Certificate response is not valid JSON/JWKS structure; check the configured endpoint. |
 | 403 | `{"error":"Forbidden"}` | Missing or rejected token; no token-specific details are exposed. |
 
@@ -183,6 +184,21 @@ logs as `Access verification unavailable: <reason>`, without tokens, key IDs or 
 error bodies. With valid trust configuration, token checks happen before fetching certificates, so malformed tokens
 receive the generic 403 without probing JWKS. Unknown/ambiguous signing-key IDs and failed
 key import/signature checks also remain generic 403 responses.
+
+JWKS retrieval uses `fetch(url)` with default redirect handling. After retrieval, the final
+`response.url` must parse as a URL whose `host` exactly equals `ACCESS_TEAM_DOMAIN`;
+missing/invalid URLs and redirects outside that host fail closed. Redirects within the team
+host are accepted. The response must still be successful and contain a valid `keys` array.
+Diagnostics in responses and logs use fixed reasons only, never upstream status numbers or URLs.
+
+The 2026-10-02 live failure reached JWKS retrieval with valid configuration and claims, while
+the certificate endpoint returned 200 externally. The previous `redirect: 'error'` option
+was suspected of throwing inside Pages (runtime support or an internal redirect); the exact
+cause has not been confirmed in that runtime. The test harness injects a fake `fetchJwks`,
+and even the entry-point test stubs global `fetch`: an option unsupported by the real runtime
+is therefore invisible in CI. That coverage gap allowed the production failure through.
+The fixtures now supply final URLs and exercise host checks, but a real deployment and a
+real authenticated Access request remain the decisive verification of this fix.
 
 From the CI:
 

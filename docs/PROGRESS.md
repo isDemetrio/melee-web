@@ -1681,3 +1681,20 @@ mapping uses full-EFB rasterization plus original clip-coordinate rejection in t
 shader; edge/sample equivalence with D3D needs comparison. No performance measurement or device
 loss/recreation validation; per-segment uploads/submissions and unbounded pipeline residency
 are provisional. Resource completion callbacks need the worker event loop to turn.
+
+
+### 2026-10-02 — Access JWKS retrieval (`fix/access-jwks-fetch`)
+
+Changed Pages entry-point retrieval to plain `fetch(url)` and require the final response URL
+host to exactly match `ACCESS_TEAM_DOMAIN`, failing closed on missing/invalid URLs. HTTP
+failures and untrusted final URLs retain `access_jwks_unavailable`; thrown fetches now use
+`access_jwks_unreachable`. Configuration/invalid-JWKS diagnostics, generic token 403s and
+signature verification are unchanged. Updated fake responses with final URLs and added
+same-host path, foreign host, port mismatch, missing/invalid URL, 404/500 and thrown-fetch
+coverage. DEPLOY documents the runtime coverage gap and the required live verification.
+
+Verification: source review and `git diff --check` only. No local build, typecheck or tests,
+no CI outcome, preview publication, actual Cloudflare redirect behaviour or authenticated
+Access request verified. A real deployment and real login are the decisive remaining check;
+the mocked suite cannot establish runtime fetch-option support. No simulation, renderer,
+submodule or CI/guard changes. Delivered as a draft PR; no CI pursuit or merge.
