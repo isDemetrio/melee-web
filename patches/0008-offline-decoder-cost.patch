@@ -1,0 +1,41 @@
+--- a/port/runtime/host/host.h
++++ b/port/runtime/host/host.h
+@@ -152,7 +152,38 @@
+       std::chrono::steady_clock::now().time_since_epoch()).count();
+ #endif
+ }
++#ifdef MELEE_OFFLINE_COST
++// Offline WASM diagnostic only. 0 = off, 1 = collect, 2 = legacy discarded clocks.
++inline int offline_cost_mode = 0;
++struct SimCostScope {
++  int slot;
++  uint64_t t0;
++  explicit SimCostScope(int s)
++      : slot(s), t0(offline_cost_mode != 0 ? sim_cost_clock() : 0) {}
++  ~SimCostScope() {
++    if (offline_cost_mode == 0) return;
++    const double seconds = (double)(sim_cost_clock() - t0) * 1e-9;
++    if (offline_cost_mode == 1) sim_cost_add(slot, seconds);
++  }
++};
++// New frame-split timers are collect-only, including when legacy clocks are selected.
++struct OfflineFrameCostScope {
++  int slot;
++  bool enabled;
++  uint64_t t0;
++  explicit OfflineFrameCostScope(int s)
++      : slot(s), enabled(offline_cost_mode == 1), t0(enabled ? sim_cost_clock() : 0) {}
++  ~OfflineFrameCostScope() {
++    if (enabled) sim_cost_add(slot, (double)(sim_cost_clock() - t0) * 1e-9);
++  }
++};
++#elif defined(MELEE_HEADLESS)
++// Native offline host has no cost collector (sim_cost_add is a stub).
++// Compile out both clock reads; keep the profiling-enabled desktop path below.
++struct SimCostScope { explicit SimCostScope(int) {} };
++#else
+ struct SimCostScope { int slot; uint64_t t0; explicit SimCostScope(int s) : slot(s), t0(sim_cost_clock()) {} ~SimCostScope() { sim_cost_add(slot, (double)(sim_cost_clock() - t0) * tsc_seconds); } };
++#endif
+ 
+ // ---- GX FIFO sink ----
+ void gx_write(uint32_t value, int bytes);  // write-gather pipe data

@@ -1681,3 +1681,435 @@ mapping uses full-EFB rasterization plus original clip-coordinate rejection in t
 shader; edge/sample equivalence with D3D needs comparison. No performance measurement or device
 loss/recreation validation; per-segment uploads/submissions and unbounded pipeline residency
 are provisional. Resource completion callbacks need the worker event loop to turn.
+
+
+## 2026-10-02 — WebGPU snapshot textures (`render/webgpu-textures`)
+
+Implemented in `wasm/render/gx_webgpu.cpp`: eight explicit texture/sampler bindings; immutable
+snapshot-only uploads; reuse of upstream CPU decoding for all eleven GX formats to RGBA8;
+per-level mip decoding/upload; D3D wrap/min/mag/mip/LOD mapping with signed shader bias;
+slot-0 MODULATE; retirement after submitted GPU work. No texture cache is introduced: every
+segment re-uploads, so image/TLUT changes invalidate naturally, at an unmeasured performance
+cost. Unsupported/malformed snapshots and inverted LOD clamps stop the backend instead of
+substituting guessed pixels. No simulation, native, Node, CI or submodule changes.
+
+Added 19 synthetic GPU pixel cases in `web/tests/spike/render.spec.ts`: all formats, RGBA8
+MODULATE, image/TLUT replacement with identical address/hash, forced mip, three wrap modes,
+and linear magnification. They use the existing worker `copyTextureToBuffer` readback and
+non-white expected colors; omitting texture sampling cannot satisfy them. CMPR is CPU
+decompressed; RGBA8 AR/GB planes and all tiled formats are repacked to linear RGBA8.
+
+Verification performed: source inspection against pinned upstream `gx_texture.cpp`,
+`texture_snapshot.h`, `TextureRef`, and `gx_d3d12.cpp:1613–1648`; `git diff --check`.
+**Not executed:** compilation, tests/CI, browser/GPU readback, preview, real-game captures,
+performance/memory measurements or the 2400-checkpoint parity run. Per task instructions,
+no local build, no CI chasing and no parity claim; parity belongs to the parent session.
+
+Known limits/next step: validate the draft in CI and on GPU, then add bias/minification/trilinear,
+rectangular mip, TLUT variants/index and CMPR transparency fixtures. Slot 0/raw UV0 MODULATE is
+a deliberate TEV subset; slots 1–7 await priority 3 shading. Texgen, lighting, EFB copy texture
+lookup, optional anisotropy/replacements, caching and device recreation remain open. Q10 in
+`docs/OPEN_QUESTIONS.md` records these boundaries. Deliver as a draft PR; stop without merge.
+
+**Landed by the parent session**, measured in the same Chromium harness: **35 passed, 1 skipped**
+(16.2s), the texture cases among them — RGBA8 MODULATE including alpha, image and TLUT replacement
+at an identical address/hash, mip 1 with LOD clamps, clamp/repeat/mirror repeat, and linear
+magnification across a tile boundary. The skipped one is still the canvas pixel (PR #47's gap).
+
+### 2026-10-02 — Access JWKS retrieval (`fix/access-jwks-fetch`)
+
+Changed Pages entry-point retrieval to plain `fetch(url)` and require the final response URL
+host to exactly match `ACCESS_TEAM_DOMAIN`, failing closed on missing/invalid URLs. HTTP
+failures and untrusted final URLs retain `access_jwks_unavailable`; thrown fetches now use
+`access_jwks_unreachable`. Configuration/invalid-JWKS diagnostics, generic token 403s and
+signature verification are unchanged. Updated fake responses with final URLs and added
+same-host path, foreign host, port mismatch, missing/invalid URL, 404/500 and thrown-fetch
+coverage. DEPLOY documents the runtime coverage gap and the required live verification.
+
+Verification: source review and `git diff --check` only. No local build, typecheck or tests,
+no CI outcome, preview publication, actual Cloudflare redirect behaviour or authenticated
+Access request verified. A real deployment and real login are the decisive remaining check;
+the mocked suite cannot establish runtime fetch-option support. No simulation, renderer,
+submodule or CI/guard changes. Delivered as a draft PR; no CI pursuit or merge.
+
+**Same option, second file — added by the parent session.** `functions/api/turn-credentials.ts` sent
+its upstream POST with `redirect: 'error'` too, so it failed in production the same way for the same
+reason, and its mocked test could not see it either. It now uses `redirect: 'manual'`: that upstream
+is not expected to redirect, so a redirect is **refused** rather than followed, and the existing
+`!upstream.ok` check maps it to 502 — no final-host check is needed where nothing is followed. Its
+test's expected request options were updated to match, and a repository-wide search confirms no
+other live occurrence of the option remains.
+
+### 2026-10-02 — Disabled decoder clocks and GX optimisation (`perf/decoder-cost-2`)
+
+Based on `471a96c`; scope is P2/P4 from the decoder cost analysis. Patch 0008 now
+checks `offline_cost_mode` before either scope clock read. Mode 1 retains both reads,
+nanosecond conversion, slots and accumulation; mode 2 retains the legacy discarded
+reads. The mode is selected before simulation starts. Native `MELEE_HEADLESS` without
+`MELEE_OFFLINE_COST` uses an empty scope, matching its existing no-op collector;
+the profiling-enabled desktop implementation stays intact. Actual timing values and
+profiling overhead have not been compared; unchanged accounting is not a measurement.
+
+Added GX files to `MELEE_HOT_SOURCES` one per commit, and extended the existing
+compile-command assertion to cover them. `-ffp-contract=off`, `-fno-fast-math`, the
+remaining sources and link optimisation settings are unchanged. No draw preparation,
+palette generation, DrawCall, validation or game-state changes were made.
+
+| Cumulative web configuration | Commit | Web WASM bytes |
+| --- | --- | --- |
+| Main baseline (operator supplied) | `471a96c` | 16,323,255 (not remeasured) |
+| P2 only; size comparison baseline | `f9abfb8` | Not measured |
+| Add `gx_core.cpp` at `-O2` | `417104e` | Not measured |
+| Also add `gx_texture.cpp` at `-O2` | `3d2fe87` | Not measured |
+| Also add `render_observer.cpp` at `-O2` | `c712fe6` | Not measured |
+
+**Size gate remains unresolved.** Local builds are forbidden and the operator explicitly
+requested stopping before CI. Build the above revisions in CI with identical inputs to
+measure each increment. If the module exceeds 20 MiB (20,971,520 bytes), remove `-O2`
+from the largest contributor and rebuild before accepting the change. No contributor
+has been identified or reverted without measurements. Cloudflare's 25 MiB limit is
+26,214,400 bytes; the baseline alone cannot establish safety of this draft.
+
+Verification performed: source review, `git diff --check`, and sequential application
+of all eight patches to temporary copies of the affected files from pinned upstream
+`3aab717`, without modifying the upstream checkout or compiling anything.
+**Not executed:** build, automated tests, CI dispatch/inspection, preview, module-size
+measurement, iPhone performance/p99, enabled-profiler comparison, or native/WASM
+2400-checkpoint parity. The required trace SHA-1 remains
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571`; the operator owns that check and this draft
+makes no parity claim. The mean <= 3 ms / p99 <= 6 ms target is unverified.
+Delivery is a draft PR only; no merge. PR-triggered workflows may start automatically;
+this session does not dispatch, monitor or claim their results.
+
+## 2026-10-02 — frame split, awaiting all execution checks
+
+Branch `perf/frame-split` starts at `1de335850e06ba84f5e0651b5f9be62de7ef6c83`,
+exactly `perf/decoder-cost-2` / PR #71 (unmerged). The worktree already contained
+this newly created, clean branch; no existing commits were replaced. Draft PR
+is based on `perf/decoder-cost-2`, so only this measurement change is in its diff.
+
+- Added instrumentation: `observer_game_ms` times constructor/destructor bodies of all seven game-side hook kinds, counting entries by kind; guest function time excluded.
+- Added instrumentation: `end_frame_ms` times the complete XFB completion block, including backend recycling and cleanup; **nested inside decoder time**, not outside it.
+- Added instrumentation: `watched_ram_block_writes` counts version increments per watched block touched, including bulk callers; no per-write timer.
+- Added instrumentation: `watched_ram_blocks` reports the per-retrace watched-block count with min/max/last summaries; not additive across retraces.
+- Accounting: seven exclusive phases sum to `sim_ms`; five partition identities are checked with unchanged tolerance, signed residuals preserved, old CSV rejected.
+- Observer switch: **not implemented** because readers exist, including offline GX statistics; evidence and precise measurement boundaries in `docs/PORT_CHANGES.md` §0009.
+- Verified by source inspection: same upstream pin and P2/O2 base; full patch series applies sequentially in an isolated Git index; `git diff --check` clean.
+- Not verified: C++/WASM compilation, TypeScript checks, newly extended unit tests, CI, preview, iPhone performance, disabled-mode overhead, or runtime partition values.
+- Not verified: 2400-checkpoint trace against `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; operator will execute it. No simulation-equivalence claim.
+- No new timings measured, no optimizations, no decoder algorithm changes, no game data added, no local builds/tests or CI dispatch. Commit uses `[skip ci]` to honor the requested stop before CI without editing workflow gates.
+
+Next: operator authorizes CI/build, runs the trace and iPhone measurement with
+`?decoder-cost`, and reviews residuals/overhead before any optimization. Same-build
+observer on/off comparison remains unavailable under the reader constraint.
+
+## 2026-10-02 — the decoder cost measured, and two cheap fixes that paid for it
+
+The phone measurement put the simulation at **12.51 ms** per in-match frame (iPhone 16 Pro,
+2400 frames, no canvas, no backend), against the declared cap of mean <= 3 ms / p99 <= 6 ms.
+The opt-in phase profiler (`?decoder-cost`, PR #69) then split the frame: draw recording
+0.61 ms, textures 0.45 ms, per-draw observer 0.09 ms, decoder work outside those 4.83 ms, and
+everything **outside** the decoder 9.90 ms. The profiler's own clock reads cost about 3.4 ms
+per frame (15.88 instrumented against 12.51 clean) — tens of thousands of clock reads per
+frame, because `SimCostScope` read the clock even with profiling off.
+
+Two changes followed (PR #71), both safe by construction and both verified before merge:
+
+- **P2** — the simulation-cost scope no longer reads the clock when profiling is off.
+- **P4** — `gx_core.cpp`, `gx_texture.cpp` and `render_observer.cpp` move to `-O2`.
+
+Measured on the same device, same test, clean run, commit `d624d06`: in-match mean **4.35 ms**
+(was 12.51), p99 **6.20 ms** (was 14.02), all-frame mean 2.74 ms (was 7.22), wall 26.8 s (was
+38.4 s). The module came out **smaller**: 15,229,664 bytes against 16,323,657 — `-Oz` was
+costing both speed and size on those three files.
+
+Verified, not claimed: the 2400-checkpoint trace is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`
+with the new module under Node against the operator's disc, 0 differing rows of 2401, and it
+stays identical with the frame-split instrumentation (PR #72) inside. CI was green on the exact
+merged commits.
+
+Remaining gap: the in-match mean is 45% above the 3 ms cap and the p99 3% above the 6 ms cap.
+PR #72 adds `observer_game_ms`, `end_frame_ms` and watched-RAM counters so the next phone run
+attributes the remainder; the observer switch was **not** implemented because readers of those
+values exist, including offline GX statistics (see `docs/PORT_CHANGES.md` §0009).
+
+The largest single item turned out to be **our own instrumentation**, not the renderer: the two
+"safe, small" changes beat any clever change to the drawing path by a wide margin. Measure
+first — the analysis that ranked draw recording and texture snapshots as the top suspects was
+wrong by an order of magnitude (together 7% of the frame).
+
+## 2026-10-02 — guest code baseline, no justified optimization
+
+Branch `perf/guest-code`, base `6dd96f4`. Python recompiler successfully ran locally
+on the verified external DOL with patches 0001–0009, offline and release, without
+compiling. External outputs: `/home/hermes/incoming/guest-code-baseline-{offline,release}`.
+Full reader audit, reproduction, aggregates and next measurement:
+[Guest code audit](GUEST_CODE_AUDIT.md). Added aggregate-only counter
+`scripts/analysis/count_guest_code.py`.
+
+Offline/release respectively: 137/144 TUs, 19,827/20,076 functions,
+962,305/1,019,597 instruction-comment sites, 19,713/19,962 function-entry sites,
+56,348,251/62,764,846 numbered C++ TU bytes. **Zero per-instruction PC stores**;
+`last_pc` is assigned once per executed function entry by inline `enter()`.
+**Zero local-block returns to a central dispatcher**: local gotos and C++ calls
+already connect the code. Explicit C++ returns: 22,317/23,623, not dispatcher exits.
+Dynamic entry counts per frame remain unknown; no estimate invented from static counts.
+
+No optimization implemented: dropping entry instrumentation would change diagnostic
+history/hooks/watchdog, and backedge polling delivers simulation events. The proposed
+DolRecomp transformations do not apply to the pinned emitter. Next: per-frame delta
+of existing `g_enter_count` plus symbolized guest/helper profile on the same workload,
+then one justified exact-semantics optimization and clean iPhone A/B.
+
+Not verified: 2400-checkpoint SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`
+(operator owns execution), phone mean/p99, module size, preview, or native/WASM
+compilation of the generated outputs. No local build or test suite was run.
+Delivery is a draft analysis PR, no merge; CI status reported with delivery.
+
+## 2026-10-02 — WebGPU device loss: instrument before changing lifetime
+
+Branch `fix/webgpu-device-loss`, base `df62fa2` (main). The branch already existed
+at exactly this base, clean, with no implementation commits when this session began.
+Phone evidence supplied by operator: 81 copies, createSampler InvalidStateError,
+then createBuffer failure. Device-loss reason and resource counts remain unknown.
+
+`gx_webgpu.cpp` already retires textures/buffers, but via promise callbacks after
+submission; these cannot execute during synchronous `callMain`. This is a backlog
+hypothesis, not proof of the phone's cause. Pipelines are already cached. Samplers,
+bind groups and pipelines have no destroy API; cumulative creation is not live allocation.
+
+Added device-wide API counts (attempted/returned/thrown, explicit destroy calls,
+undestroyed and peak for textures/buffers), immutable snapshots at first failure,
+structured device.lost reason/message and uncaptured error type/message/timestamp.
+Observers now precede the first GPU probe. Report waits a minimum 50 ms after readback
+for queued events; null deviceLoss means not observed within that window, not healthy.
+No resource lifetimes changed yet. Synthetic CI burst: 128 repetitions, 384 draws,
+expected 3072 samplers and peak 3076 textures before retirement callbacks. Pending CI.
+
+The canvas readback skip remains: documented Chromium failure on first canvas commit
+(run 36898914442) is not proven identical to the phone's failure after 81 copies.
+No local builds/tests, no disc data, no simulation changes. NOT verified: the operator's
+2400-checkpoint trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571`, phone device-loss
+reason, 2400-frame canvas survival, preview or GPU memory. Draft PR only, no merge.
+
+### Measurement and targeted lifetime correction
+
+Baseline commit `99f7665`, Actions run [37025783561](https://github.com/isDemetrio/melee-web/actions/runs/37025783561):
+36 passed, 1 skipped. Real WebGPU backend, 128 repetitions / 384 textured draws,
+one synchronous worker task, offscreen texture, correct pixel `[128,64,32,192]`.
+
+| Type | Created | Explicitly destroyed at report | Peak undestroyed |
+| --- | ---: | ---: | ---: |
+| sampler | 3072 | unavailable (no API) | unavailable |
+| texture | 3076 | 3072 | 3076 |
+| buffer | 1157 | 1152 | 1157 |
+| bind group | 384 | unavailable (no API) | unavailable |
+| pipeline | 1 | unavailable (no API) | unavailable |
+
+All transient texture/buffer resources accumulate during the task and retirement runs
+only afterward. This disproves "never released", but confirms an unbounded-with-workload
+retirement backlog. No device loss or validation errors occurred in this baseline.
+These are API lifetime counts, **not GPU allocation bytes or a measured iPhone failure**.
+
+Correction: destroy transient textures/buffers immediately after submission (and on
+failed draws), letting the implementation retire already submitted work, as required by
+[WebGPU buffer destruction](https://www.w3.org/TR/webgpu/#buffer-destruction) and
+[texture destruction](https://www.w3.org/TR/webgpu/#texture-destruction). Also explicitly
+destroy probe/readback buffers (five remained undestroyed in the baseline report).
+No texture/sampler cache added: sampler creation counts do not establish live allocation.
+Pipeline cache unchanged. No simulation, scheduling or Asyncify changes.
+
+Regression coverage now repeats both 384 and 2400 textured draws in one task and requires
+correct readback, zero errors/loss, peak 12 textures / 3 buffers, final 4 persistent
+textures / 0 buffers. Synthetic 2400 XFB copies are not 2400 game frames or actual screen
+presentations. Added unit coverage for deferred loss/uncaptured errors and immutable
+first-failure counters. Final CI pending. Original phone loss reason remains unknown.
+
+## 2026-10-02 — WebGPU device survival: bounded sampler cache
+
+Branch `fix/gpu-device-survival`, base `6f3ff5f` (main, PR #77 merged). Operator evidence, on
+`7296478` (**before** PR #77): `?canvas`, 2400 frames, iPhone 16 Pro, `presented: 81`, first
+failure `createSampler` (InvalidStateError), then readback `createBuffer`; simulation trace correct.
+
+What the code shows on the base. The promise-callback retirement that fits the operator's
+description was already replaced by PR #77's second commit (`6971bc9`): transient textures and
+buffers are destroyed synchronously after `queue.submit`, and CI asserts peak 12 textures / 3
+buffers through 2400 synchronous textured draws. **The phone has not run a build with that.**
+What still grows with every draw and has no `destroy()`: 8 samplers (unused slots included),
+1 bind group, 10 texture views, encoders. Samplers are the measured failing call.
+
+Options, judged on the code:
+1. Synchronous release: already done for every destroyable type (`6971bc9`). Samplers, bind
+   groups and views have no release API.
+2. Yield to the event loop every N frames: the simulation is one `callMain`; Asyncify and
+   `emscripten_sleep` are forbidden in the simulation path (`AGENT_RULES.md`). It needs the frame
+   loop to return to JavaScript — a simulation-path restructure, not the smallest change.
+3. Reuse: the sampler descriptor is a pure function of `mode0 & 0xFF` and `mode1 & 0xFFFF`.
+
+Chosen: 3, samplers only. `gxw_texture` keeps a `Map` keyed on those bits, max 256 entries,
+oldest dropped past the limit. Creation errors still go to `recordFailure`/`gpu.failure`, nothing
+cached on a throw. Bind groups cannot be cached while slot textures are recreated per draw.
+`resources.sampler.created` now counts cache misses. Tests: the 384/2400-draw resource tests
+expect **1** sampler instead of `copies * 8`; new fixture `geometry=38` (clamp/repeat/clamp in one
+frame) proves a hit never crosses wrap modes (pixel `[128,64,32,192]`, 2 samplers).
+
+The skipped canvas-pixel test stays skipped: CI Chromium loses the device at the first canvas
+commit with `copies=2` and no geometry — zero draws, zero samplers, zero transient textures — so
+no resource-lifetime change can reach it (PROGRESS, runs `36896537472`/`36898914442`).
+
+Recommended next, not done: yield every N frames via a re-entrant frame step (not Asyncify).
+It is also what real on-screen presentation needs: an OffscreenCanvas frame is committed only
+when the worker's task ends, so during `callMain` every XFB copy lands in the same
+`getCurrentTexture()` and `presented` counts copies, not screen frames.
+
+NOT verified: the 2400-checkpoint trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` (operator
+runs it; the change is renderer-only), phone survival, phone device-loss reason, per-frame
+cost on the phone (expected not to rise: a Map lookup replaces 8 `createSampler` per draw,
+unmeasured), whether samplers or the pre-#77 textures caused the 81-copy loss. No local
+build or test run; CI is the only build.
+
+## 2026-10-02 — WebGPU resource audit: nothing per draw outlives its draw without a bound
+
+Branch `fix/gpu-resource-audit`, base `d45a1fd` (main, PR #78 merged). Operator evidence on
+`d45a1fd`, `?canvas`, 2400 frames, iPhone 16 Pro: sampler 3 created (was 93,544); texture
+21,901 created / 21,898 destroyed; buffer 67,548 / 67,548; **bindGroup 22,514, no destroy**;
+pipeline 6; `presented: 124` (was 81); first failure `createBindGroup` at 6755 ms; loss
+"destroyed" at 35811 ms is our teardown; one 1013 ms frame; trace `c79c53b9…` identical.
+
+Inventory of every GPU object the backend creates (`wasm/render/gx_webgpu.cpp`; `gpu.ts` only
+outside `callMain`):
+
+| Resource | destroy()? | Before | Now |
+| --- | --- | --- | --- |
+| EFB, depth, white textures; XFB texture (CI) | yes | once, persistent | unchanged |
+| Bind group layout, pipeline layout | no | once | unchanged |
+| Sampler | no | cache, 256, key `mode0&0xFF`, `mode1&0xFFFF` (#78) | unchanged |
+| Shader module + render pipeline | no | per pipeline-key miss; key held all of `components` and `zmode` | key = the bits the descriptor reads (`components & 0x6400`, `zmode & 31`): at most 2·4·32·8 = 2048 |
+| Slot texture | yes, sync after submit | one per used slot per draw | pool keyed `(slot, w, h, levels)`, LRU, ≤128 entries and ≤32 MiB; evicted ones `destroy()`ed synchronously |
+| Slot texture view | no | 8 per draw | one per pool texture, white's once |
+| EFB / depth view | no | 2 per draw, 2 per clear | once, in `gxw_open` |
+| Uniform buffer | yes, sync | one per draw | one, persistent |
+| Vertex / index buffer | yes, sync | two per draw | two, persistent, grown by doubling, old one `destroy()`ed |
+| Bind group | no | **one per draw** | LRU cache, 256, key = the 8 slots' pool ids + sampler keys |
+| Command encoder, render pass, command buffer | no (single-use by API) | per draw / copy | unchanged: consumed by `submit`, no reuse API |
+| Probe / readback buffers (`gpu.ts`) | yes, in `finally` after `await` | before/after `callMain` only | unchanged |
+
+No `destroy()` inside a promise callback runs during the simulation: the only awaited ones are
+the probes and the readback, which are outside `callMain`.
+
+Why the pool. A bind group names its resources; while each draw created its own textures and
+uniform buffer, every bind group was single-use and could not be cached. Pool textures are
+rewritten on every use (all mip levels, so no stale pixels; no hash or address is trusted).
+Correctness rests on queue ordering: a `writeTexture`/`writeBuffer` issued after a `submit` does
+not reach the work already submitted. CI fixtures that fail without it: `geometry=1` (three
+layers in one vertex buffer), `31`/`32` (changed image/TLUT in one pooled texture), new
+`geometry=6` (vertex/index buffers grow between submitted draws). The 384/2400-draw tests now
+expect constant counts: 1 bind group, 12 textures (0 destroyed), 8 buffers (3 persistent).
+A Node mock of the EM_JS bodies (not committed) ran 2400 identical draws (1 bind group) and 5000
+draws over 300 shapes (pool held at 128, cache at 256, no destroyed texture ever bound).
+
+Yielding to the event loop every N frames — **not done**. The simulation is
+`ppc::call(..., 0x8000522C)` (`native/headless_main.cpp:99`), the game's own `__start`, which
+never returns; `retrace()` (`native/headless_host.cpp:616`) runs inside the guest's call stack and
+leaves only by throwing `ExitRequested`. Returning to JavaScript between frames means suspending
+that stack: Asyncify (forbidden, `AGENT_RULES.md`), JSPI (not in Safari), or running the guest on
+another thread. None is a renderer change, and none can be shown trace-preserving without a build
+here. The previous entry's "re-entrant frame step" underestimated this. After this change the
+backend no longer depends on GC or callbacks for anything with a release path.
+
+NOT verified: the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` (the change is renderer-only;
+the operator runs it); phone survival, `presented`, the 1013 ms pause; whether 256 bind groups /
+128 pool textures cover a real match without thrashing (the phone report's `bindGroup.created`
+will say: near the draw count means too small); the eviction path in a real browser (mock only);
+whether WebKit stalls on `writeBuffer`/`writeTexture` into resources in flight. A bind group or
+sampler that fails validation is cached and reused: errors arrive as `uncapturederror` events,
+which cannot run during `callMain`, so the first one is still what the report shows. No local
+build; CI is the only build.
+
+## 2026-10-02 — the #79 regression is upload volume, not pool thrash; textures cached by snapshot; a run heartbeat
+
+Branch `fix/gpu-pool-thrash`, base `9b08acf` (main, PR #79 merged), PR #80. Operator evidence on
+`9b08acf`, `?canvas`, 2400 frames, iPhone 16 Pro: the log stops at `scene: major 02 minor 02
+(frame 1395)`, no report, minutes without progress ("o si blocca o ci mette una cifra"); on
+`d45a1fd` the same run reached 2400.
+
+**How it was measured.** CI built the web core of `9b08acf` as the private `melee-spike-dist`
+artifact (`phase0-build.yml`, dispatch with `upload_spike`, run 37037610934). On the VPS, outside
+the repository (`~/incoming/phase0/gpu-census/census.mjs`), that core ran under Node against the
+operator's disc: a WORKERFS polyfill, and a mock WebGPU device that counts every call, records the
+eight slots of every submitted draw and fingerprints every level-0 `writeTexture`. It is the real
+game and the real `gx_webgpu.cpp` JavaScript; only the GPU is fake, so these are counts and CPU
+costs, **not iPhone GPU timings**.
+
+**The thrash hypothesis is refuted.** 2400 frames, 2,021,706 draws: the `(slot, w, h, levels)` pool
+created **122 textures and evicted none** (peak 118 of 128, 6.8 MB); **157 bind groups** in the
+whole run; no destroyed texture was ever bound or written. Pipelines: 19.
+
+**What changed between d45a1fd and 9b08acf is how far the backend gets.** On `d45a1fd` the backend
+died at the first `createBindGroup` failure (22,514 draws, ~124 copies, at 6.7 s) and
+`gx_set_backend(nullptr)` made the rest of the run headless: the match was never rendered. #79
+removed that failure, so the backend now reaches the match, where the draw path is far heavier:
+
+| per frame (census, 9b08acf) | before scene 02:02 (frames 1–1394) | from frame 1395 (match) |
+| --- | ---: | ---: |
+| draws (one `submit` each) | 257 | **1,880** |
+| `writeTexture` bytes | 2.85 MB | **117 MB** |
+| `writeBuffer` bytes | 0.84 MB | 6.7 MB |
+| Node ms, mock GPU | 34 | **276** |
+
+Every draw decoded and rewrote every texture it binds, though a match frame uses only 140–154
+distinct texture contents (≤6.2 MiB). The same core under Node: 80 s without the backend, 293 s
+with it and no GPU at all. On the phone those 117 MB per frame also cross Safari's GPU-process
+boundary. That is consistent with "ci mette una cifra"; whether the phone was slow or truly
+stuck cannot be told from the evidence: the scene line is printed only at scene changes and the
+next one is after frame 2400. WebKit's current `Queue.mm` does not wait on in-flight resources in
+`writeBuffer`/`writeTexture` (it stages and blits); the iOS 18.7 WebKit was not checked.
+
+**Fix.** Textures are cached by content. `upload_textures` gives each immutable `TextureSnapshot`
+(with format, TLUT format, size, levels) an id and pins the snapshot while its texture is pooled;
+`gxw_bind` keys the pool by that id, so a hit is neither decoded nor written. Snapshot identity is
+sound because the decoder's `TextureSnapshotCache` returns the same object for the same bytes and
+a new one when bytes change (memcmp, not hash/address). Eviction queues the id, and C++ forgets
+the snapshot right after the bind that evicted it. Pool limits 1024 textures / 64 MiB; bind group
+cache 256 → 1024 (817 distinct keys in the run; 256 missed 2383 times, 1024 only the 817
+compulsory ones). The selftest fixture now returns one snapshot per distinct fixture texture, as
+the decoder does.
+
+Measured with the PR's core (artifact run 37041002424), same Node harness:
+
+| | 9b08acf | this PR |
+| --- | ---: | ---: |
+| Node wall, 2400 frames (headless: 80 s) | 293 s | **109 s** |
+| match frames, Node ms/frame | 285 | **73** |
+| match frames, `writeTexture` per frame | 117 MB | **0.019 MB** |
+| texture levels written, whole run | one set per draw | 1,818 |
+| textures created / destroyed | 122 / 0 | 1,776 / 748 |
+| bind groups created | 157 | 3,716 |
+| trace SHA-1 (Node, mock GPU) | `c79c53b9…` | `c79c53b9…` |
+
+1,776 textures, not 481: the decoder drops a snapshot unused for 3 frames, so content that returns
+later is a new snapshot. In the match about 0.85 new contents per frame (an animated texture),
+each evicting an old menu texture once the pool is full: steady, not thrash.
+
+**Heartbeat.** `retrace()` calls `host::retrace_heartbeat` before the sim-time resume stamp (null
+by default; set only by `wasm/core/heartbeat.cpp` in the web core; reads no guest state), and every
+`gxw_draw` beats too. The worker posts at most one beat per 500 ms (frame, time, draws, copies,
+pool, textures/bind groups created, backend failure). The page shows `heartbeat: frame N …`, says
+`STALLED IN FRAME N+1` when beats arrive but the frame does not move, `SILENT` when nothing
+arrives, keeps the record in `localStorage` (a reload shows where an unfinished run stopped),
+offers a partial report, and puts the beat history in the result JSON. Under Node the hook was
+called 2400 times, in order.
+
+CI on PR #80: all checks green; the new browser test evicts past the pool limit in Chromium
+(1200 contents, 176 destroyed, correct pixel, no validation error); 2400 identical textured draws
+write the texture once.
+
+**NOT verified:** the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` on the phone (the operator
+runs it; only the Node run above matched); anything on the iPhone: whether the match now runs at
+an acceptable speed, whether the 9b08acf run was stuck or slow, real GPU time of ~1,880
+`submit`s and ~5,600 `writeBuffer`s per frame (the next suspect if the phone is still slow:
+one encoder per frame needs per-draw uniform/vertex offsets), and whether ~1 new bind group per
+match frame (dropped from the cache to GC, as samplers were) fails again in a long session. A
+census fingerprint samples bytes, so "481 contents" is an estimate; the snapshot counts are
+exact. Not reverted: the diagnosis exonerates the pool, and reverting it would only bring back
+the `createBindGroup` failure that turned rendering off before the match.

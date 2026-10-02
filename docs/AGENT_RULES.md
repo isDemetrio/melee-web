@@ -75,6 +75,32 @@ the spending limit is zero. The cost of waste is therefore stalled work, not mon
 - **One run per push, not two.** A branch with an open pull request used to fire both the `push`
   and the `pull_request` events, so every push cost two full CI runs. `ci.yml` now triggers on
   pull requests and on pushes to `main` only.
+- **`[skip ci]` in a delivery commit suppresses the pull-request checks for good.** The event never
+  fires for that head commit, and neither a later empty commit nor closing and reopening the pull
+  request brings the checks back — so the branch-protection gate blocks the merge on a commit whose
+  CI is in fact green. PR #72 hit this: its delivery commit carried `[skip ci]`, the checks never
+  appeared, and `ci.yml` had to be dispatched on the branch (`gh workflow run ci.yml --ref
+  perf/frame-split`, run `37019777761`, all four jobs green) before the merge, which then needed
+  `--admin` because GitHub had no check run to look at. Tell the delivering agent to **stop before
+  the CI without skipping it**; "stop before CI" was read as "skip CI", which is the opposite.
+- **If pull-request runs stop appearing, prove the commit green by dispatch and merge with `--admin`.**
+  Between 13:47 and 16:54 on 2026-10-02 no pull-request event produced a run for **any** branch,
+  while pushes to `main` and manual dispatches worked normally. GitHub's public status page reported
+  no incident, the workflow states, triggers and repository permissions were all correct, and the
+  minutes allowance cannot be the cause — precisely because the manual dispatches ran. Branch
+  protection requires three of `ci.yml`'s jobs, so with no check run the merge is **blocked on a
+  commit whose CI is green**: PR #72 and #73 were merged with `--admin` after
+  `gh workflow run ci.yml --ref <branch>` proved the commit green (runs `37019777761`, `37021908717`).
+  The events returned on their own at 16:54. **Remedy if it recurs**: add `push: branches: ['**']`
+  to `ci.yml`. It was tested in PR #74 and it works, but while pull-request events are healthy it
+  turns every push into two runs — the duplication the trigger comment warns about — so revert it
+  once they report again.
+- **A `type: boolean` workflow input needs a typed value, not `-f`.** `gh workflow run -f
+  upload_module=true` sends the string `"true"`, the step's `if:` sees it as false, and the artifact
+  upload is **skipped in silence** — the run still reports success and has no artifacts (run
+  `37015365284`). Use the API with a typed field: `gh api -X POST
+  .../actions/workflows/phase0-build.yml/dispatches -F ref=<branch> -F
+  'inputs[upload_module]=true'` (run `37016378716`, upload succeeded).
 
 ## Secrets
 

@@ -1,7 +1,10 @@
+import type { DecoderCostMode } from './decoder-cost.js';
 import { compareTraces, simTimeStats } from './compare';
 import { DiscCache } from './disc-cache.js';
 import { chooseDisc, type DiscChoice } from './disc-source.js';
 import { opfsDiscStoreFactory } from './opfs-store.js';
+import { describeHeartbeat, emptyHeartbeat, LOG_TAIL, loadHeartbeat, receiveBeat, storeHeartbeat, STORAGE_KEY,
+  type HeartbeatState, type StoredHeartbeat } from './heartbeat.js';
 
 const element = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const status = element('status');
@@ -12,9 +15,36 @@ const deleteDisc = element<HTMLButtonElement>('delete-disc');
 const discStatus = element('disc-status');
 const discProgress = element('disc-progress');
 const parameters = new URLSearchParams(location.search);
+const decoderCost: DecoderCostMode = parameters.get('decoder-cost') === 'legacy' ? 'legacy'
+  : parameters.has('decoder-cost') ? 'profile' : 'off';
 const frames = Number(parameters.get('frames') ?? 2400);
 const screen = element('screen');
 const renderOut = element('render');
+const heartbeatOut = element('heartbeat');
+const partial = element<HTMLButtonElement>('partial');
+
+/** Save `value` as a JSON file now, without keeping a link around. */
+function saveJson(value: unknown, name: string): void {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url; link.download = name; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * What a run that never finished left behind (heartbeat.ts): shown on load, and saveable as the
+ * partial report, until the next run replaces it.
+ */
+const previous = loadHeartbeat(localStorage);
+if (typeof previous === 'string') heartbeatOut.textContent = previous;
+else if (previous) {
+  heartbeatOut.textContent = `previous run (${previous.startedAt}, ${previous.frames} frames${previous.canvas ? ', canvas' : ''}) ` +
+    `never reported: last heartbeat frame ${previous.last?.frame ?? 'none'} at ${previous.receivedAt ?? 'never'}` +
+    (previous.last?.render ? `, draws ${previous.last.render.draws}` : '') + `; last log line: ${previous.logTail.at(-1) ?? 'none'}`;
+  partial.hidden = false;
+  partial.onclick = () => saveJson({ schema: 'melee-spike-partial/1', unfinished: previous },
+    `spike-unfinished-${previous.startedAt.replaceAll(':', '-')}.json`);
+}
 
 /**
  * A fresh canvas for one worker, or nothing. `?canvas` hands a run's worker an OffscreenCanvas and
@@ -55,7 +85,7 @@ if (selftestColour !== null) {
     worker.terminate();
     renderOut.textContent = JSON.stringify({ presented: data.presented, sentinel: data.sentinel, render: data.render });
   };
-  const selftest = { argb, copies, geometry: Number(parameters.get('geometry') ?? 0), sampleX: Number(parameters.get('sample-x') ?? 320), target: parameters.has('nocanvas') ? undefined : target };
+  const selftest = { argb, copies, repeats: Number(parameters.get('repeats') ?? 1), geometry: Number(parameters.get('geometry') ?? 0), sampleX: Number(parameters.get('sample-x') ?? 320), target: parameters.has('nocanvas') ? undefined : target };
   worker.postMessage({ selftest, canvas }, canvas ? [canvas] : []);
 }
 /**
@@ -188,17 +218,45 @@ run.onclick = async () => {
   status.textContent = 'running…';
   /** From the worker's start to the core being callable: reported by worker.ts. */
   let coreLoadMs: number | null = null;
-  const stop = () => { worker.terminate(); run.disabled = false; };
+  let coreCommit: string | null = null;
+  // The heartbeat: kept here, shown every second, persisted on every beat so a reload still has it.
+  let heartbeat: HeartbeatState = emptyHeartbeat();
+  const logLines: string[] = [];
+  const startedAt = new Date().toISOString();
+  const stored = (): StoredHeartbeat => ({ schema: 'melee-spike-heartbeat/1', startedAt, frames, canvas: canvas !== undefined,
+    core: coreCommit, last: heartbeat.last, receivedAt: heartbeat.receivedAt === null ? null : new Date().toISOString(),
+    logTail: logLines.slice(-LOG_TAIL) });
+  const persist = () => {
+    const error = storeHeartbeat(localStorage, stored());
+    if (error && !logLines.includes(error)) { logLines.push(error); element('log').textContent += `${error}\n`; }
+  };
+  persist();
+  const shown = setInterval(() => { heartbeatOut.textContent = describeHeartbeat(heartbeat, performance.now()); }, 1000);
+  partial.hidden = false;
+  partial.onclick = () => saveJson({ schema: 'melee-spike-partial/1', created: new Date().toISOString(), frames,
+    user_agent: navigator.userAgent, core_commit: coreCommit, heartbeat_line: describeHeartbeat(heartbeat, performance.now()),
+    heartbeat, log: logLines }, `spike-partial-${new Date().toISOString().replaceAll(':', '-')}.json`);
+  /** The run ended, one way or the other: the stored record is no longer an unfinished run. */
+  const ended = () => {
+    clearInterval(shown);
+    heartbeatOut.textContent = describeHeartbeat(heartbeat, performance.now());
+    partial.hidden = true;
+    localStorage.removeItem(STORAGE_KEY);
+  };
+  const stop = () => { worker.terminate(); run.disabled = false; ended(); };
   worker.onerror = event => { status.textContent = `error: ${event.message}`; stop(); };
   worker.onmessage = async ({ data }) => {
-    if (data.type === 'log') element('log').textContent += `${data.line}\n`;
+    if (data.type === 'log') { element('log').textContent += `${data.line}\n`; logLines.push(data.line); persist(); }
+    if (data.type === 'beat') { heartbeat = receiveBeat(heartbeat, data.beat, performance.now()); persist(); }
     if (data.type === 'core') {
+      coreCommit = data.commit;
       element('core').textContent = `core loaded: ${data.commit} ${data.opt}`;
       coreLoadMs = typeof data.coreLoadMs === 'number' ? data.coreLoadMs : null;
     }
     if (data.type === 'error') { status.textContent = `error: ${data.message}`; stop(); }
     if (data.type !== 'done') return;
     worker.terminate();
+    ended();
     status.textContent = `exit ${data.exitCode}`;
     if (typeof data.coreLoadMs === 'number') coreLoadMs = data.coreLoadMs;
     let statsAll = null, statsInMatch = null, comparison = null;
@@ -208,7 +266,8 @@ run.onclick = async () => {
       try { statsAll = simTimeStats(data.simTimes, false); } catch (error) { errors.push(String(error)); }
       try { statsInMatch = simTimeStats(data.simTimes, true); } catch (error) { errors.push(String(error)); }
     }
-    element('stats').textContent = JSON.stringify({ all: statsAll, in_match: statsInMatch, errors }, null, 2);
+    element('stats').textContent = JSON.stringify({ all: statsAll, in_match: statsInMatch, errors,
+      decoder_cost: data.decoderCost ? { ...data.decoderCost, csv: undefined } : undefined }, null, 2);
     if (reference) {
       try {
         comparison = compareTraces(await reference.text(), data.trace);
@@ -223,7 +282,10 @@ run.onclick = async () => {
       timer_resolution_ms: data.timerResolutionMs, frames, iso_bytes: file.size,
       disc_source: discSource, storage_persisted: storagePersisted, core_load_ms: coreLoadMs,
       exit_code: data.exitCode, final_scene: data.finalScene, wall_ms: data.wallMs, trace_csv: data.trace,
+      decoder_cost: data.decoderCost,
       sim_times_csv: data.simTimes, stats_all: statsAll, stats_in_match: statsInMatch, comparison,
+      // The beats as the page received them: frame against worker time, to read a slowdown from.
+      heartbeat: { beats: heartbeat.beats, last: heartbeat.last, history: heartbeat.history },
       // Only a ?canvas run has a renderer to report on; a headless result keeps its old shape.
       ...(data.render ? { render: data.render } : {}) };
     if (data.render) renderOut.textContent = JSON.stringify(data.render, null, 2);
@@ -233,5 +295,5 @@ run.onclick = async () => {
     download.hidden = false;
     run.disabled = false;
   };
-  worker.postMessage({ iso: file, frames, canvas }, canvas ? [canvas] : []);
+  worker.postMessage({ iso: file, frames, canvas, decoderCost }, canvas ? [canvas] : []);
 };

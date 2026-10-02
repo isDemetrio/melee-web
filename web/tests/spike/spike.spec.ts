@@ -144,6 +144,21 @@ test('web core reads a WORKERFS File and rejects a synthetic disc', async ({ pag
   await expect(page.locator('#log')).toContainText('FATAL: cannot read full Melee DOL');
   expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(true);
   await expect(page.locator('#download')).toBeVisible();
+  // The run ended before its first retrace: no beat, and nothing left behind as an unfinished run.
+  await expect(page.locator('#heartbeat')).toHaveText('heartbeat: none yet');
+  expect(await page.evaluate(() => localStorage.getItem('melee-spike-heartbeat'))).toBeNull();
+});
+
+test('a run that never reported is shown on the next load', async ({ page }) => {
+  await page.goto('/spike.html');
+  await page.evaluate(() => localStorage.setItem('melee-spike-heartbeat', JSON.stringify({
+    schema: 'melee-spike-heartbeat/1', startedAt: '2026-10-02T17:00:00.000Z', frames: 2400, canvas: true, core: 'abc',
+    last: { frame: 1395, frameAtMs: 31000, atMs: 31000, source: 'retrace', render: null },
+    receivedAt: '2026-10-02T17:00:31.000Z', logTail: ['scene: major 02 minor 02 (frame 1395)'] })));
+  await page.reload();
+  await expect(page.locator('#heartbeat')).toContainText('never reported: last heartbeat frame 1395');
+  await expect(page.locator('#heartbeat')).toContainText('scene: major 02 minor 02 (frame 1395)');
+  await expect(page.locator('#partial')).toBeVisible();
 });
 
 test('the download button fills OPFS piece by piece, and a complete cache is not downloaded again', async ({ page }) => {

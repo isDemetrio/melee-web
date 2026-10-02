@@ -32,6 +32,7 @@ file(WRITE "${CMAKE_BINARY_DIR}/melee_opt.txt" "${MELEE_OPT}")
 target_compile_options(core_options INTERFACE ${MELEE_OPT} -g0 -ffp-contract=off -fno-fast-math)
 target_compile_definitions(core_options INTERFACE _FILE_OFFSET_BITS=64 MELEE_SINGLE_THREAD=1)
 if(EMSCRIPTEN)
+  target_compile_definitions(core_options INTERFACE MELEE_OFFLINE_COST=1)
   target_compile_options(core_options INTERFACE -fwasm-exceptions)
   target_link_options(core_options INTERFACE ${MELEE_OPT} -g0 -fwasm-exceptions -ffp-contract=off -fno-fast-math
     -sERROR_ON_UNDEFINED_SYMBOLS=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB
@@ -61,14 +62,18 @@ if(EMSCRIPTEN)
   # interpreter fallback are the likeliest hot translation units in the simulation boundary, and
   # the shipped executables are built from THIS target: runtime_core above is a compile gate and
   # contributes no shipped byte, so a flag changed there would move nothing that runs. Only these
-  # two files move to -O2; the rest of the boundary, the generated guest code and the final link
+  # listed hot files move to -O2; the rest of the boundary, the generated guest code and the final link
   # stay at ${MELEE_OPT}, which bounds the size cost to them.
   #
   # A source property is appended after the target's own and interface options, so -O2 is the last
-  # -O flag in these two compile commands and wins. That order is an assumption about CMake, and if
+  # -O flag in these compile commands and wins. That order is an assumption about CMake, and if
   # it ever stops holding the experiment would silently measure nothing, so the workflow asserts it
   # against the real compile commands (scripts/phase0/assert_hot_opt.sh).
-  set(MELEE_HOT_SOURCES "${PORT}/runtime/ppc/ppc_runtime.cpp" "${PORT}/runtime/ppc/interp.cpp")
+  set(MELEE_HOT_SOURCES
+    "${PORT}/runtime/ppc/ppc_runtime.cpp" "${PORT}/runtime/ppc/interp.cpp"
+    "${PORT}/runtime/gx/gx_core.cpp"
+    "${PORT}/runtime/gx/gx_texture.cpp"
+    "${PORT}/runtime/gx/render_observer.cpp")
   set_source_files_properties(${MELEE_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
   foreach(platform IN ITEMS node web)
     add_executable(melee_core_${platform} $<TARGET_OBJECTS:offline_core>)
@@ -79,6 +84,8 @@ if(EMSCRIPTEN)
   # The WebGPU backend exists only in the browser module: Node has no canvas, and the native
   # reference never attaches a backend (native/headless.h, gx_set_backend).
   target_sources(melee_core_web PRIVATE "${REPO}/wasm/render/gx_webgpu.cpp")
+  # The page's heartbeat (web/src/spike/heartbeat.ts): Node runs have no page to tell.
+  target_sources(melee_core_web PRIVATE "${REPO}/wasm/core/heartbeat.cpp")
   target_link_options(melee_core_web PRIVATE -sENVIRONMENT=web,worker -sFORCE_FILESYSTEM=1
     -sMODULARIZE=1 -sEXPORT_NAME=createMeleeCore -sINVOKE_RUN=0 -sEXPORT_ES6=1 -lworkerfs.js
     "-sEXPORTED_RUNTIME_METHODS=['FS','callMain']")

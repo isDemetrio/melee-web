@@ -8,6 +8,9 @@
 #include "gecko_data.h"
 #include "wasm/compat/sha1.h"
 #include <chrono>
+#ifdef MELEE_OFFLINE_COST
+#include <emscripten/emscripten.h>
+#endif
 #include <mutex>
 #include <cstdarg>
 #include <cstdio>
@@ -60,7 +63,65 @@ void log_flush() { fflush(stderr); }
 }
 // Cost accounting is diagnostic only; replace Windows calibrated TSC profiling.
 const double tsc_seconds = 0;
+#ifdef MELEE_OFFLINE_COST
+static double g_cost_seconds[SIM_COST_COUNT]{};
+static uint64_t g_cost_calls[SIM_COST_COUNT]{};
+static FILE* g_decoder_cost = nullptr;
+static void reset_decoder_cost() {
+  std::memset(g_cost_seconds, 0, sizeof g_cost_seconds);
+  std::memset(g_cost_calls, 0, sizeof g_cost_calls);
+  ppc::offline_watched_block_writes = 0;
+}
+void sim_cost_add(int slot, double seconds) {
+  if (slot >= 0 && slot < SIM_COST_COUNT) {
+    g_cost_seconds[slot] += seconds;
+    ++g_cost_calls[slot];
+  }
+}
+// Called once by the spike worker, after /work exists and before callMain.
+extern "C" EMSCRIPTEN_KEEPALIVE int melee_decoder_cost(int mode) {
+  if (mode < 0 || mode > 2 || g_decoder_cost || g_retraces) return 0;
+  if (mode == 1) {
+    g_decoder_cost = std::fopen("/work/decoder_cost.csv", "w");
+    if (!g_decoder_cost) return 0;
+    std::fputs("retrace,sim_ms,match_frame,record_ms,texture_ms,observer_ms,rest_ms,decode_ms,decode_rest_ms,non_decode_ms,record_calls,texture_calls,observer_calls,decode_calls,observer_game_ms,end_frame_ms,non_decode_rest_ms,allocate_joint_calls,load_joint_calls,release_joint_calls,display_joint_calls,rigid_matrix_calls,other_matrix_calls,envelope_matrix_calls,end_frame_calls,watched_ram_block_writes,watched_ram_blocks\n", g_decoder_cost);
+  }
+  reset_decoder_cost();
+  offline_cost_mode = mode;
+  ppc::offline_watch_count_enabled = mode == 1;
+  return 1;
+}
+static void record_decoder_cost(double sim_ms, uint32_t match_frame) {
+  if (!g_decoder_cost) return;
+  const double record = g_cost_seconds[SIM_RECORD] * 1000;
+  const double texture = g_cost_seconds[SIM_SNAPSHOT] * 1000;
+  const double observer = g_cost_seconds[SIM_OBSERVE] * 1000;
+  const double decode = g_cost_seconds[SIM_DECODE] * 1000;
+  const double end_frame = g_cost_seconds[SIM_END_FRAME] * 1000;
+  double observer_game = 0;
+  for (int kind = 0; kind < 7; ++kind)
+    observer_game += (g_cost_seconds[SIM_GAME_ENTRY + kind] + g_cost_seconds[SIM_GAME_EXIT + kind]) * 1000;
+  unsigned watched_blocks = 0;
+  // Outside the sim interval: no per-write scan or clock.
+  for (const auto& watched : ppc::g_ram_watched)
+    watched_blocks += watched.load(std::memory_order_relaxed) != 0;
+  // Exclusive phases sum to sim_ms. Preserve signed residuals: never hide bad accounting.
+  std::fprintf(g_decoder_cost, "%u,%.6f,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,%llu,%.6f,%.6f,%.6f",
+      g_retraces, sim_ms, match_frame, record - texture - observer, texture, observer,
+      sim_ms - record - observer_game - end_frame, decode, decode - record - end_frame, sim_ms - decode,
+      (unsigned long long)g_cost_calls[SIM_RECORD], (unsigned long long)g_cost_calls[SIM_SNAPSHOT],
+      (unsigned long long)g_cost_calls[SIM_OBSERVE], (unsigned long long)g_cost_calls[SIM_DECODE],
+      observer_game, end_frame, sim_ms - decode - observer_game);
+  // One invocation per constructor; destructor timing contributes only to the duration.
+  for (int kind = 0; kind < 7; ++kind)
+    std::fprintf(g_decoder_cost, ",%llu", (unsigned long long)g_cost_calls[SIM_GAME_ENTRY + kind]);
+  std::fprintf(g_decoder_cost, ",%llu,%llu,%u\n", (unsigned long long)g_cost_calls[SIM_END_FRAME],
+      (unsigned long long)ppc::offline_watched_block_writes, watched_blocks);
+  std::fflush(g_decoder_cost);
+}
+#else
 void sim_cost_add(int, double) {}
+#endif
 // No adapter/presentation latency instrumentation in the offline host.
 TickTiming& tick_timing() { static TickTiming timing; return timing; }
 double now_seconds() {
@@ -304,6 +365,9 @@ void boot_setup() {
   ppc::update_mxcsr(*cpu);
   g_next_frame = std::chrono::steady_clock::now();
   g_sim_resume = g_next_frame;
+#ifdef MELEE_OFFLINE_COST
+  reset_decoder_cost(); // Match the first sim interval; exclude boot/loading before it.
+#endif
 }
 
 // ---------------- guest calls from host ----------------
@@ -335,6 +399,7 @@ static uint64_t g_next_retrace_tb = TB_PER_FRAME;
 static bool g_in_retrace = false;
 void (*native_retrace)() = nullptr;
 void (*native_state_snapshot)(MuStatePod*) = nullptr;
+void (*retrace_heartbeat)(uint32_t) = nullptr;
 bool retrace_due() { return cpu->tb >= g_next_retrace_tb && !g_in_retrace; }
 uint64_t next_retrace_tb() { return g_next_retrace_tb; }
 void advance_time(uint64_t ticks) { cpu->tb += ticks; }
@@ -540,8 +605,11 @@ static void record_sim_time() {
   const auto now = std::chrono::steady_clock::now();
   uint32_t major = 0, minor = 0, match_frame = 0;
   current_scene(&major, &minor, &match_frame);
-  std::fprintf(g_sim_times, "%u,%.4f,%u\n", g_retraces,
-      std::chrono::duration<double, std::milli>(now - g_sim_resume).count(), match_frame);
+  const double sim_ms = std::chrono::duration<double, std::milli>(now - g_sim_resume).count();
+  std::fprintf(g_sim_times, "%u,%.4f,%u\n", g_retraces, sim_ms, match_frame);
+#ifdef MELEE_OFFLINE_COST
+  record_decoder_cost(sim_ms, match_frame);
+#endif
   std::fflush(g_sim_times);
 }
 
@@ -566,6 +634,11 @@ void retrace() {
   record_sim_time();
   trace_state();
   digest_state();
+#ifdef MELEE_OFFLINE_COST
+  if (offline_cost_mode == 1) reset_decoder_cost();
+#endif
+  // Before the resume stamp, so a beat's cost is in no frame's sim_ms, like the hashing above.
+  if (retrace_heartbeat) retrace_heartbeat(g_retraces);
   if (g_sim_times) g_sim_resume = std::chrono::steady_clock::now();
   if (options.frames && g_retraces >= options.frames) request_exit(0);
   if (g_exit) throw ExitRequested{g_exit_code.load()};

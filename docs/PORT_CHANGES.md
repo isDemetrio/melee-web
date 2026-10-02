@@ -102,3 +102,53 @@ arithmetic may differ; these changes remove divergences our shim invented, and e
 in Q7 required them gone. The Q7 question is now moot for this corpus: nothing diverges, so
 there is nothing to exempt. `docs/OPEN_QUESTIONS.md` Q7 records that.
 
+
+### 0008 — optional offline WASM decoder phase accounting
+
+`0008-offline-decoder-cost.patch` specializes `host::SimCostScope` only under
+`MELEE_OFFLINE_COST`, defined by the Emscripten core build. It reuses the pinned
+GX scopes (`SIM_RECORD`, `SIM_SNAPSHOT`, `SIM_OBSERVE`, `SIM_DECODE`), with portable
+nanosecond conversion independent of the offline host's zero `tsc_seconds`.
+`native/headless_host.cpp` collects durations and invocation counts only when the
+browser explicitly enables profiling before `callMain`. Native compilation keeps
+the existing scope and no-op accumulator. No GX command, validation, guest write,
+texture version, observer counter or floating-point option changes.
+
+### 0009 — offline frame split (measurement only)
+
+`0009-offline-frame-split.patch` adds collect-only scopes to the bodies of
+`RenderObserver` construction/destruction (seven `Observe` kinds) and to the
+`c.to_xfb` completion block in `gx_core.cpp`. The helper added to patch 0008
+checks `offline_cost_mode == 1` before either clock read. Legacy mode retains
+only its previous clocks. Native/non-offline builds have no new instrumentation.
+Constructor and destructor costs are added together, while invocation counts use
+constructor entries only. Guest function execution between them is excluded;
+member initialization/destruction and the instrumentation's own bookkeeping are
+not separately timed. No hook, decoder operation or guest write is removed.
+
+The XFB block is **inside `SIM_DECODE`** (`drain_fifo` → `parse_command` → BP load),
+so `end_frame_ms` is subtracted from `decode_rest_ms`, not `non_decode_ms`.
+It includes scene/HUD capture, backend submission/recycling, draw destruction and
+cache cleanup together; it does not isolate allocator/shared_ptr/hash-table costs.
+`non_decode_rest_ms = non_decode_ms - observer_game_ms`; `rest_ms` now excludes
+both new timed phases and equals `decode_rest_ms + non_decode_rest_ms`.
+The report checks all five partition identities at the existing 0.00001 ms
+rounding tolerance, retains signed residuals and rejects the old CSV schema.
+
+`mark_ram_write` counts watched **block hits** only in collect mode: a range
+spanning two watched blocks contributes two. This includes every caller (guest
+stores and host bulk writes), not just guest store instructions. There is no
+per-write clock. Watched blocks are scanned after the simulation timestamp;
+min/max/last are gauges over the selected retraces, never a sum. Counters reset
+at the existing interval boundaries; watched flags and versions are unchanged.
+With profiling off, new flag checks remain but no new clocks/counter increments
+run. Their actual disabled-path overhead has not been measured.
+
+Observer-off was deliberately **not implemented**, per the requested reader gate:
+`gx_core.cpp:457-476` constructs identities and reads `skinned`/`authored_pose` for
+statistics in the compiled offline core (`native/offline_authored_stats.cpp`).
+The pinned desktop consumers additionally include `gx_d3d12.cpp:1781`
+(`identity`), `gx_shader.cpp:838-839` (`skinned`, `owner_player`), and subframe
+pose sampling. `passes` is read/updated to derive `current_pass` inside the
+observer. Thus “nobody reads these data” is false even though the WebGPU backend
+does not currently consume all of these fields. `?observer=off` is not supported.

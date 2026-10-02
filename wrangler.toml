@@ -33,10 +33,25 @@ bucket_name = "melee-web-assets"
 binding = "PHASE0_DISC"
 bucket_name = "melee-phase0-disc"
 
-# Pages overrides `vars` for a preview deployment rather than merging them
+# Pages overrides an environment's configuration for a preview deployment rather than merging it
 # (developers.cloudflare.com/pages/functions/wrangler-configuration/, "Environment-specific
-# overrides"), so the preview states them as well. The spike page is a preview -- branch
-# `phase0-spike` -- and that is the deployment that was failing.
+# overrides"), so the preview states `vars` **and** its storage bindings. The spike page is a
+# preview -- branch `phase0-spike` -- and that is the deployment that was failing.
+#
+# Declaring the variables here alone was not enough, and the first attempt proved it: it made the
+# preview's configuration explicit, the top-level `[[r2_buckets]]` stopped reaching it, and
+# `/phase0/disc-chunks` answered `503 {"error":"Disc storage unavailable"}` -- exactly what
+# `functions/phase0/[[path]].ts` returns when `env.PHASE0_DISC` is absent, and exactly what the
+# published spike showed. The bindings are therefore repeated here, and any future
+# environment-specific block must repeat them too.
 [env.preview.vars]
 ACCESS_AUD = "a3079f1bb92f23c5299cc29d4436377594caa9cfc3b655c3571206548028906d"
 ACCESS_TEAM_DOMAIN = "jolly-frost-8cc9.cloudflareaccess.com"
+
+[[env.preview.r2_buckets]]
+binding = "ASSETS_R2"
+bucket_name = "melee-web-assets"
+
+[[env.preview.r2_buckets]]
+binding = "PHASE0_DISC"
+bucket_name = "melee-phase0-disc"

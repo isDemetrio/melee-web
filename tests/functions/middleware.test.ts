@@ -19,13 +19,17 @@ function context(jwt?: string, overrides = {}) {
     env: { ...env, ...overrides }, next: vi.fn(async () => new Response('next handler')),
   };
 }
-const fetchJwks = vi.fn(async (_url: string) => Response.json({ keys: [jwk] }));
+// Constructed Responses have no URL; model the final URL supplied by the fetch runtime.
+function withUrl(response: Response, url = `https://${env.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`): Response {
+  return Object.defineProperty(response, 'url', { value: url });
+}
+const fetchJwks = vi.fn(async (_url: string) => withUrl(Response.json({ keys: [jwk] })));
 const middleware = createMiddleware(fetchJwks);
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
-  fetchJwks.mockReset().mockImplementation(async () => Response.json({ keys: [jwk] }));
+  fetchJwks.mockReset().mockImplementation(async () => withUrl(Response.json({ keys: [jwk] })));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -102,30 +106,50 @@ describe('Access JWT', () => {
     { keys: [] }, { keys: [jwk, jwk] },
     { keys: [{ ...jwk, kty: 'EC' }] }, { keys: [{ ...jwk, n: 'invalid' }] },
   ])('rejects unusable JWKS %j', async body => {
-    fetchJwks.mockResolvedValue(Response.json(body));
+    fetchJwks.mockResolvedValue(withUrl(Response.json(body)));
     await denied(token());
   });
   it.each([{}, null, [], { keys: 'wrong' }, { keys: [null] }].map(body => ({ body })))('diagnoses malformed JWKS %j', async ({ body }) => {
-    fetchJwks.mockResolvedValue(Response.json(body));
+    fetchJwks.mockResolvedValue(withUrl(Response.json(body)));
     await unavailable('access_jwks_invalid');
   });
-  it('fails closed on JWKS HTTP errors', async () => {
-    fetchJwks.mockResolvedValue(new Response('private upstream error', { status: 500 }));
+  it('accepts a final URL at another path on the team host', async () => {
+    fetchJwks.mockResolvedValue(withUrl(Response.json({ keys: [jwk] }), `https://${env.ACCESS_TEAM_DOMAIN}/rotated-certs`));
+    const ctx = context(token());
+    expect((await middleware(ctx)).status).toBe(200);
+    expect(ctx.next).toHaveBeenCalledOnce();
+  });
+  it.each([
+    'https://other.cloudflareaccess.com/cdn-cgi/access/certs',
+    `https://${env.ACCESS_TEAM_DOMAIN}.evil.test/certs`,
+    `https://${env.ACCESS_TEAM_DOMAIN}:8443/certs`,
+    '', 'not a URL',
+  ])('fails closed on an untrusted or invalid final JWKS URL %j', async url => {
+    fetchJwks.mockResolvedValue(withUrl(Response.json({ keys: [jwk] }), url));
+    await unavailable('access_jwks_unavailable');
+  });
+  it('fails closed when the runtime provides no final URL', async () => {
+    const response = Response.json({ keys: [jwk] });
+    fetchJwks.mockResolvedValue(Object.defineProperty(response, 'url', { value: undefined }));
+    await unavailable('access_jwks_unavailable');
+  });
+  it.each([404, 500])('fails closed on JWKS HTTP error %s', async status => {
+    fetchJwks.mockResolvedValue(withUrl(new Response('private upstream error', { status })));
     await unavailable('access_jwks_unavailable');
   });
   it('fails closed on JWKS network errors', async () => {
     fetchJwks.mockRejectedValue(new Error('private network detail'));
-    await unavailable('access_jwks_unavailable');
+    await unavailable('access_jwks_unreachable');
   });
   it('fails closed on malformed JWKS JSON', async () => {
-    fetchJwks.mockResolvedValue(new Response('{'));
+    fetchJwks.mockResolvedValue(withUrl(new Response('{')));
     await unavailable('access_jwks_invalid');
   });
   it('uses global fetch in the Pages entry point', async () => {
-    const fetch = vi.fn().mockResolvedValue(Response.json({ keys: [jwk] }));
+    const fetch = vi.fn().mockResolvedValue(withUrl(Response.json({ keys: [jwk] })));
     vi.stubGlobal('fetch', fetch);
     expect((await onRequest(context(token()))).status).toBe(200);
-    expect(fetch).toHaveBeenCalledWith('https://test.cloudflareaccess.com/cdn-cgi/access/certs', { redirect: 'error' });
+    expect(fetch).toHaveBeenCalledWith('https://test.cloudflareaccess.com/cdn-cgi/access/certs');
   });
   it('does not turn downstream application errors into authentication errors', async () => {
     const ctx = context(token());

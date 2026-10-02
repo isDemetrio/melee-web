@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Assert that the two "hot" translation units really are compiled at -O2.
+# Assert that the "hot" translation units really are compiled at -O2.
 #
-# Why this exists: wasm/core/CMakeLists.txt moves ppc_runtime.cpp and interp.cpp to -O2 with a
+# Why this exists: wasm/core/CMakeLists.txt moves the PowerPC and GX hot files to -O2 with a
 # source property, which CMake appends after the target's own and interface options. That ordering
 # is the whole mechanism -- if it ever changes, -Oz would come last, the per-file experiment would
 # quietly compile at the default level and the measurements would say "no effect" for a reason that
@@ -24,7 +24,9 @@ python3 - "$commands" "$expected" <<'PY'
 import json, re, sys
 
 path, expected = sys.argv[1], sys.argv[2]
-wanted = ("runtime/ppc/ppc_runtime.cpp", "runtime/ppc/interp.cpp")
+wanted = ("runtime/ppc/ppc_runtime.cpp", "runtime/ppc/interp.cpp",
+          "runtime/gx/gx_core.cpp", "runtime/gx/gx_texture.cpp",
+          "runtime/gx/render_observer.cpp")
 entries = json.load(open(path))
 found, problems = {}, []
 for entry in entries:
