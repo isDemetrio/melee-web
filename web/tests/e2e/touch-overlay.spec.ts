@@ -1,4 +1,13 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+/**
+ * The id of the element the browser hit-tests at a viewport point. A box is not a control: a zone
+ * scrolled out of the viewport, or covered by something else, still has one, and a pointer
+ * event aimed at it reaches nothing.
+ */
+async function hitAt(page: Page, point: { x: number; y: number }): Promise<string | null> {
+  return page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[id]')?.id ?? null, point);
+}
 
 /**
  * The touch overlay, driven by real pointer events in a real browser.
@@ -33,6 +42,7 @@ test.describe('touch overlay', () => {
     const centre = { x: zone.x + zone.width / 2, y: zone.y + zone.height / 2 };
     // Full deflection is half the zone's smaller side (touch.ts, zoneRadius).
     const radius = Math.min(zone.width, zone.height) / 2;
+    expect(await hitAt(page, centre)).toBe('stick-zone');
 
     // The stick starts where the finger lands, so the state is neutral at the press.
     await page.mouse.move(centre.x, centre.y);
@@ -62,6 +72,7 @@ test.describe('touch overlay', () => {
     const button = await page.locator('#touch-a').boundingBox();
     if (!button) throw new Error('the A button has no layout: the overlay is not displayed');
     const centre = { x: button.x + button.width / 2, y: button.y + button.height / 2 };
+    expect(await hitAt(page, centre)).toBe('touch-a');
 
     await page.mouse.move(centre.x, centre.y);
     await page.mouse.down();
@@ -75,4 +86,25 @@ test.describe('touch overlay', () => {
     await page.mouse.up();
     await expect(page.locator('#pad-readout')).toContainText('00 00 00 00 00 00');
   });
+});
+
+test('overlay stays inside the game stage and navigation removes it', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.click('button:has-text("Game")');
+  await page.check('#touch-overlay-toggle');
+  const stage = await page.locator('#game-stage').boundingBox();
+  const overlay = await page.locator('#touch-overlay').boundingBox();
+  expect(stage).not.toBeNull();
+  expect(overlay).not.toBeNull();
+  expect(overlay!.y).toBeGreaterThanOrEqual(stage!.y);
+  expect(overlay!.y + overlay!.height).toBeLessThanOrEqual(stage!.y + stage!.height + 1);
+  await page.uncheck('#touch-overlay-toggle');
+  await expect(page.locator('#touch-overlay')).toBeHidden();
+  await page.check('#touch-overlay-toggle');
+  await page.click('button:has-text("Settings")');
+  await expect(page.locator('#touch-overlay')).toHaveCount(0);
+  await page.click('button:has-text("Game")');
+  await expect(page.locator('#touch-overlay')).toHaveCount(1);
+  await expect(page.locator('#touch-overlay')).toBeHidden();
 });

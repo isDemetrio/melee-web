@@ -14,6 +14,8 @@ extern std::string sim_times_path;
 // nothing. It must only observe: the web core uses it for the page's heartbeat
 // (wasm/core/heartbeat.cpp), which reads no guest state.
 extern void (*retrace_heartbeat)(uint32_t retraces);
+// Optional live host input. Null keeps the offline oracle on its original script path.
+extern bool (*live_input)(PadState out[4]);
 bool input_load_script(const char* path);
 void input_mark_match_start();
 }

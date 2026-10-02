@@ -152,3 +152,11 @@ The pinned desktop consumers additionally include `gx_d3d12.cpp:1781`
 pose sampling. `passes` is read/updated to derive `current_pass` inside the
 observer. Thus “nobody reads these data” is false even though the WebGPU backend
 does not currently consume all of these fields. `?observer=off` is not supported.
+
+### Optional live browser input (first playable)
+
+No upstream patch or pin change. `native/headless_input.cpp` consults an optional host callback
+before the existing script path; null/default and browser modules without `Module.livePad` retain
+that path. `wasm/core/live_input.cpp` supplies the browser-only PADStatus adapter. This is host input
+integration, not a change to guest simulation or virtual-time scheduling. Oracle parity remains an
+operator verification, not an assertion inferred from the code diff.

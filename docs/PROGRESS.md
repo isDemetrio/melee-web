@@ -2168,3 +2168,64 @@ remains for the plan is the operator's — O1's legal call, O2–O9's credential
 M2 and M5 whose in-match mean and p99 are the go/no-go. The renderer's open thread
 (`render/webgpu-lighting`, PR #70) had uncommitted changes in its worktree when this session looked and
 was left untouched, as was the stale uncommitted change in the main checkout's `wasm/net/sab_ring_test.c`.
+
+## First playable integration — 2026-10-02 (feat/first-playable)
+
+Main Game screen now owns a `PlaySession`: verified chunked R2 → OPFS disc loading (or an
+explicit local ISO), the same CI web core and WebGPU backend as the spike, keyboard/gamepad/touch
+port 1 via an atomic shared-memory mailbox. `native/headless_input.cpp` has an optional host
+callback; browser-only `wasm/core/live_input.cpp` decodes PADStatus explicitly. With no livePad
+option, the original scripted input path remains active. No changes under `wasm/render/`.
+
+Confirmed from `native/headless_main.cpp`: callMain enters guest __start synchronously. Messages
+cannot update input during that call. `web/src/play/worker.ts` explicitly transfers an ImageBitmap
+at retraces and waits for the main-thread acknowledgement, bounding pending frames to one;
+wall-clock pacing does not advance guest time. Stop/navigation terminates the worker, cancels
+downloads and removes input listeners. Audio and online matches are not integrated. Play begins
+at the game's own menus, without the parity input script. Old deployed cores fail visibly with a
+request to rebuild, rather than silently ignoring input.
+
+Overlay is now contained by the game stage instead of fixed over the viewport; initial opacity
+uses settings. The operator's reported visual glitch has NOT been reproduced on their device.
+Open question: whole image or borders, one-time or intermittent, device/browser/orientation and
+exact Settings → overlay steps? Do not identify this layout defect as the proven cause.
+
+Validation is CI-only (pending at initial commit): shared PAD serialization tests, mobile overlay
+containment/navigation, and three consecutive real-core synthetic GX frames presented by the main
+page without yielding the worker task. No game-data fixture. Actual disc boot, character movement,
+phone presentation/performance and long-session GPU resource behavior still need operator testing.
+The required trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` has NOT been verified by this agent;
+the operator runs the unchanged scripted spike to verify it. Merge requires green CI and verified
+preview; neither an input unit test nor synthetic GX proves the first playable acceptance criterion.
+
+### The three CI failures on #83, measured before fixing (2026-10-02, night)
+
+A diagnostic-only commit (`d3101e7`, run 37059095321) printed what the browser hit-tests at the zone
+centres and what the presented frames carry, before anything was changed.
+
+**Overlay (touch-overlay.spec.ts:17 and :57).** `document.elementFromPoint` at the centre of
+`#stick-zone` and of `#touch-a` returned **`null`**: the points were *outside the viewport*
+(y = −79 and −104 in a 1280×720 viewport, `scrollY` = 656, `#game-stage` top at −496). Nothing
+covered the zones; nothing was there to hit. `page.check('#touch-overlay-toggle')` scrolls the
+toggle into view, the toggle is in the Input panel below the stage, and the overlay is now
+`position: absolute` inside the stage, so reaching the toggle scrolls the controls off the top.
+Before, `position: fixed` pinned them to the viewport whatever the scroll. The 390×844 containment
+test passed because it never sends a pointer event. Fix (`web/src/ui/screens/game.ts`): switching
+the overlay on scrolls it back into view, bottom-aligned (`scrollIntoView({ block: 'end' })`, only if
+it is not already fully visible), which also keeps the zones on screen on a landscape phone where
+the stage is taller than the viewport. The two tests now also assert that `elementFromPoint` at the
+centre is the zone, so a covered or off-screen control fails with what was hit instead of a
+timeout on the readout. Whether this is the visual glitch the operator reported is still unknown.
+
+**Pixels (playable.spec.ts:30).** The bitmaps were blank *before* the canvas: read straight from
+each ImageBitmap in the page, ahead of `transferFromImageBitmap`, all three frames were
+`[0, 0, 0, 0]`, while the PRESENTED word read 3. So this was not only the `bitmaprenderer` readback:
+CI's Chromium hands the page transparent frames, consistent with render.spec.ts's THE GAP (the
+device does not survive a canvas commit there) though not separately proven to be it. The test now
+asserts what CI can: three 640×480 frames with serials 1, 2, 3, and PRESENTED = 3 (stored only after
+a `transferFromImageBitmap` that did not throw; the worker blocks until each serial is acknowledged).
+The pixel check reads the bitmap, not the canvas, and runs only with `SPIKE_CANVAS_READBACK=1`, like
+render.spec.ts's canvas pixel test. **No CI test proves that the main page shows a non-blank
+picture**; that needs a GPU that survives presenting, or the operator's device. Trace
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571` not verified by this agent; no change touches the
+simulation or `wasm/render/`.

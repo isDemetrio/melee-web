@@ -85,7 +85,7 @@ if(EMSCRIPTEN)
   # reference never attaches a backend (native/headless.h, gx_set_backend).
   target_sources(melee_core_web PRIVATE "${REPO}/wasm/render/gx_webgpu.cpp")
   # The page's heartbeat (web/src/spike/heartbeat.ts): Node runs have no page to tell.
-  target_sources(melee_core_web PRIVATE "${REPO}/wasm/core/heartbeat.cpp")
+  target_sources(melee_core_web PRIVATE "${REPO}/wasm/core/heartbeat.cpp" "${REPO}/wasm/core/live_input.cpp")
   target_link_options(melee_core_web PRIVATE -sENVIRONMENT=web,worker -sFORCE_FILESYSTEM=1
     -sMODULARIZE=1 -sEXPORT_NAME=createMeleeCore -sINVOKE_RUN=0 -sEXPORT_ES6=1 -lworkerfs.js
     "-sEXPORTED_RUNTIME_METHODS=['FS','callMain']")
