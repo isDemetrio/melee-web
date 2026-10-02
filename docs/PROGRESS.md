@@ -1967,3 +1967,61 @@ runs it; the change is renderer-only), phone survival, phone device-loss reason,
 cost on the phone (expected not to rise: a Map lookup replaces 8 `createSampler` per draw,
 unmeasured), whether samplers or the pre-#77 textures caused the 81-copy loss. No local
 build or test run; CI is the only build.
+
+## 2026-10-02 — WebGPU resource audit: nothing per draw outlives its draw without a bound
+
+Branch `fix/gpu-resource-audit`, base `d45a1fd` (main, PR #78 merged). Operator evidence on
+`d45a1fd`, `?canvas`, 2400 frames, iPhone 16 Pro: sampler 3 created (was 93,544); texture
+21,901 created / 21,898 destroyed; buffer 67,548 / 67,548; **bindGroup 22,514, no destroy**;
+pipeline 6; `presented: 124` (was 81); first failure `createBindGroup` at 6755 ms; loss
+"destroyed" at 35811 ms is our teardown; one 1013 ms frame; trace `c79c53b9…` identical.
+
+Inventory of every GPU object the backend creates (`wasm/render/gx_webgpu.cpp`; `gpu.ts` only
+outside `callMain`):
+
+| Resource | destroy()? | Before | Now |
+| --- | --- | --- | --- |
+| EFB, depth, white textures; XFB texture (CI) | yes | once, persistent | unchanged |
+| Bind group layout, pipeline layout | no | once | unchanged |
+| Sampler | no | cache, 256, key `mode0&0xFF`, `mode1&0xFFFF` (#78) | unchanged |
+| Shader module + render pipeline | no | per pipeline-key miss; key held all of `components` and `zmode` | key = the bits the descriptor reads (`components & 0x6400`, `zmode & 31`): at most 2·4·32·8 = 2048 |
+| Slot texture | yes, sync after submit | one per used slot per draw | pool keyed `(slot, w, h, levels)`, LRU, ≤128 entries and ≤32 MiB; evicted ones `destroy()`ed synchronously |
+| Slot texture view | no | 8 per draw | one per pool texture, white's once |
+| EFB / depth view | no | 2 per draw, 2 per clear | once, in `gxw_open` |
+| Uniform buffer | yes, sync | one per draw | one, persistent |
+| Vertex / index buffer | yes, sync | two per draw | two, persistent, grown by doubling, old one `destroy()`ed |
+| Bind group | no | **one per draw** | LRU cache, 256, key = the 8 slots' pool ids + sampler keys |
+| Command encoder, render pass, command buffer | no (single-use by API) | per draw / copy | unchanged: consumed by `submit`, no reuse API |
+| Probe / readback buffers (`gpu.ts`) | yes, in `finally` after `await` | before/after `callMain` only | unchanged |
+
+No `destroy()` inside a promise callback runs during the simulation: the only awaited ones are
+the probes and the readback, which are outside `callMain`.
+
+Why the pool. A bind group names its resources; while each draw created its own textures and
+uniform buffer, every bind group was single-use and could not be cached. Pool textures are
+rewritten on every use (all mip levels, so no stale pixels; no hash or address is trusted).
+Correctness rests on queue ordering: a `writeTexture`/`writeBuffer` issued after a `submit` does
+not reach the work already submitted. CI fixtures that fail without it: `geometry=1` (three
+layers in one vertex buffer), `31`/`32` (changed image/TLUT in one pooled texture), new
+`geometry=6` (vertex/index buffers grow between submitted draws). The 384/2400-draw tests now
+expect constant counts: 1 bind group, 12 textures (0 destroyed), 8 buffers (3 persistent).
+A Node mock of the EM_JS bodies (not committed) ran 2400 identical draws (1 bind group) and 5000
+draws over 300 shapes (pool held at 128, cache at 256, no destroyed texture ever bound).
+
+Yielding to the event loop every N frames — **not done**. The simulation is
+`ppc::call(..., 0x8000522C)` (`native/headless_main.cpp:99`), the game's own `__start`, which
+never returns; `retrace()` (`native/headless_host.cpp:616`) runs inside the guest's call stack and
+leaves only by throwing `ExitRequested`. Returning to JavaScript between frames means suspending
+that stack: Asyncify (forbidden, `AGENT_RULES.md`), JSPI (not in Safari), or running the guest on
+another thread. None is a renderer change, and none can be shown trace-preserving without a build
+here. The previous entry's "re-entrant frame step" underestimated this. After this change the
+backend no longer depends on GC or callbacks for anything with a release path.
+
+NOT verified: the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` (the change is renderer-only;
+the operator runs it); phone survival, `presented`, the 1013 ms pause; whether 256 bind groups /
+128 pool textures cover a real match without thrashing (the phone report's `bindGroup.created`
+will say: near the draw count means too small); the eviction path in a real browser (mock only);
+whether WebKit stalls on `writeBuffer`/`writeTexture` into resources in flight. A bind group or
+sampler that fails validation is cached and reused: errors arrive as `uncapturederror` events,
+which cannot run during `callMain`, so the first one is still what the report shows. No local
+build; CI is the only build.

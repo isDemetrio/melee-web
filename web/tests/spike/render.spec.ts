@@ -132,6 +132,9 @@ for (const [name, geometry, x, expected] of [
   ['outside the triangle', 1, 600, COLOUR_RGBA],
   ['scissor excludes the triangle probe', 2, 320, COLOUR_RGBA],
   ['front culling excludes the clockwise triangle', 3, 320, COLOUR_RGBA],
+  // 3, 6 and 12 vertices: the vertex and index buffers are replaced (and the old ones destroyed)
+  // after draws that use them were submitted. Writes landing in the wrong draw lose the green.
+  ['buffers grown between submitted draws', 6, 320, [0, 255, 0, 255]],
 ] as const) {
   test(`geometry: ${name}`, async ({ page }) => {
     const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=${geometry}&sample-x=${x}`);
@@ -176,15 +179,17 @@ for (const [name, geometry, expected] of [
   });
 }
 
-// Samplers are cached by mode (gx_webgpu.cpp, gxw_texture). Layers 0 and 2 clamp, the visible
-// layer 1 repeats, in one task: a key that ignored the wrap bits would hand layer 1 the clamp
-// sampler and read back the clamp pixel [32, 64, 32, 192] instead.
+// Samplers and bind groups are cached by mode (gx_webgpu.cpp, gxw_texture and gxw_draw). Layers 0
+// and 2 clamp, the visible layer 1 repeats, in one task: a key that ignored the wrap bits would
+// hand layer 1 the clamp sampler, or a bind group holding it, and read back the clamp pixel
+// [32, 64, 32, 192] instead.
 test('texture: a cached sampler is not reused for another wrap mode', async ({ page }) => {
   const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=38&sample-x=320`);
   expectReplayed(result, 3, 'texture');
   expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
   expect(result.render?.readback).toEqual([128, 64, 32, 192]);
   expect(result.render?.resources.sampler.created).toBe(2);
+  expect(result.render?.resources.bindGroup.created).toBe(2); // layers 0 and 2 share one
 });
 
 // Real backend, one synchronous task, no disc. 800 repetitions yield 2400 XFB copies.
@@ -199,17 +204,19 @@ for (const repeats of [128, 800]) {
     expect(result.render?.deviceLoss).toBeNull();
     expect(result.render?.readback).toEqual([128, 64, 32, 192]);
     const resources = result.render!.resources;
-    expect(resources.sampler.created).toBe(1); // one key (mode0=mode1=0) for all eight slots, every draw
-    expect(resources.bindGroup.created).toBe(copies);
+    // Nothing scales with the draw count. Every draw has the same eight slots (one 8x8 shape,
+    // mode0=mode1=0), so after the first draw everything is a pool or cache hit.
+    expect(resources.sampler.created).toBe(1);
+    expect(resources.bindGroup.created).toBe(1);
     expect(resources.pipeline.created).toBe(1);
-    expect(resources.texture.created).toBe(copies * 8 + 4);
-    expect(resources.texture.destroyed).toBe(copies * 8);
-    expect(resources.texture.outstanding).toBe(4); // XFB, EFB, depth, white fallback
-    expect(resources.texture.peakOutstanding).toBe(12); // persistent + one draw's eight slots
-    expect(resources.buffer.created).toBe(copies * 3 + 5); // draws + four probes + readback
-    expect(resources.buffer.destroyed).toBe(resources.buffer.created);
-    expect(resources.buffer.outstanding).toBe(0);
-    expect(resources.buffer.peakOutstanding).toBe(3);
+    expect(resources.texture.created).toBe(8 + 4); // pool (one per slot); XFB, EFB, depth, white
+    expect(resources.texture.destroyed).toBe(0);
+    expect(resources.texture.outstanding).toBe(12);
+    expect(resources.texture.peakOutstanding).toBe(12);
+    expect(resources.buffer.created).toBe(3 + 5); // uniform, vertex, index; four probes + readback
+    expect(resources.buffer.destroyed).toBe(5);
+    expect(resources.buffer.outstanding).toBe(3);
+    expect(resources.buffer.peakOutstanding).toBe(5); // the readback and last probe overlap
     for (const count of Object.values(resources)) expect(count.failed).toBe(0);
   });
 }
