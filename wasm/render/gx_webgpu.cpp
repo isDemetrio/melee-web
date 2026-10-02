@@ -6,8 +6,8 @@
 // source rectangle to the canvas, then a copy with `clear` set clears the EFB to its clear colour.
 // So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console.
 //
-// Geometry uses a baseline position/normal/vertex-color shader and a white texture.
-// Lighting, texgen, TEV and real textures remain open. Clears cover the whole EFB;
+// Geometry uses a baseline shader with snapshot texture-0 MODULATE.
+// Lighting, texgen and full TEV remain open. Clears cover the whole EFB;
 // half-scale, Y scale, gamma and copy formats remain open (priorities 2-5).
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
@@ -54,7 +54,14 @@ EM_JS(int, gxw_open, (int width, int height), {
     gpu.white = gpu.device.createTexture({size: [1, 1], format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST});
     gpu.device.queue.writeTexture({texture: gpu.white}, new Uint8Array([255,255,255,255]), {}, [1,1]);
-    gpu.sampler = gpu.device.createSampler();
+    gpu.slots = [];
+    const entries = [{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:"uniform"}}];
+    for (let i=0;i<8;i++) {
+      entries.push({binding:1+2*i,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:"float"}});
+      entries.push({binding:2+2*i,visibility:GPUShaderStage.FRAGMENT,sampler:{type:"filtering"}});
+    }
+    gpu.textureLayout = gpu.device.createBindGroupLayout({entries});
+    gpu.pipelineLayout = gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.textureLayout]});
     gpu.pipelines = new Map();
     gpu.backendDevice = gpu.device;
     return 1;
@@ -100,6 +107,40 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
   }
 });
 
+// Re-upload immutable snapshots per segment: no address/hash cache can return stale pixels.
+// queue.writeTexture copies the WASM bytes before this call returns.
+EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
+                       const void* rgba, int bytes, int mode0, int mode1), {
+  const gpu = Module["gxWebgpu"];
+  try {
+    if (level === 0) {
+      const minf = (mode0 >>> 5) & 7, mip = minf & 3;
+      const lo = (mode1 & 255) / 16, hi = mip ? ((mode1 >>> 8) & 255) / 16 : 0;
+      // WebGPU rejects inverted clamps; do not silently approximate invalid D3D state.
+      if (lo > hi) throw new Error("inverted texture LOD clamps");
+      const wrap = ["clamp-to-edge","repeat","mirror-repeat","repeat"];
+      const sampler = gpu.device.createSampler({addressModeU:wrap[mode0&3],addressModeV:wrap[(mode0>>>2)&3],
+        magFilter:(mode0&16)?"linear":"nearest", minFilter:(minf&4)?"linear":"nearest",
+        mipmapFilter:mip===2?"linear":"nearest",lodMinClamp:lo,lodMaxClamp:hi});
+      const texture = width ? gpu.device.createTexture({size:[width,height],mipLevelCount:levels,
+        format:"rgba8unorm",usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST}) : gpu.white;
+      gpu.slots[slot] = {texture,sampler};
+    }
+    if (width) gpu.device.queue.writeTexture({texture:gpu.slots[slot].texture,mipLevel:level},
+      HEAPU8.subarray(rgba,rgba+bytes),{bytesPerRow:width*4,rowsPerImage:height},[width,height]);
+    return 1;
+  } catch(error) { gpu.failure = "texture: " + error; return 0; }
+});
+
+// Texture resources are retained until submitted work completes, including error paths.
+EM_JS(void, gxw_retire_textures, (), {
+  const gpu = Module["gxWebgpu"];
+  const textures = gpu.slots.map(s => s.texture).filter(t => t !== gpu.white);
+  gpu.slots = [];
+  const retire = () => textures.forEach(t => t.destroy());
+  gpu.device.queue.onSubmittedWorkDone().then(retire,retire);
+});
+
 // Explicit float4 rows: no dependency on an unverified C++/WGSL struct ABI.
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
                      const float* constants, const float* raster, int lines, int cull, int zmode, int components), {
@@ -120,10 +161,10 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
       for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
       // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
       const code = `
-struct Constants { rows: array<vec4f, 103> }
+struct Constants { rows: array<vec4f, 105> }
 @group(0) @binding(0) var<uniform> u: Constants;
-@group(0) @binding(1) var white: texture_2d<f32>;
-@group(0) @binding(2) var whiteSampler: sampler;
+${Array.from({length:8}, (_,n) => `@group(0) @binding(${1+2*n}) var tex${n}: texture_2d<f32>;
+@group(0) @binding(${2+2*n}) var samp${n}: sampler;`).join("\n")}
 struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
   @location(1) normal: vec3f, @location(2) color1: vec4f, @location(3) uv: vec2f, @location(4) clip: vec4f }
 @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f,
@@ -150,12 +191,12 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
   return o;
 }
 @fragment fn fs(i: Out) -> @location(0) vec4f {
-  let color = i.color * textureSample(white,whiteSampler,i.uv);
+  let color = i.color * textureSampleBias(tex0,samp0,i.uv,u.rows[103].x);
   if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
   return color;
 }`;
       const shader = d.createShaderModule({code});
-      pipeline = d.createRenderPipeline({layout:"auto",
+      pipeline = d.createRenderPipeline({layout:gpu.pipelineLayout,
         vertex:{module:shader,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
         fragment:{module:shader,entryPoint:"fs",targets:[{format:gpu.format}]},
         primitive:{topology:lines ? "line-list":"triangle-list",frontFace:"cw",cullMode:["none","back","front","back"][cull]},
@@ -169,10 +210,13 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     };
     const vb = upload(vertices,vertex_bytes,GPUBufferUsage.VERTEX);
     const ib = upload(indices,count*4,GPUBufferUsage.INDEX);
-    const ub = upload(constants,103*16,GPUBufferUsage.UNIFORM);
-    const group = d.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[
-      {binding:0,resource:{buffer:ub}},{binding:1,resource:gpu.white.createView()},
-      {binding:2,resource:gpu.sampler}]});
+    const ub = upload(constants,105*16,GPUBufferUsage.UNIFORM);
+    const entries = [{binding:0,resource:{buffer:ub}}];
+    for (let i=0;i<8;i++) {
+      entries.push({binding:1+2*i,resource:gpu.slots[i].texture.createView()});
+      entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
+    }
+    const group = d.createBindGroup({layout:gpu.textureLayout,entries});
     const encoder = d.createCommandEncoder();
     const pass = encoder.beginRenderPass({colorAttachments:[{view:gpu.efb.createView(),loadOp:"load",storeOp:"store"}],
       depthStencilAttachment:{view:gpu.depth.createView(),depthLoadOp:"load",depthStoreOp:"store"}});
@@ -199,6 +243,35 @@ static_assert(sizeof(gx::Vertex) == 108 && offsetof(gx::Vertex, nrm) == 12 &&
               offsetof(gx::Vertex, uv) == 32 && offsetof(gx::Vertex, posmtx) == 96 &&
               offsetof(gx::Vertex, texmtx) == 97, "WebGPU packed vertex layout");
 
+// All source reads are from TextureSnapshot, never host::ram/guest addresses.
+bool upload_textures(const gx::DrawCall& dc) {
+  std::vector<uint8_t> rgba;
+  for (int slot=0; slot<8; ++slot) {
+    const auto& t=dc.textures[slot];
+    if (!t.used) {
+      if (!gxw_texture(slot,0,0,1,0,nullptr,0,0,0)) return false;
+      continue;
+    }
+    const bool supported=t.format<=6 || t.format==8 || t.format==9 || t.format==10 || t.format==14;
+    const size_t palette_bytes=t.format==8?32:t.format==9?512:t.format==10?32768:0;
+    if (!supported || !t.data || !t.width || !t.height || t.width>1024 || t.height>1024 ||
+        t.mip_levels!=gx::texture_mip_count(t.width,t.height,t.mip_levels) ||
+        t.data->image.size()<gx::texture_chain_bytes(t.width,t.height,t.format,t.mip_levels) ||
+        t.data->palette.size()<palette_bytes) {
+      std::fprintf(stderr,"webgpu: invalid/unsupported texture snapshot in slot %d\n",slot);
+      return false;
+    }
+    uint32_t w=t.width,h=t.height; size_t offset=0;
+    for (uint32_t level=0;level<t.mip_levels;++level) {
+      gx::decode_texture(t.data->image.data()+offset,w,h,t.format,t.data->palette.data(),t.tlut_format,rgba);
+      if (!gxw_texture(slot,w,h,t.mip_levels,level,rgba.data(),rgba.size(),t.mode0,t.mode1)) return false;
+      offset+=gx::texture_level_bytes(w,h,t.format);
+      w=std::max(1u,w/2); h=std::max(1u,h/2);
+    }
+  }
+  return true;
+}
+
 // Baseline projection/viewport rules transcribed from gx_shader.cpp:671-748 and
 // gx_d3d12.cpp:1809-1826. No guest memory or live GX registers are read here.
 bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::DrawSegment& segment) {
@@ -212,7 +285,7 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
   float vp[6], proj[6];
   std::memcpy(vp, dc.xf_regs+0x1A, sizeof vp); std::memcpy(proj, dc.xf_regs+0x20, sizeof proj);
   if (!std::isfinite(vp[0]) || !std::isfinite(vp[1]) || vp[0] == 0 || vp[1] == 0) return true;
-  float u[103][4] = {};
+  float u[105][4] = {};
   u[0][0]=proj[0]; u[1][1]=proj[2]; u[2][2]=proj[4]; u[2][3]=proj[5];
   if (dc.xf_regs[0x26] == 0) { u[0][2]=proj[1]; u[1][2]=proj[3]; u[3][2]=-1; }
   else { u[0][3]=proj[1]; u[1][3]=proj[3]; u[3][3]=1; }
@@ -235,8 +308,15 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
   int right=std::clamp(int(gx::bits(br,12,12))-xo+1,0,gx::EFB_WIDTH), bottom=std::clamp(int(gx::bits(br,0,12))-yo+1,0,gx::EFB_HEIGHT);
   if(right<=l || bottom<=t) return true;
   r[6]=l;r[7]=t;r[8]=right-l;r[9]=bottom-t;
-  return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
+  for (int i=0;i<8;++i) {
+    const auto& t=dc.textures[i];
+    u[103+i/4][i%4]=t.used ? float(gx::sbits(t.mode0,9,8))/32.0f : 0;
+  }
+  if (!upload_textures(dc)) { gxw_retire_textures(); return false; }
+  const bool ok = gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
                   &u[0][0],r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),dc.components);
+  gxw_retire_textures();
+  return ok;
 }
 
 
@@ -268,7 +348,7 @@ class WebGpuBackend final : public gx::Backend {
   void presentation_stats(uint32_t* frames, uint32_t* pipelines, uint32_t* textures) const override {
     if (frames) *frames = presented_;
     if (pipelines) *pipelines = gxw_pipeline_count();
-    if (textures) *textures = 1; // neutral texture, not a decoded GX texture
+    if (textures) *textures = 1; // only the persistent white fallback; draw textures retire after submission
   }
 
  private:
@@ -294,6 +374,45 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_presented() {
   uint32_t frames = 0;
   if (g_webgpu) g_webgpu->presentation_stats(&frames, nullptr, nullptr);
   return int(frames);
+}
+
+// Synthetic tiled GX bytes, deliberately independent of decode_texture's implementation.
+// Every format gives a non-white sample; palettes are part of the immutable snapshot.
+static gx::TextureRef fixture_texture(uint32_t format, bool changed=false, bool mips=false, bool pattern=false) {
+  gx::TextureRef t; t.used=true; t.addr=0x1000; t.width=8; t.height=8;
+  t.format=format; t.tlut_format=1; t.mip_levels=mips?4:1;
+  auto data=std::make_shared<gx::TextureSnapshot>();
+  const size_t palette_bytes=format==8?32:format==9?512:format==10?32768:0;
+  data->palette.resize(palette_bytes);
+  for(size_t i=0;i<palette_bytes;i+=2) { data->palette[i]=changed?0xF8:0x07; data->palette[i+1]=changed?0:0xE0; }
+  uint32_t w=8,h=8;
+  for(uint32_t level=0;level<t.mip_levels;++level) {
+    const size_t base=data->image.size(), bytes=gx::texture_level_bytes(w,h,format);
+    data->image.resize(base+bytes);
+    auto* p=data->image.data()+base;
+    for(size_t i=0;i<bytes;++i) {
+      if(format==0) p[i]=0x88;
+      if(format==1) p[i]=128;
+      if(format==2) p[i]=0xA8;
+      if(format==3) p[i]=(i%2)?128:192;
+      if(format==4) p[i]=(i%2)?0xE0:0x07;
+      if(format==5) p[i]=(i%2)?0x1F:0xFC;
+      if(format==6) {
+        // 4x4 tiles: AR plane followed by GB plane.
+        const size_t k=i%64;
+        p[i]=k<32 ? ((k%2)?((changed || (pattern && (i/64)%2))?32:128):192) : ((k%2)?32:(level?192:64));
+      }
+      if(format==14) {
+        // Four CMPR subblocks: red and blue endpoints, all selectors = 2.
+        const uint8_t block[8]={0xF8,0,0,0x1F,0xAA,0xAA,0xAA,0xAA}; p[i]=block[i%8];
+      }
+    }
+    w=std::max(1u,w/2);h=std::max(1u,h/2);
+  }
+  data->hash=0; // deliberately identical: backend must not trust a hash/address alone
+  t.data=data;
+  if(mips) { t.mode0=1u<<5; t.mode1=(16u<<8)|16u; } // force mip 1
+  return t;
 }
 
 // The spike's render test (web/tests/spike/render.spec.ts). No CI runner has the disc
@@ -332,11 +451,27 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     if (geometry==3) dc.bp.reg[gx::BP_GENMODE]=2u<<14; // front cull (clockwise triangle)
     const float xy[3][2]={{-0.9f,-0.6f},{-0.5f,0.6f},{-0.1f,-0.6f}};
     for(int layer=0;layer<3;layer++) {
+      if (geometry>=10) {
+        static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
+        const uint32_t format=geometry<=20?formats[geometry-10]:geometry==32?8:6;
+        const auto texture=fixture_texture(format,layer==1 && (geometry==31 || geometry==32),geometry==33,geometry>=34);
+        // Exercise all eight bindings even though the intentionally limited shader uses slot 0.
+        for(auto& t:dc.textures) {
+          t=texture;
+          if(geometry==35) t.mode0=1; // repeat
+          if(geometry==36) t.mode0=2; // mirror
+          if(geometry==37) t.mode0=16 | (4u<<5); // linear min/mag, no mip
+        }
+      }
       dc.first_vertex=frame.vertices.size(); dc.first_segment=frame.segments.size(); dc.segment_count=1;
       for(int i=0;i<3;i++) {
         gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1];
         v.pos[2]=layer==1 ? -0.8f : -0.3f; v.posmtx=3; v.nrm[2]=1;
         v.col0[layer]=255; v.col0[3]=255; v.col1[3]=255;
+        if(geometry>=10) {
+          for(auto& c:v.col0) c=geometry==30?128:255;
+          v.uv[0][0]=(geometry>=34 && geometry<=36)?1.25f:0.5f; v.uv[0][1]=0.5f;
+        }
         frame.vertices.push_back(v);
       }
       frame.segments.push_back({dc.first_vertex,3,dc.primitive});

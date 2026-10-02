@@ -1683,6 +1683,39 @@ loss/recreation validation; per-segment uploads/submissions and unbounded pipeli
 are provisional. Resource completion callbacks need the worker event loop to turn.
 
 
+## 2026-10-02 — WebGPU snapshot textures (`render/webgpu-textures`)
+
+Implemented in `wasm/render/gx_webgpu.cpp`: eight explicit texture/sampler bindings; immutable
+snapshot-only uploads; reuse of upstream CPU decoding for all eleven GX formats to RGBA8;
+per-level mip decoding/upload; D3D wrap/min/mag/mip/LOD mapping with signed shader bias;
+slot-0 MODULATE; retirement after submitted GPU work. No texture cache is introduced: every
+segment re-uploads, so image/TLUT changes invalidate naturally, at an unmeasured performance
+cost. Unsupported/malformed snapshots and inverted LOD clamps stop the backend instead of
+substituting guessed pixels. No simulation, native, Node, CI or submodule changes.
+
+Added 19 synthetic GPU pixel cases in `web/tests/spike/render.spec.ts`: all formats, RGBA8
+MODULATE, image/TLUT replacement with identical address/hash, forced mip, three wrap modes,
+and linear magnification. They use the existing worker `copyTextureToBuffer` readback and
+non-white expected colors; omitting texture sampling cannot satisfy them. CMPR is CPU
+decompressed; RGBA8 AR/GB planes and all tiled formats are repacked to linear RGBA8.
+
+Verification performed: source inspection against pinned upstream `gx_texture.cpp`,
+`texture_snapshot.h`, `TextureRef`, and `gx_d3d12.cpp:1613–1648`; `git diff --check`.
+**Not executed:** compilation, tests/CI, browser/GPU readback, preview, real-game captures,
+performance/memory measurements or the 2400-checkpoint parity run. Per task instructions,
+no local build, no CI chasing and no parity claim; parity belongs to the parent session.
+
+Known limits/next step: validate the draft in CI and on GPU, then add bias/minification/trilinear,
+rectangular mip, TLUT variants/index and CMPR transparency fixtures. Slot 0/raw UV0 MODULATE is
+a deliberate TEV subset; slots 1–7 await priority 3 shading. Texgen, lighting, EFB copy texture
+lookup, optional anisotropy/replacements, caching and device recreation remain open. Q10 in
+`docs/OPEN_QUESTIONS.md` records these boundaries. Deliver as a draft PR; stop without merge.
+
+**Landed by the parent session**, measured in the same Chromium harness: **35 passed, 1 skipped**
+(16.2s), the texture cases among them — RGBA8 MODULATE including alpha, image and TLUT replacement
+at an identical address/hash, mip 1 with LOD clamps, clamp/repeat/mirror repeat, and linear
+magnification across a tile boundary. The skipped one is still the canvas pixel (PR #47's gap).
+
 ### 2026-10-02 — Access JWKS retrieval (`fix/access-jwks-fetch`)
 
 Changed Pages entry-point retrieval to plain `fetch(url)` and require the final response URL
