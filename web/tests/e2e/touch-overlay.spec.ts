@@ -13,6 +13,25 @@ import { expect, test } from '@playwright/test';
  * the hook would be state nothing else in the page uses, and the bytes are what the guest would
  * actually be handed.
  */
+/** DIAGNOSTIC (temporary): what the browser hit-tests at a point, and the viewport it is in. */
+async function hitTest(page: import('@playwright/test').Page, point: { x: number; y: number }) {
+  return page.evaluate(({ x, y }) => {
+    const describe = (element: Element | null): string | null => {
+      if (!element) return null;
+      const id = element.id ? `#${element.id}` : '';
+      const classes = element.classList.length ? `.${[...element.classList].join('.')}` : '';
+      return `${element.tagName.toLowerCase()}${id}${classes}`;
+    };
+    return {
+      point: { x, y },
+      elementFromPoint: describe(document.elementFromPoint(x, y)),
+      viewport: { width: innerWidth, height: innerHeight },
+      scroll: { x: scrollX, y: scrollY },
+      stage: document.querySelector('#game-stage')?.getBoundingClientRect().toJSON(),
+    };
+  }, point);
+}
+
 test.describe('touch overlay', () => {
   test('writes a PAD state from pointer events, and keeps steering outside the zone', async ({ page }) => {
     await page.goto('/');
@@ -33,6 +52,7 @@ test.describe('touch overlay', () => {
     const centre = { x: zone.x + zone.width / 2, y: zone.y + zone.height / 2 };
     // Full deflection is half the zone's smaller side (touch.ts, zoneRadius).
     const radius = Math.min(zone.width, zone.height) / 2;
+    console.log('DIAGNOSTIC stick zone', JSON.stringify({ zone, hit: await hitTest(page, centre) }));
 
     // The stick starts where the finger lands, so the state is neutral at the press.
     await page.mouse.move(centre.x, centre.y);
@@ -62,6 +82,7 @@ test.describe('touch overlay', () => {
     const button = await page.locator('#touch-a').boundingBox();
     if (!button) throw new Error('the A button has no layout: the overlay is not displayed');
     const centre = { x: button.x + button.width / 2, y: button.y + button.height / 2 };
+    console.log('DIAGNOSTIC A button', JSON.stringify({ button, hit: await hitTest(page, centre) }));
 
     await page.mouse.move(centre.x, centre.y);
     await page.mouse.down();
