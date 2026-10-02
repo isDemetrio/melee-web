@@ -70,6 +70,7 @@ static FILE* g_decoder_cost = nullptr;
 static void reset_decoder_cost() {
   std::memset(g_cost_seconds, 0, sizeof g_cost_seconds);
   std::memset(g_cost_calls, 0, sizeof g_cost_calls);
+  ppc::offline_watched_block_writes = 0;
 }
 void sim_cost_add(int slot, double seconds) {
   if (slot >= 0 && slot < SIM_COST_COUNT) {
@@ -83,10 +84,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE int melee_decoder_cost(int mode) {
   if (mode == 1) {
     g_decoder_cost = std::fopen("/work/decoder_cost.csv", "w");
     if (!g_decoder_cost) return 0;
-    std::fputs("retrace,sim_ms,match_frame,record_ms,texture_ms,observer_ms,rest_ms,decode_ms,decode_rest_ms,non_decode_ms,record_calls,texture_calls,observer_calls,decode_calls\n", g_decoder_cost);
+    std::fputs("retrace,sim_ms,match_frame,record_ms,texture_ms,observer_ms,rest_ms,decode_ms,decode_rest_ms,non_decode_ms,record_calls,texture_calls,observer_calls,decode_calls,observer_game_ms,end_frame_ms,non_decode_rest_ms,allocate_joint_calls,load_joint_calls,release_joint_calls,display_joint_calls,rigid_matrix_calls,other_matrix_calls,envelope_matrix_calls,end_frame_calls,watched_ram_block_writes,watched_ram_blocks\n", g_decoder_cost);
   }
   reset_decoder_cost();
   offline_cost_mode = mode;
+  ppc::offline_watch_count_enabled = mode == 1;
   return 1;
 }
 static void record_decoder_cost(double sim_ms, uint32_t match_frame) {
@@ -95,12 +97,26 @@ static void record_decoder_cost(double sim_ms, uint32_t match_frame) {
   const double texture = g_cost_seconds[SIM_SNAPSHOT] * 1000;
   const double observer = g_cost_seconds[SIM_OBSERVE] * 1000;
   const double decode = g_cost_seconds[SIM_DECODE] * 1000;
+  const double end_frame = g_cost_seconds[SIM_END_FRAME] * 1000;
+  double observer_game = 0;
+  for (int kind = 0; kind < 7; ++kind)
+    observer_game += (g_cost_seconds[SIM_GAME_ENTRY + kind] + g_cost_seconds[SIM_GAME_EXIT + kind]) * 1000;
+  unsigned watched_blocks = 0;
+  // Outside the sim interval: no per-write scan or clock.
+  for (const auto& watched : ppc::g_ram_watched)
+    watched_blocks += watched.load(std::memory_order_relaxed) != 0;
   // Exclusive phases sum to sim_ms. Preserve signed residuals: never hide bad accounting.
-  std::fprintf(g_decoder_cost, "%u,%.6f,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,%llu\n",
+  std::fprintf(g_decoder_cost, "%u,%.6f,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,%llu,%.6f,%.6f,%.6f",
       g_retraces, sim_ms, match_frame, record - texture - observer, texture, observer,
-      sim_ms - record, decode, decode - record, sim_ms - decode,
+      sim_ms - record - observer_game - end_frame, decode, decode - record - end_frame, sim_ms - decode,
       (unsigned long long)g_cost_calls[SIM_RECORD], (unsigned long long)g_cost_calls[SIM_SNAPSHOT],
-      (unsigned long long)g_cost_calls[SIM_OBSERVE], (unsigned long long)g_cost_calls[SIM_DECODE]);
+      (unsigned long long)g_cost_calls[SIM_OBSERVE], (unsigned long long)g_cost_calls[SIM_DECODE],
+      observer_game, end_frame, sim_ms - decode - observer_game);
+  // One invocation per constructor; destructor timing contributes only to the duration.
+  for (int kind = 0; kind < 7; ++kind)
+    std::fprintf(g_decoder_cost, ",%llu", (unsigned long long)g_cost_calls[SIM_GAME_ENTRY + kind]);
+  std::fprintf(g_decoder_cost, ",%llu,%llu,%u\n", (unsigned long long)g_cost_calls[SIM_END_FRAME],
+      (unsigned long long)ppc::offline_watched_block_writes, watched_blocks);
   std::fflush(g_decoder_cost);
 }
 #else

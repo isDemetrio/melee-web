@@ -1780,3 +1780,25 @@ measurement, iPhone performance/p99, enabled-profiler comparison, or native/WASM
 makes no parity claim. The mean <= 3 ms / p99 <= 6 ms target is unverified.
 Delivery is a draft PR only; no merge. PR-triggered workflows may start automatically;
 this session does not dispatch, monitor or claim their results.
+
+## 2026-10-02 — frame split, awaiting all execution checks
+
+Branch `perf/frame-split` starts at `1de335850e06ba84f5e0651b5f9be62de7ef6c83`,
+exactly `perf/decoder-cost-2` / PR #71 (unmerged). The worktree already contained
+this newly created, clean branch; no existing commits were replaced. Draft PR
+is based on `perf/decoder-cost-2`, so only this measurement change is in its diff.
+
+- Added instrumentation: `observer_game_ms` times constructor/destructor bodies of all seven game-side hook kinds, counting entries by kind; guest function time excluded.
+- Added instrumentation: `end_frame_ms` times the complete XFB completion block, including backend recycling and cleanup; **nested inside decoder time**, not outside it.
+- Added instrumentation: `watched_ram_block_writes` counts version increments per watched block touched, including bulk callers; no per-write timer.
+- Added instrumentation: `watched_ram_blocks` reports the per-retrace watched-block count with min/max/last summaries; not additive across retraces.
+- Accounting: seven exclusive phases sum to `sim_ms`; five partition identities are checked with unchanged tolerance, signed residuals preserved, old CSV rejected.
+- Observer switch: **not implemented** because readers exist, including offline GX statistics; evidence and precise measurement boundaries in `docs/PORT_CHANGES.md` §0009.
+- Verified by source inspection: same upstream pin and P2/O2 base; full patch series applies sequentially in an isolated Git index; `git diff --check` clean.
+- Not verified: C++/WASM compilation, TypeScript checks, newly extended unit tests, CI, preview, iPhone performance, disabled-mode overhead, or runtime partition values.
+- Not verified: 2400-checkpoint trace against `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; operator will execute it. No simulation-equivalence claim.
+- No new timings measured, no optimizations, no decoder algorithm changes, no game data added, no local builds/tests or CI dispatch. Commit uses `[skip ci]` to honor the requested stop before CI without editing workflow gates.
+
+Next: operator authorizes CI/build, runs the trace and iPhone measurement with
+`?decoder-cost`, and reviews residuals/overhead before any optimization. Same-build
+observer on/off comparison remains unavailable under the reader constraint.
