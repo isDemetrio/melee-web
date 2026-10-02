@@ -1739,3 +1739,37 @@ is not expected to redirect, so a redirect is **refused** rather than followed, 
 `!upstream.ok` check maps it to 502 — no final-host check is needed where nothing is followed. Its
 test's expected request options were updated to match, and a repository-wide search confirms no
 other live occurrence of the option remains.
+
+## 2026-10-02 — the lighting body survives the C preprocessor (`render/webgpu-lighting`, PR #70)
+
+The branch's WASM core build failed on its first commit (run `37014818279`, job `Compile and link WASM
+offline core and minimum upstream runtime`): `wasm/render/gx_webgpu.cpp:146: unterminated function-like
+macro invocation`. The cause is the preprocessor's lexing of an `EM_JS` body, not the lighting. `EM_JS`
+stringifies its last argument, and the preprocessor reads that text first, with its own rules: a `//`
+starts a comment wherever it appears, including inside a JavaScript template literal, and a parenthesis
+inside a string literal is not counted as one. The call that emits the channel marker —
+`body.push(\`  { // colour channel ${j}\`)` — therefore lost the rest of its line: the closing backtick of
+its template literal and the parenthesis that closes the call. The macro invocation never closed. The same
+trap silently dropped the viewport comment inside the WGSL template literal, on `main` as well.
+
+Verified on the VPS without a compiler, against a stub of `emscripten/emscripten.h`, so the check costs no
+CI minutes:
+
+| Check | Before (`498fefa`) | After |
+| --- | --- | --- |
+| `cpp` on each of the six `EM_JS` invocations | the `gxw_draw` one: `error: unterminated argument list invoking macro "EM_JS"` | six of six exit 0 |
+| the body the preprocessor stringifies | `gxw_draw` is not emitted at all | 7,920 characters |
+| `node --check` on every emitted body | — | six of six parse |
+| the emitted `gxw_draw` run in Node against a stub device, one lit colour channel | — | 2,713 characters of WGSL, brackets balanced, carrying `// colour channel 0`, the viewport comment, and `lacc = vec4f(lacc.rgb + round(attn * u.rows[109].rgb), lacc.a)` |
+
+The other five bodies are byte-identical before and after.
+
+`scripts/tests/test_em_js_bodies.py` (new; the unittest job of `ci.yml` runs it in seconds) holds both
+rules for every `EM_JS` body: the preprocessor's parenthesis count must balance, and the preprocessor and
+JavaScript must agree about what is a comment. It fails on `main`'s `gx_webgpu.cpp` (the viewport comment,
+in the body of line 209) and passes on the fix, which is what says it tests the defect rather than itself.
+Local evidence: `python3 -m unittest discover -s scripts/tests` -> `Ran 169 tests`, `OK`;
+`python3 scripts/check_no_game_data.py --all` OK (211 tracked files); `git diff --check` clean;
+`bash scripts/tests/test_deploy_guard.sh` and `bash scripts/tests/test_device_test_serve.sh` OK.
+`test_phase0_runner.sh` needs the upstream submodule, which a worktree of this checkout does not carry.
+The post-fix CI run is recorded in PR #70.
