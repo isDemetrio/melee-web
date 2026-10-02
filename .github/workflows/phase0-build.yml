@@ -30,7 +30,16 @@ on:
       - 'web/tests/spike/**'
       - 'web/playwright.spike.config.ts'
       - 'web/public/sw.js'
-      - 'web/vite.config.ts'
+      # web/vite.config.ts is deliberately not here. This workflow's spike step reads it -- it
+      # runs `npx vite build` -- but that is not a reason to rebuild the WASM core for an edit to
+      # it: ci.yml has no path filter and runs `npx tsc --noEmit`, `npx vite build` with this same
+      # config and the same two entries, and the browser tests on every pull request. What the
+      # spike step added for a config-only change was the spike page's own invariants, and those
+      # are asserted where every pull request runs instead: ci.yml's build guard asserts that
+      # dist/spike.html exists, and web/tests/unit/build-config.test.ts asserts outDir, both
+      # entries, `worker.format: 'es'` and the isolation headers. The cost of the old behaviour,
+      # measured: the pull request that changed this file (PR #42, runs 36965278604 and
+      # 36965993838) paid 5m34s and 5m47s of WASM core build for it.
       # The probe (wasm/probe) is a CMake project of its own: webgpu-probe.yml builds it and no
       # target this workflow compiles reads it, so a change under it must not cost a 35-minute WASM
       # core build -- the same rule the scripts/phase0 list below already follows.

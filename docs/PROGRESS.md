@@ -1565,3 +1565,53 @@ address. `wrangler.toml` and `docs/DEPLOY.md` already named `web/dist` and are u
 **Next step.** Unchanged, and now with no leftover pull request of its own: the decision of the
 operator on `docs/OPEN_QUESTIONS.md` Q10(a) before renderer step 2, then the device rows M1 and M2
 (M2 decides). Both are outside what an autonomous session can produce.
+
+## A `vite.config.ts` edit no longer buys a WASM core build (2026-10-02, morning)
+
+`ci/vite-config-no-core-build`. The 2026-10-02 morning session landed the `outDir` defect and left
+exactly one thing named and undone: `web/vite.config.ts` was still in `phase0-build.yml`'s
+`pull_request.paths`, so an edit to it bought a WASM core build, and the session judged that trade
+("a `vite.config.ts` that breaks the spike build would stop being caught by that workflow") to
+belong "in a pull request of its own, with its own argument and its own measurement". This is that
+pull request.
+
+**The measurement was already in the repository.** PR #42 changed `web/vite.config.ts`,
+`web/playwright.config.ts`, `.github/workflows/ci.yml` and two documents. Of those five files only
+`web/vite.config.ts` is in `phase0-build.yml`'s list, so the two `Phase 0 — WASM core` runs that
+pull request paid — `36965278604` (5m34s) and `36965993838` (5m47s) — are the price of a
+config-only trigger, measured rather than estimated. Its two `CI` runs were 1m35s and 1m24s.
+
+**Why the entry was there, and what replaces it.** The workflow's spike step runs `npx tsc --noEmit`
+and `npx vite build --outDir "$RUNNER_TEMP/spike-dist" --emptyOutDir`, which reads the config. But
+`ci.yml` has **no path filter**: it runs on every pull request, and its web job runs the same
+`npx tsc --noEmit` and the same `npx vite build` — same config, same two entries
+(`main: index.html`, `spike: spike.html`) — plus the browser tests. So what the spike step added for
+a config-only change was the spike page's own invariants, and the two that matter are now asserted
+where every pull request runs, in seconds instead of minutes:
+
+- `ci.yml`'s "The build lands where the deploy looks for it" step also asserts `dist/spike.html`: a
+  config change that stops emitting the spike entry fails there, before any deploy.
+- `web/tests/unit/build-config.test.ts` (new, 4 cases) asserts the fields whose silent breakage
+  costs the most: `root`/`outDir` (where the deploy reads the shell, the defect of PR #42), both
+  entries, the COOP/COEP headers the threaded core needs, and `worker.format: 'es'` — the spike's
+  workers are constructed with `{ type: 'module' }` in `web/src/spike/main.ts` and
+  `web/src/spike/opfs-store.ts`, the only workers in the repository, so an `iife` format would break
+  them at run time and nowhere else.
+
+**Measured locally before the push** (no install, no bundler: `docs/AGENT_RULES.md` rules 2 and 3).
+The four assertions were run against the real exported config object with Node's type stripping and
+an identity `defineConfig` shim (`node --experimental-strip-types`), and all four hold: `root` `"."`,
+`outDir` `"dist"`, input keys `["main","spike"]` ending in `index.html`/`spike.html`,
+`worker.format` `"es"`, both header sets `same-origin`/`require-corp`. The Python and bash suites are
+untouched by this change.
+
+**What it does not cover, named rather than implied.** A config change that breaks the spike page at
+run time in a way those fields do not name. The spike tests still run on every pull request that
+touches `web/spike.html`, `web/src/spike/**`, `web/tests/spike/**`, the core, or the workflow file
+itself — which is why this pull request still pays one core build: `phase0-build.yml` lists itself in
+its own paths, deliberately, so a change to the workflow is exercised by the workflow.
+
+**Next step.** Unchanged: the decision of the operator on `docs/OPEN_QUESTIONS.md` Q10(a) before
+renderer step 2, then the device rows M1 and M2 (M2 decides), then O1–O9 and M5. Nothing else in
+`docs/PHASE0_DEPLOY_PLAN.md` §5–§6 is autonomous and open, and the leftover this session was named
+for is now closed.

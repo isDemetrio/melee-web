@@ -65,6 +65,13 @@ the spending limit is zero. The cost of waste is therefore stalled work, not mon
 - **The heavy build stays on the paths that need it.** Widening `phase0-build.yml`'s
   `pull_request.paths` to all of `scripts/phase0/**` once cost a 35-minute WASM build for an edit
   to the checkpoint comparator.
+- **A file another workflow already reads on every pull request does not belong in that list.**
+  `web/vite.config.ts` was in it because this workflow's spike step runs `npx vite build`; `ci.yml`
+  has no path filter, runs the same build with the same config and the same two entries, and runs
+  the browser tests, so the entry bought a 5m34s-5m47s WASM core build (runs `36965278604`,
+  `36965993838`) for a pull request whose only file in the list was that one. What it protected was
+  the spike page's own invariants, which `ci.yml`'s build guard (`dist/spike.html`) and
+  `web/tests/unit/build-config.test.ts` now assert on every pull request, in seconds.
 - **One run per push, not two.** A branch with an open pull request used to fire both the `push`
   and the `pull_request` events, so every push cost two full CI runs. `ci.yml` now triggers on
   pull requests and on pushes to `main` only.

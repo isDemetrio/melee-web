@@ -120,6 +120,12 @@ jobs:
           # the build wrote one level above the shell instead.
           test -f dist/_headers
           test -f dist/index.html
+          # The spike page is the second entry of this same config, and the only place in the
+          # repository where a module worker is constructed (web/src/spike/main.ts, opfs-store.ts,
+          # with `{ type: 'module' }`). A config change that stops emitting it, or that turns the
+          # worker format into a classic one, is caught here -- on every pull request -- which is
+          # what lets web/vite.config.ts stay out of phase0-build.yml's path list.
+          test -f dist/spike.html
           cmp dist/_headers public/_headers
           test ! -e ../dist
           echo "web/dist/_headers is byte-identical to web/public/_headers"
