@@ -160,6 +160,15 @@ team's certificate endpoint and verifies the JWT signature, issuer, audience and
 Use the existing workflow below once publication is authorized; changing settings does not
 repair an already published deployment. Do not enable `ACCESS_DEV_BYPASS` to fix this failure.
 
+**The dashboard is not where they belong.** `wrangler pages deploy` writes the project's
+configuration from `wrangler.toml`, so a variable set only in the dashboard is overridden by the
+next deploy (`developers.cloudflare.com/workers/wrangler/configuration/`, "Source of truth").
+That is what happened here: the variables were set, the preview was republished, and the
+deployment still answered `403 {"error":"Forbidden"}`. They are declared in `wrangler.toml` now,
+in `[vars]` and again in `[env.preview.vars]` (Pages *overrides* `vars` for a preview deployment
+rather than merging them, so the preview has to state them too), which is what makes the deploy
+carry them. The dashboard copy can stay; the file is the source of truth.
+
 With the updated middleware, a request carrying a token gets these deployment diagnostics:
 
 | HTTP | Exact JSON response | Meaning / action |
