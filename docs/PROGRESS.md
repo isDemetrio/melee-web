@@ -1636,3 +1636,5 @@ evidence are under Q10(a) in `docs/OPEN_QUESTIONS.md`. Legacy FIFO tests remain 
 No local build, Node, ISO operation, CI polling or checkpoint comparison. This is an unmeasured,
 not-for-merge experiment; the parent session owns CI results and same-commit 2400-checkpoint
 validation if link closure is subsequently resolved.
+
+2026-10-02 — Q10(a) follow-up: confirmed direct GX observer calls; supplied portable offline `authored_stats()` counter storage without the subframe solver. Known symbol closure addressed at source level; build/link/parity unmeasured, legacy FIFO tests and CI unchanged; draft PR #63 updated, no CI polling.

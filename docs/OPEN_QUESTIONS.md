@@ -209,19 +209,38 @@ Neither the decoder's guest reads/writes nor its texture RAM watches have been b
 `native_fifo_test` is unchanged and still tests the legacy decoder, **not** this new path;
 its passing would not establish real-decoder correctness. No CI check or link error flag is relaxed.
 
-**Source-level stopping point, not a measured CI result:** the real observer calls
-`gx::authored_stats()` (e.g. `port/runtime/gx/render_observer.cpp:93` at upstream pin `3aab717`).
-Its definition lives in `authored_pose.cpp:15`, which also calls `NativeMelee::SamplePacked` and
-`SubFrameSolver::{interpolate_matrix,extrapolate_matrix}`. The latter definitions live in
-`subframe.cpp`, which unconditionally includes `<windows.h>` and contains a solver thread pool.
-Thus adding the observer is not a self-contained link closure: it needs a further statistics
-boundary extraction or additional authored/subframe porting. Per the operator's stop rule,
-this branch stops here: no statistics stub, no additional porting, no linker suppression.
-`authored_pose.cpp` is deliberately not selected; unresolved `gx::authored_stats()` is expected
-at executable link, unless an earlier compilation failure prevents reaching it. Other compiler
-or linker failures remain possible and have not been measured.
+**Follow-up source review — 2026-10-02, observer required; diagnostic closure supplied.**
+At upstream pin `3aab717`, `gx_core.cpp` directly calls `observed_draw_identity` (457),
+`observed_owner` (465), `observed_skinned` (470), `capture_authored_pose` (471), and
+`finish_observed_frame` (580). These affect draw metadata/capture and frame bookkeeping;
+removing the observer would not be a valid source-set reduction. `gx_texture.cpp` has no
+observer reference, and `native_draw_audit.cpp` does not require it either: the dependency
+comes from the decoder itself, independently of native draw auditing.
 
-**Compilation/link evidence:** none for this spike at handoff. No compiler, Node, game run or
+`authored_stats()` is also called directly by `gx_core.cpp` (473–476, 822–823), not only by
+`render_observer.cpp`. Its definition in `authored_pose.cpp:15` simply returns a static
+`AuthoredStats`: atomic counters declared in `authored_pose.h:70–81`. Every use in the
+selected decoder/observer sources increments a capture, rejection, feature or draw count;
+none reads a counter to decide a draw, pose or simulation outcome. For example, the observer
+increments `capture[1]` after the capture eligibility condition has already failed. The
+condition and return remain unchanged. These are diagnostic counts, not solver state.
+
+`native/offline_authored_stats.cpp` supplies the same static counter storage for the shared
+native/Node/web offline source set. It retains actual increments rather than fabricating
+zero statistics; it performs no animation sampling and has no simulation/drawing side effects.
+The upstream `authored_pose.cpp` stays excluded, so there is exactly one selected definition.
+No upstream modification or numbered patch is needed: this is an offline host implementation
+of the existing declaration. Observer capture, guest reads/writes, texture RAM watches,
+`native_fifo_test`, and all CI/link checks remain unchanged.
+
+The known `authored_stats` symbol dependency is now supplied at source level; executable link
+success is still unmeasured. Bringing in the full sampler would instead require
+`port/runtime/gx/authored_pose.cpp`, `NativeMelee::SamplePacked` and
+`SubFrameSolver::{interpolate_matrix,extrapolate_matrix}` from `port/runtime/gx/subframe.cpp`,
+including its unconditional `<windows.h>` and solver thread pool. That would be a separate
+porting task; it is neither required for counter storage nor attempted here.
+
+**Compilation/link evidence:** none for this spike, including this follow-up. No compiler, Node, game run or
 ISO extraction was invoked on the VPS. The worktree's submodule is uninitialized; source review
 used GitHub's contents API at the exact pinned commit, without populating/modifying the submodule
 or touching the other agent's checkout. The existing `gx_core.cpp` header comment remains true
