@@ -2229,3 +2229,149 @@ render.spec.ts's canvas pixel test. **No CI test proves that the main page shows
 picture**; that needs a GPU that survives presenting, or the operator's device. Trace
 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` not verified by this agent; no change touches the
 simulation or `wasm/render/`.
+
+## The draw cost, split before it was cut: one encoder and one pass per frame (2026-10-02, night, `perf/draw-cost`)
+
+The operator's iPhone 16 Pro run of `79a6fc6` (Safari, canvas, 2400 frames) was the first with a
+real draw cost: in-match mean 46.3 ms (p95 109.9, p99 172.1), simulation ~3 ms of it, 1795 frames
+presented of 2400, then `draw: InvalidStateError: GPUDevice.createCommandEncoder: Unable to make
+command encoder.` No validation errors; texture pool and bind group cache both at 1024.
+
+### The split, before any change
+
+Bench: `~/incoming/phase0/draw-cost/bench2.mjs` (not committed: it runs the private core),
+derived from the gpu-census bench. The CI web core of `8305929` (run 37065540768; its renderer is
+byte-identical to `79a6fc6`'s) under Node against the operator's disc, with a mock WebGPU device
+that counts every call by method; per-section timers spliced into the backend's EM_JS functions;
+C++ by difference with a headless run. Per in-match frame, retraces 1639-2400 (762 frames):
+
+| item, per in-match frame | calls, `8305929` | Node CPU ms (instrumented) | calls, `df8635e` |
+| --- | ---: | ---: | ---: |
+| `createCommandEncoder` | 1,877 | 1.63 | **1** |
+| `beginRenderPass` + `end` | 1,877 + 1,877 | 6.98 with the row below | **6 + 6** |
+| state + `drawIndexed` (pipeline, bind group, viewport, scissor, vertex, index, draw) | 13,119 | (above) | **2,261** |
+| `finish` + `submit` | 1,877 + 1,877 | 1.47 | **1 + 1** |
+| `writeBuffer` (vertices, indices, uniforms) | 5,622 calls, 6.65 MB | 2.28 | **3 calls, 3.77 MB** |
+| bind group key + cache lookup | 0.86 created | 4.78 | 0.86 created |
+| pipeline key + lookup | 1,874 lookups | 1.87 | same |
+| `gxw_bind`, 8 per draw (sampler cache, texture pool) | 14,993 EM_JS calls | 4.07 | same |
+| `writeTexture` | 0.86 calls, 11 KB | 0.01 | same |
+| C++ backend (uniform rows, indices, texture decode) and EM_JS transitions | | ~8.6 | |
+| **all WebGPU calls** | **28,131** | | **2,283** |
+| **backend total, uninstrumented** (attached minus headless, 3 runs / 4 runs) | | **17.6** | **19.0** |
+
+The instrumented sections add up to ~33 ms because the timers themselves cost: two clock reads
+per mock call, 28k calls. They rank the items; the uninstrumented total is the number.
+
+**What the bench cannot measure** -- and is therefore not split here:
+
+- the time a real WebGPU call takes. On the iPhone every call is a message from the WebContent
+  process to WebKit's GPU process, which then encodes Metal; the mock's calls are nearly free;
+- GPU execution time, and presentation;
+- JavaScriptCore against V8.
+
+So the 42 ms are split only this far: **our own JavaScript and C++ are ~17.6 ms on the VPS**,
+which is **~2.4 ms on the phone if they scale like the simulation does** (headless in-match
+32.2 ms here against 4.35 ms on the phone, `d624d06`; an assumption, not a measurement). The
+remaining **~40 ms are inside the 28,131 WebGPU calls per frame and/or waiting on the GPU**, in
+proportions these tools cannot tell apart (if it were all calls: ~1.4 µs per call). GPU side,
+unmeasured: each of the 1,877 render passes loaded and stored the whole 640x528 EFB and its
+depth.
+
+**The failure is the call volume.** In WebKit's source (main branch, read; the shipped Safari
+not verified), `GPUDevice.createCommandEncoder` throws exactly this message only when
+`RemoteDeviceProxy::createCommandEncoder` gets null, which it returns when the IPC send to the GPU
+process fails. Every WebGPU call is such a message: ~28k per frame, 1,877 of them new encoders.
+
+### The cut (`wasm/render/gx_webgpu.cpp`)
+
+The biggest item by the split is the per-draw command structure, so the obvious first step was
+the right one. Draws, clears and copies are recorded into **one batch**: one command encoder,
+one render pass across consecutive draws, submitted at the XFB copy that ends the GX frame (and
+at the end of `submit_frame`). Uniforms, vertices and indices are appended to per-batch arenas
+(uniforms at a dynamic offset, 256-byte stride; vertices and indices via `baseVertex` and
+`firstIndex`) and written with **one `writeBuffer` per arena** just before the submit, so no
+draw of a batch overwrites another's data. Consecutive draws with identical constants share one
+uniform slot (bind group or offset changes: ~329 per in-match frame for 1,874 draws). Pipeline, bind group, viewport and
+scissor are sent only when they change. Whole run: encoders 2,025,740 -> 2,282, one per presented
+frame plus three.
+
+Safety rules, as code: a pooled texture named by the open (unsubmitted) batch is never evicted
+(`batchSerial`; the pool may exceed its budget instead); arenas are replaced only between
+batches, so the destroyed buffer is named by submitted work alone; an arena that overflows
+submits its batch first, then doubles (to 16 MiB) so the next frame fits again. Measured: with
+fixed 1 MiB / 256 KiB arenas each match frame overflowed into 4 submits; with growth, 1.
+
+Memory, the price: the arenas are 1.75 MiB (uniforms) + 4 MiB (vertices) + 0.5 MiB (indices)
+on the GPU after growth, the same again as JavaScript staging; 8 MiB GPU peak during a growth.
+Before: 125 KB.
+
+### Correctness, checked rather than argued
+
+`VALIDATE=1` (`bench2.mjs`, then `bench3.mjs`): the mock keeps every buffer's bytes, applies
+`writeBuffer` in queue order and executes every submitted `drawIndexed`. For each draw it checks
+that the uniforms at its dynamic offset, its indices and the vertices they reach are
+byte-identical to what `gxw_draw` was handed, and (`bench3.mjs`) that its pipeline, viewport,
+scissor and the textures and samplers of its bind group are the ones the per-draw code would
+have set; a submit naming a destroyed texture or buffer fails.
+
+| run | draws checked | errors |
+| --- | ---: | ---: |
+| `8305929` (per-draw submit; the checker's own control) | 2,021,706 | 0 |
+| `df8635e` (this branch) | 2,021,706 | **0** |
+| broken on purpose: uniform offset forced to 0 (500 frames) | 81,994 | 81,565 |
+| broken: `baseVertex` dropped (500 frames) | 81,994 | 81,565 |
+| broken: pipeline set once per pass (700 frames) | 98,853 | 96,397 |
+| broken: scissor set once per pass (2400 frames; it changes inside a pass only in the match) | 2,021,706 | 60,812 |
+| pool limit 64, so the eviction guard is exercised: correct | 2,021,706 | **0** |
+| pool limit 64, eviction guard removed | 2,021,706 | 4,572 "submit names a destroyed texture" |
+
+At the real limit (1024) the guard is never reached in this run, so removing it alone shows
+nothing; the limit-64 pair is the test that it matters. CI (`Phase 0 — WASM core`, real WebGPU in
+Chromium/SwiftShader): all 42 spike tests pass, including the pixel probes, the eviction test
+and `geometry 6`, which now pads one layer to 72,003 vertices so that the batch is submitted and
+both arenas grow in the middle of a frame. In that same CI, 2400 synchronous selftest draws took
+676 ms of worker time before and 163-180 ms after (one run each; Dawn, not WebKit).
+
+Node CPU of our own code: **no gain**, as expected from a mock whose calls cost nothing. In-match
+mean, three uninstrumented runs each, alternating: `8305929` 48.2 / 49.3 / 51.7 ms, `df8635e`
+50.5 / 50.8 / 52.3 ms, headless 30.9-33.1 ms (4 runs). So ~17.6 -> ~19.0 ms: +1.5 ms, inside the
+run-to-run spread (~3.5 ms) but probably real -- the uniform comparison and the arena copies. The
+gain this change aims at is inside WebKit (28,131 -> 2,283 calls), which only the phone can show.
+
+### The 1024-entry texture pool (question 4)
+
+Yes: the 1027 live textures on the phone are the pool at its count limit (1024) plus EFB, depth
+and the white fallback. It is not a leak and not thrash. Same core, `POOL_LIMIT` patched, 2400
+frames:
+
+| pool limit | live at end | bytes in pool | level-0 uploads | re-uploads of seen pixels |
+| ---: | ---: | ---: | ---: | ---: |
+| 64 | 64 | 2.3 MB | 136,018 | 135,537 (thrash: a frame binds up to ~164) |
+| 256 | 256 | 7.6 MB | 1,773 | 1,292 |
+| **1024** (current) | 1024 | 19.1 MB | 1,773 | 1,292 |
+| 4096 | 1,772 (never full) | 41.0 MB | 1,773 | 1,292 |
+
+From 256 to 4096 the work is identical: the 1,292 re-uploads are new snapshots of unchanged
+bytes (a snapshot is a content; geometry 39's rule), not evictions coming back. Most of the 1024
+entries are snapshots the game will not draw again, held until LRU eviction. **Raising the limit
+buys nothing and costs memory. Lowering it to 256 would save ~11.5 MB here at no extra work, but
+with 1.6x margin over the largest frame measured (~164); other stages and characters are
+unmeasured.** Not changed in this PR: it is a separate decision.
+
+### Also found: the main page presented on every draw (PR #84)
+
+`web/src/play/worker.ts` treated the renderer's per-draw `heartbeat(-1)` as a completed retrace:
+transfer, wait for the page's acknowledgement, then for the 60 Hz deadline -- ~1,874 times per
+match frame. Separate PR, CI green; its selftest now draws, so three frames exactly is a test.
+
+### Not verified by this agent
+
+- **Anything on the phone**: whether the encoder failure is gone, the new frame time, whether
+  2400 frames are presented with drawing to the end. The operator's run is the test.
+- The trace: the bench writes it and every run here gave `c79c53b9cdf81426fa0277e7497a69e55bc5f571`
+  (headless, attached, validating, both cores) -- but the reference check is the operator's.
+- GPU time, before or after; WebKit's handling of dynamic offsets, `baseVertex` and 3.8 MB
+  `writeBuffer`s on the device.
+- The split of the ~40 ms between IPC, Metal encoding and GPU waits.
+- Pictures from the real game: CI checks synthetic pixels; the bench checks bytes and state.

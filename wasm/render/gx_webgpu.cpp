@@ -95,7 +95,7 @@ EM_JS(int, gxw_open, (int width, int height), {
     gpu.bindGroups = new Map();
     gpu.drawSerial = 0;
     // The batch: one command encoder holding every draw, clear and copy since the last submit,
-    // and one render pass across consecutive draws. Until 79a6fc6 each draw had its own encoder,
+    // and one render pass across consecutive draws. Through 8305929 each draw had its own encoder,
     // pass and submit, and 3 writeBuffers: ~15 WebGPU calls per draw, ~900 draws per frame, and
     // on the iPhone (WebKit) every call is a message to the GPU process. createCommandEncoder
     // failing there is that message failing to send (RemoteDeviceProxy::createCommandEncoder).
