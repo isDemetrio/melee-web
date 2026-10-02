@@ -47,7 +47,11 @@
 EM_JS(int, gxw_open, (int width, int height), {
   const gpu = Module["gxWebgpu"];
   if (!gpu || !gpu.device || (!gpu.context && !gpu.xfb)) return 0;
+  // Draws per batch, bounded by the uniform arena (UNIFORM_SLOTS x uniformStride bytes), and the
+  // vertex and index arenas' first sizes (they grow by doubling).
+  const UNIFORM_SLOTS = 1024, VERTEX_ARENA_INITIAL = 1 << 20, INDEX_ARENA_INITIAL = 256 << 10;
   try {
+    gpu.uniformSlotLimit = UNIFORM_SLOTS;
     gpu.efb = gpu.device.createTexture({
       size: [width, height], format: gpu.format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
@@ -58,7 +62,8 @@ EM_JS(int, gxw_open, (int width, int height), {
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST});
     gpu.device.queue.writeTexture({texture: gpu.white}, new Uint8Array([255,255,255,255]), {}, [1,1]);
     gpu.slots = [];
-    const entries = [{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:"uniform"}}];
+    const entries = [{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,
+      buffer:{type:"uniform",hasDynamicOffset:true}}];
     for (let i=0;i<8;i++) {
       entries.push({binding:1+2*i,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:"float"}});
       entries.push({binding:2+2*i,visibility:GPUShaderStage.FRAGMENT,sampler:{type:"filtering"}});
@@ -71,12 +76,51 @@ EM_JS(int, gxw_open, (int width, int height), {
     gpu.efbView = gpu.efb.createView();
     gpu.depthView = gpu.depth.createView();
     gpu.whiteEntry = {id:0, texture:gpu.white, view:gpu.white.createView()};
-    // Draw resources are persistent and rewritten through the queue (gxw_texture, gxw_draw).
-    gpu.uniforms = gpu.device.createBuffer({size:105*16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
-    gpu.vertexBuffer = null; gpu.indexBuffer = null;
+    // Draw resources are persistent (gxw_bind, gxw_draw). Uniforms, vertices and indices are
+    // arenas: each draw of a batch appends its data at its own offset to a staging copy, and the
+    // batch writes them with one writeBuffer each just before its single submit (gpu.flush).
+    const align = (gpu.device.limits && gpu.device.limits.minUniformBufferOffsetAlignment) || 256;
+    gpu.uniformStride = Math.ceil(105*16/align)*align;
+    gpu.uniforms = gpu.device.createBuffer({size:UNIFORM_SLOTS*gpu.uniformStride,
+      usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+    gpu.uniformStaging = new Uint8Array(UNIFORM_SLOTS*gpu.uniformStride);
+    gpu.uniformWords = new Uint32Array(gpu.uniformStaging.buffer);
+    gpu.vertexBuffer = gpu.device.createBuffer({size:VERTEX_ARENA_INITIAL,
+      usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+    gpu.vertexStaging = new Uint8Array(VERTEX_ARENA_INITIAL);
+    gpu.indexBuffer = gpu.device.createBuffer({size:INDEX_ARENA_INITIAL,
+      usage:GPUBufferUsage.INDEX|GPUBufferUsage.COPY_DST});
+    gpu.indexStaging = new Uint8Array(INDEX_ARENA_INITIAL);
     gpu.texturePool = new Map(); gpu.texturePoolBytes = 0; gpu.evicted = [];
     gpu.bindGroups = new Map();
     gpu.drawSerial = 0;
+    // The batch: one command encoder holding every draw, clear and copy since the last submit,
+    // and one render pass across consecutive draws. Until 79a6fc6 each draw had its own encoder,
+    // pass and submit, and 3 writeBuffers: ~15 WebGPU calls per draw, ~900 draws per frame, and
+    // on the iPhone (WebKit) every call is a message to the GPU process. createCommandEncoder
+    // failing there is that message failing to send (RemoteDeviceProxy::createCommandEncoder).
+    // A batch is submitted at each XFB copy (the end of a GX frame, so one per frame), at the end
+    // of submit_frame, and early when an arena is full.
+    //
+    // batchSerial names the open batch (or the next one, when none is open): a pooled texture
+    // whose `batch` is batchSerial may be named by the unsubmitted encoder and is not evicted
+    // (gxw_bind). Buffers are replaced only between batches (gxw_draw), so never under an open one.
+    gpu.batch = null; gpu.batchSerial = 1; gpu.batchSubmits = 0;
+    gpu.openBatch = () => gpu.batch || (gpu.batch = {encoder:gpu.device.createCommandEncoder(),
+      pass:null, state:null, vertexBytes:0, indexBytes:0, uniformSlots:0});
+    gpu.endPass = (b) => { if (b.pass) { b.pass.end(); b.pass = null; b.state = null; } };
+    gpu.flush = () => {
+      const b = gpu.batch;
+      if (!b) return;
+      gpu.batch = null; gpu.batchSerial++;
+      gpu.endPass(b);
+      const q = gpu.device.queue;
+      if (b.vertexBytes) q.writeBuffer(gpu.vertexBuffer,0,gpu.vertexStaging,0,b.vertexBytes);
+      if (b.indexBytes) q.writeBuffer(gpu.indexBuffer,0,gpu.indexStaging,0,b.indexBytes);
+      if (b.uniformSlots) q.writeBuffer(gpu.uniforms,0,gpu.uniformStaging,0,b.uniformSlots*gpu.uniformStride);
+      q.submit([b.encoder.finish()]);
+      gpu.batchSubmits++;
+    };
     gpu.backendDevice = gpu.device;
     return 1;
   } catch (error) {
@@ -85,11 +129,15 @@ EM_JS(int, gxw_open, (int width, int height), {
   }
 });
 
-// One EfbCopy: the XFB half (EFB source rectangle to the canvas), then the clear half. 1 on success.
+// One EfbCopy: the XFB half (EFB source rectangle to the canvas), then the clear half, recorded
+// into the batch after the draws before it. An XFB copy submits the batch: the canvas texture it
+// wrote is presented once the worker's task ends or transfers it. 1 on success.
 EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, int clear, int argb, int clear_z), {
   const gpu = Module["gxWebgpu"];
   try {
-    const encoder = gpu.device.createCommandEncoder();
+    const batch = gpu.openBatch();
+    gpu.endPass(batch);
+    const encoder = batch.encoder;
     if (to_xfb) {
       const target = gpu.xfb ? gpu.xfb : gpu.context.getCurrentTexture();
       let w = src_w, h = src_h;
@@ -111,7 +159,7 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
       pass.end();
       gpu.lastClearArgb = c;
     }
-    gpu.device.queue.submit([encoder.finish()]);
+    if (to_xfb) gpu.flush();
     gpu.backendCopies = (gpu.backendCopies | 0) + 1;
     if (gpu.device !== gpu.backendDevice) gpu.backendDevice = null;
     return 1;
@@ -143,8 +191,10 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
 // evicted texture is destroyed, which already-submitted draws survive
 // (https://www.w3.org/TR/webgpu/#texture-destruction), and its content id is queued for
 // upload_textures, which then forgets the snapshot (gxw_evicted): the id is never reused, so a
-// cached bind group naming it is never hit again. Textures of the draw being bound are never
-// evicted: such a draw may exceed the budget rather than lose a slot.
+// cached bind group naming it is never hit again. Textures the open batch may name -- the draw
+// being bound and every draw recorded since the last submit -- are never evicted: such a batch
+// may exceed the budget rather than destroy what its unsubmitted encoder uses (WebGPU would
+// reject the whole submit). Pool order is least recently used first, so they are its tail.
 EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, int mode0, int mode1), {
   const gpu = Module["gxWebgpu"];
   const SAMPLER_CACHE_LIMIT = 256;
@@ -172,7 +222,8 @@ EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, 
       for (let l = 0; l < levels; l++) size += Math.max(1, width >> l) * Math.max(1, height >> l) * 4;
       for (const [oldContent, old] of gpu.texturePool) {
         if (gpu.texturePool.size < TEXTURE_POOL_LIMIT && gpu.texturePoolBytes + size <= TEXTURE_POOL_BYTES) break;
-        if (old.draw === gpu.drawSerial) break; // this draw's own: everything after it is too
+        // Named by the open batch, whose encoder is not submitted yet: so is everything after it.
+        if (old.batch === gpu.batchSerial) break;
         gpu.texturePool.delete(oldContent); gpu.texturePoolBytes -= old.size; old.texture.destroy();
         gpu.evicted.push(oldContent);
       }
@@ -182,7 +233,7 @@ EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, 
       gpu.texturePoolBytes += size;
       fresh = true;
     }
-    entry.draw = gpu.drawSerial;
+    entry.batch = gpu.batchSerial;
     gpu.texturePool.set(content, entry);
     gpu.slots[slot] = {entry, sampler, key};
     return fresh ? 2 : 1;
@@ -212,11 +263,12 @@ EM_JS(int, gxw_texture_count, (), {
 
 // Explicit float4 rows: no dependency on an unverified C++/WGSL struct ABI.
 //
-// Nothing here is created per draw except what WebGPU makes single-use (encoder, pass, command
-// buffer). Uniform, vertex and index data are written into persistent buffers: the queue orders
-// each writeBuffer after the submits before it, as for the pooled textures above. Vertex and
-// index buffers grow by doubling; a replaced one is destroyed, which already-submitted draws
-// survive. https://www.w3.org/TR/webgpu/#buffer-destruction
+// Nothing here is created per draw. A draw is recorded into the open batch (gxw_open): its
+// uniforms, vertices and indices are appended to the batch's arenas -- uniforms at a dynamic
+// offset, vertices and indices through baseVertex and firstIndex -- so no draw of a batch
+// overwrites another's data, and the batch writes each arena once before its submit. The queue
+// orders those writes after the submits before them, so the next batch may reuse the arenas from
+// offset 0, as for the pooled textures above.
 //
 // Bind groups have no destroy() and were the next call to fail on the iPhone (one per draw:
 // 22,514 in 2400 frames, first createBindGroup failure at 6755 ms). Their descriptor is the fixed
@@ -229,7 +281,7 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
                      const float* constants, const float* raster, int lines, int cull, int zmode, int components), {
   const gpu = Module["gxWebgpu"];
   const BIND_GROUP_CACHE_LIMIT = 1024;
-  // The uploads before this call were draw drawSerial's; the next draw's get a new serial.
+  // Draws recorded (heartbeat.ts reports it).
   gpu.drawSerial++;
   // The page's heartbeat (web/src/spike/heartbeat.ts): a frame that draws slowly still beats.
   const beat = Module["heartbeat"];
@@ -293,23 +345,36 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
           depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}});
       gpu.pipelines.set(key,pipeline);
     }
-    const grow = (name,size,usage) => {
+    // Room in the batch's arenas, or submit the batch first: a batch is flushed, never
+    // overwritten. Textures already bound for this draw were marked with the batch just
+    // submitted; they move to the next one, which this draw opens.
+    const indexBytes = count*4, stride = gpu.uniformStride;
+    let batch = gpu.batch;
+    if (batch && (batch.uniformSlots >= gpu.uniformSlotLimit ||
+        batch.vertexBytes + vertex_bytes > gpu.vertexBuffer.size || batch.indexBytes + indexBytes > gpu.indexBuffer.size)) {
+      gpu.flush();
+      for (const s of gpu.slots) s.entry.batch = gpu.batchSerial;
+      batch = null;
+    }
+    // Arenas grow by doubling, only while no batch is open: the replaced buffer is named by
+    // submitted work alone, which survives destroy(). https://www.w3.org/TR/webgpu/#buffer-destruction
+    const grow = (name,staging,size,usage) => {
       const old = gpu[name];
-      if (old && old.size >= size) return old;
-      const b = d.createBuffer({size:Math.max(size,old ? 2*old.size : 0),usage:usage|GPUBufferUsage.COPY_DST});
+      if (old.size >= size) return;
+      const bytes = Math.max(size,2*old.size);
+      gpu[name] = d.createBuffer({size:bytes,usage:usage|GPUBufferUsage.COPY_DST});
+      gpu[staging] = new Uint8Array(bytes);
       if (old) old.destroy();
-      return gpu[name] = b;
     };
-    const vb = grow("vertexBuffer",vertex_bytes,GPUBufferUsage.VERTEX);
-    const ib = grow("indexBuffer",count*4,GPUBufferUsage.INDEX);
-    d.queue.writeBuffer(vb,0,HEAPU8,vertices,vertex_bytes);
-    d.queue.writeBuffer(ib,0,HEAPU8,indices,count*4);
-    d.queue.writeBuffer(gpu.uniforms,0,HEAPU8,constants,105*16);
+    if (!batch) {
+      grow("vertexBuffer","vertexStaging",vertex_bytes,GPUBufferUsage.VERTEX);
+      grow("indexBuffer","indexStaging",indexBytes,GPUBufferUsage.INDEX);
+    }
     const groupKey = gpu.slots.map(s => s.entry.id + "/" + s.key).join(",");
     let group = gpu.bindGroups.get(groupKey);
     if (group) gpu.bindGroups.delete(groupKey);
     else {
-      const entries = [{binding:0,resource:{buffer:gpu.uniforms}}];
+      const entries = [{binding:0,resource:{buffer:gpu.uniforms,size:105*16}}];
       for (let i=0;i<8;i++) {
         entries.push({binding:1+2*i,resource:gpu.slots[i].entry.view});
         entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
@@ -318,18 +383,50 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
       if (gpu.bindGroups.size >= BIND_GROUP_CACHE_LIMIT) gpu.bindGroups.delete(gpu.bindGroups.keys().next().value);
     }
     gpu.bindGroups.set(groupKey,group);
-    const encoder = d.createCommandEncoder();
-    const pass = encoder.beginRenderPass({colorAttachments:[{view:gpu.efbView,loadOp:"load",storeOp:"store"}],
-      depthStencilAttachment:{view:gpu.depthView,depthLoadOp:"load",depthStoreOp:"store"}});
-    pass.setPipeline(pipeline); pass.setBindGroup(0,group);
-    pass.setViewport(0,0,gpu.efb.width,gpu.efb.height,r[4],r[5]);
-    pass.setScissorRect(r[6],r[7],r[8],r[9]);
-    pass.setVertexBuffer(0,vb); pass.setIndexBuffer(ib,"uint32"); pass.drawIndexed(count); pass.end();
-    d.queue.submit([encoder.finish()]);
+    batch = gpu.openBatch();
+    if (!batch.pass) {
+      batch.pass = batch.encoder.beginRenderPass({colorAttachments:[{view:gpu.efbView,loadOp:"load",storeOp:"store"}],
+        depthStencilAttachment:{view:gpu.depthView,depthLoadOp:"load",depthStoreOp:"store"}});
+      // A pass starts with no state: everything below is set again in a new one.
+      batch.state = {pipeline:null,group:null,offset:-1,near:NaN,far:NaN,scissor:""};
+      batch.pass.setVertexBuffer(0,gpu.vertexBuffer); batch.pass.setIndexBuffer(gpu.indexBuffer,"uint32");
+    }
+    const pass = batch.pass, state = batch.state;
+    // Consecutive segments of one GX draw have the same constants: they share one slot.
+    const words = gpu.uniformWords, base = constants >> 2, n = 105*4;
+    let offset = (batch.uniformSlots - 1)*stride, same = batch.uniformSlots > 0;
+    for (let i = 0, at = offset >> 2; same && i < n; i++) same = words[at+i] === HEAPU32[base+i];
+    if (!same) {
+      offset = batch.uniformSlots*stride;
+      gpu.uniformStaging.set(HEAPU8.subarray(constants,constants+105*16),offset);
+      batch.uniformSlots++;
+    }
+    const baseVertex = batch.vertexBytes/108, firstIndex = batch.indexBytes/4;
+    gpu.vertexStaging.set(HEAPU8.subarray(vertices,vertices+vertex_bytes),batch.vertexBytes);
+    gpu.indexStaging.set(HEAPU8.subarray(indices,indices+indexBytes),batch.indexBytes);
+    batch.vertexBytes += vertex_bytes; batch.indexBytes += indexBytes;
+    // Redundant state is not sent again: on WebKit each call is an IPC message.
+    if (state.pipeline !== pipeline) { pass.setPipeline(pipeline); state.pipeline = pipeline; }
+    if (state.group !== group || state.offset !== offset) {
+      pass.setBindGroup(0,group,[offset]); state.group = group; state.offset = offset;
+    }
+    if (state.near !== r[4] || state.far !== r[5]) {
+      pass.setViewport(0,0,gpu.efb.width,gpu.efb.height,r[4],r[5]); state.near = r[4]; state.far = r[5];
+    }
+    const scissor = r[6] + "," + r[7] + "," + r[8] + "," + r[9];
+    if (state.scissor !== scissor) { pass.setScissorRect(r[6],r[7],r[8],r[9]); state.scissor = scissor; }
+    pass.drawIndexed(count,1,firstIndex,baseVertex);
     return 1;
   } catch(error) {
     gpu.recordFailure("draw", error); gpu.failure = "draw: " + error; return 0;
   }
+});
+
+// Submits the open batch, if any: the end of a frame. 1 on success.
+EM_JS(int, gxw_flush, (), {
+  const gpu = Module["gxWebgpu"];
+  try { gpu.flush(); return 1; }
+  catch(error) { gpu.recordFailure("submit", error); gpu.failure = "submit: " + error; return 0; }
 });
 
 EM_JS(int, gxw_pipeline_count, (), {
@@ -484,6 +581,8 @@ class WebGpuBackend final : public gx::Backend {
       }
       if (c.to_xfb) ++presented_;
     }
+    // A frame ends at its XFB copy, which has submitted already; this submits anything after it.
+    if (!gxw_flush()) host::gx_set_backend(nullptr);
   }
   void presentation_stats(uint32_t* frames, uint32_t* pipelines, uint32_t* textures) const override {
     if (frames) *frames = presented_;
@@ -614,11 +713,13 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         }
       }
       dc.first_vertex=frame.vertices.size(); dc.first_segment=frame.segments.size(); dc.segment_count=1;
-      // geometry 6: each layer repeats its triangle twice as often, growing the vertex and index
-      // buffers between submitted draws.
-      const int vertices=geometry==6 ? 3<<layer : 3;
+      // geometry 6: layer 1 pads its triangle with 24,000 degenerate ones, past the first size of
+      // both arenas (gxw_open: 1 MiB of vertices, 256 KiB of indices), so the batch holding layer
+      // 0 is submitted and both arenas grow in the middle of the frame.
+      const int vertices=geometry==6 && layer==1 ? 3+3*24000 : 3;
       for(int i=0;i<vertices;i++) {
-        gx::Vertex v{}; v.pos[0]=xy[i%3][0]; v.pos[1]=xy[i%3][1];
+        const int k=i<3 ? i : 0;
+        gx::Vertex v{}; v.pos[0]=xy[k][0]; v.pos[1]=xy[k][1];
         v.pos[2]=layer==1 ? -0.8f : -0.3f; v.posmtx=3; v.nrm[2]=1;
         v.col0[layer]=255; v.col0[3]=255; v.col1[3]=255;
         if(geometry>=10) {

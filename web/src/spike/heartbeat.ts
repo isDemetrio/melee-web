@@ -22,7 +22,7 @@
 
 /** What the renderer had done when a beat was taken; null in a run without a backend. */
 export interface RenderProgress {
-  /** Draws submitted (`gxWebgpu.drawSerial`). */
+  /** Draws recorded (`gxWebgpu.drawSerial`); they are submitted once per frame, in one batch. */
   draws: number;
   /** XFB copies submitted (`gxWebgpu.backendCopies`). */
   copies: number;

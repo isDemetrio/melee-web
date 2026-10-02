@@ -133,8 +133,9 @@ for (const [name, geometry, x, expected] of [
   ['outside the triangle', 1, 600, COLOUR_RGBA],
   ['scissor excludes the triangle probe', 2, 320, COLOUR_RGBA],
   ['front culling excludes the clockwise triangle', 3, 320, COLOUR_RGBA],
-  // 3, 6 and 12 vertices: the vertex and index buffers are replaced (and the old ones destroyed)
-  // after draws that use them were submitted. Writes landing in the wrong draw lose the green.
+  // The green layer is 72,003 vertices: the batch is submitted mid-frame and the vertex and index
+  // arenas are replaced (the old ones destroyed) after the draw that used them was submitted.
+  // Writes landing in the wrong draw, or at the wrong offset, lose the green.
   ['buffers grown between submitted draws', 6, 320, [0, 255, 0, 255]],
 ] as const) {
   test(`geometry: ${name}`, async ({ page }) => {

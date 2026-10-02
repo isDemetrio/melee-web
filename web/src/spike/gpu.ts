@@ -84,7 +84,7 @@ export interface SpikeGpu {
   /** Written by gx_webgpu.cpp's gxw_open/gxw_copy: the device object it rendered with, and how often. */
   backendDevice?: GpuDevice | null;
   backendCopies?: number;
-  /** Written by gx_webgpu.cpp: draws submitted, its texture pool and its bind group cache (heartbeat.ts reads them). */
+  /** Written by gx_webgpu.cpp: draws recorded (submitted per batch), its texture pool and its bind group cache (heartbeat.ts reads them). */
   drawSerial?: number;
   textureUploads?: number;
   texturePool?: { readonly size: number };
