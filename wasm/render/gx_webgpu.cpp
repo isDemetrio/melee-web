@@ -63,6 +63,7 @@ EM_JS(int, gxw_open, (int width, int height), {
     gpu.textureLayout = gpu.device.createBindGroupLayout({entries});
     gpu.pipelineLayout = gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.textureLayout]});
     gpu.pipelines = new Map();
+    gpu.samplers = new Map();
     gpu.backendDevice = gpu.device;
     return 1;
   } catch (error) {
@@ -109,19 +110,33 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
 
 // Re-upload immutable snapshots per segment: no address/hash cache can return stale pixels.
 // queue.writeTexture copies the WASM bytes before this call returns.
+//
+// Samplers are cached instead. They have no destroy(), so a fresh one per slot per draw (8 per
+// draw, unused slots included) was released only by garbage collection, whose timing nothing
+// here controls; createSampler is the call that failed on the iPhone after 81 copies (7296478).
+// The descriptor is a pure function of mode0 bits 0-7 and mode1 bits 0-15, which is the key, so
+// a hit is the sampler a miss would create. Bounded: past SAMPLER_CACHE_LIMIT distinct
+// keys the oldest is dropped (to garbage collection). render.spec.ts's sampler count is the misses.
 EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
                        const void* rgba, int bytes, int mode0, int mode1), {
   const gpu = Module["gxWebgpu"];
+  const SAMPLER_CACHE_LIMIT = 256;
   try {
     if (level === 0) {
       const minf = (mode0 >>> 5) & 7, mip = minf & 3;
       const lo = (mode1 & 255) / 16, hi = mip ? ((mode1 >>> 8) & 255) / 16 : 0;
       // WebGPU rejects inverted clamps; do not silently approximate invalid D3D state.
       if (lo > hi) throw new Error("inverted texture LOD clamps");
-      const wrap = ["clamp-to-edge","repeat","mirror-repeat","repeat"];
-      const sampler = gpu.device.createSampler({addressModeU:wrap[mode0&3],addressModeV:wrap[(mode0>>>2)&3],
-        magFilter:(mode0&16)?"linear":"nearest", minFilter:(minf&4)?"linear":"nearest",
-        mipmapFilter:mip===2?"linear":"nearest",lodMinClamp:lo,lodMaxClamp:hi});
+      const key = (mode0 & 255) | ((mode1 & 65535) << 8);
+      let sampler = gpu.samplers.get(key);
+      if (!sampler) {
+        const wrap = ["clamp-to-edge","repeat","mirror-repeat","repeat"];
+        sampler = gpu.device.createSampler({addressModeU:wrap[mode0&3],addressModeV:wrap[(mode0>>>2)&3],
+          magFilter:(mode0&16)?"linear":"nearest", minFilter:(minf&4)?"linear":"nearest",
+          mipmapFilter:mip===2?"linear":"nearest",lodMinClamp:lo,lodMaxClamp:hi});
+        if (gpu.samplers.size >= SAMPLER_CACHE_LIMIT) gpu.samplers.delete(gpu.samplers.keys().next().value);
+        gpu.samplers.set(key, sampler);
+      }
       const texture = width ? gpu.device.createTexture({size:[width,height],mipLevelCount:levels,
         format:"rgba8unorm",usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST}) : gpu.white;
       gpu.slots[slot] = {texture,sampler};
@@ -465,6 +480,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
           if(geometry==35) t.mode0=1; // repeat
           if(geometry==36) t.mode0=2; // mirror
           if(geometry==37) t.mode0=16 | (4u<<5); // linear min/mag, no mip
+          if(geometry==38) t.mode0=layer==1 ? 1 : 0; // clamp, repeat, clamp: two sampler keys
         }
       }
       dc.first_vertex=frame.vertices.size(); dc.first_segment=frame.segments.size(); dc.segment_count=1;
@@ -474,7 +490,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         v.col0[layer]=255; v.col0[3]=255; v.col1[3]=255;
         if(geometry>=10) {
           for(auto& c:v.col0) c=geometry==30?128:255;
-          v.uv[0][0]=(geometry>=34 && geometry<=36)?1.25f:0.5f; v.uv[0][1]=0.5f;
+          v.uv[0][0]=((geometry>=34 && geometry<=36) || geometry==38)?1.25f:0.5f; v.uv[0][1]=0.5f;
         }
         frame.vertices.push_back(v);
       }

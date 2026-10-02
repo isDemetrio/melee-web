@@ -1924,3 +1924,46 @@ correct readback, zero errors/loss, peak 12 textures / 3 buffers, final 4 persis
 textures / 0 buffers. Synthetic 2400 XFB copies are not 2400 game frames or actual screen
 presentations. Added unit coverage for deferred loss/uncaptured errors and immutable
 first-failure counters. Final CI pending. Original phone loss reason remains unknown.
+
+## 2026-10-02 — WebGPU device survival: bounded sampler cache
+
+Branch `fix/gpu-device-survival`, base `6f3ff5f` (main, PR #77 merged). Operator evidence, on
+`7296478` (**before** PR #77): `?canvas`, 2400 frames, iPhone 16 Pro, `presented: 81`, first
+failure `createSampler` (InvalidStateError), then readback `createBuffer`; simulation trace correct.
+
+What the code shows on the base. The promise-callback retirement that fits the operator's
+description was already replaced by PR #77's second commit (`6971bc9`): transient textures and
+buffers are destroyed synchronously after `queue.submit`, and CI asserts peak 12 textures / 3
+buffers through 2400 synchronous textured draws. **The phone has not run a build with that.**
+What still grows with every draw and has no `destroy()`: 8 samplers (unused slots included),
+1 bind group, 10 texture views, encoders. Samplers are the measured failing call.
+
+Options, judged on the code:
+1. Synchronous release: already done for every destroyable type (`6971bc9`). Samplers, bind
+   groups and views have no release API.
+2. Yield to the event loop every N frames: the simulation is one `callMain`; Asyncify and
+   `emscripten_sleep` are forbidden in the simulation path (`AGENT_RULES.md`). It needs the frame
+   loop to return to JavaScript — a simulation-path restructure, not the smallest change.
+3. Reuse: the sampler descriptor is a pure function of `mode0 & 0xFF` and `mode1 & 0xFFFF`.
+
+Chosen: 3, samplers only. `gxw_texture` keeps a `Map` keyed on those bits, max 256 entries,
+oldest dropped past the limit. Creation errors still go to `recordFailure`/`gpu.failure`, nothing
+cached on a throw. Bind groups cannot be cached while slot textures are recreated per draw.
+`resources.sampler.created` now counts cache misses. Tests: the 384/2400-draw resource tests
+expect **1** sampler instead of `copies * 8`; new fixture `geometry=38` (clamp/repeat/clamp in one
+frame) proves a hit never crosses wrap modes (pixel `[128,64,32,192]`, 2 samplers).
+
+The skipped canvas-pixel test stays skipped: CI Chromium loses the device at the first canvas
+commit with `copies=2` and no geometry — zero draws, zero samplers, zero transient textures — so
+no resource-lifetime change can reach it (PROGRESS, runs `36896537472`/`36898914442`).
+
+Recommended next, not done: yield every N frames via a re-entrant frame step (not Asyncify).
+It is also what real on-screen presentation needs: an OffscreenCanvas frame is committed only
+when the worker's task ends, so during `callMain` every XFB copy lands in the same
+`getCurrentTexture()` and `presented` counts copies, not screen frames.
+
+NOT verified: the 2400-checkpoint trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` (operator
+runs it; the change is renderer-only), phone survival, phone device-loss reason, per-frame
+cost on the phone (expected not to rise: a Map lookup replaces 8 `createSampler` per draw,
+unmeasured), whether samplers or the pre-#77 textures caused the 81-copy loss. No local
+build or test run; CI is the only build.
