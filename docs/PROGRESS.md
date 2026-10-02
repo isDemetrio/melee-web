@@ -2113,3 +2113,58 @@ match frame (dropped from the cache to GC, as samplers were) fails again in a lo
 census fingerprint samples bytes, so "481 contents" is an estimate; the snapshot counts are
 exact. Not reverted: the diagnosis exonerates the pool, and reverting it would only bring back
 the `createBindGroup` failure that turned rendering off before the match.
+
+## T7 lands, and the flake the merge exposed (2026-10-02, evening)
+
+`net/sab-ring` (PR #59) is merged as `5168783`, and `fix/flaky-disc-route-test` (PR #81) as `6488b49`.
+
+**Why this and not something else.** `docs/PLAN_BREAKDOWN.md` T7 lists the SPSC ring over
+`SharedArrayBuffer` among its deliverables, and everything else T7 lists had landed earlier
+(`web/src/net/transport.ts`, `web/src/net/webrtc.ts`, `web/tests/e2e/rtc.spec.ts`). In the recommended
+order `T0 → T1 → T4 → T2 → T3 → T5 → T6 → T8 → T7 → T9 → T10`, T9 is credential-gated (Cloudflare) and
+T10 depends on all, so T7 was the one plan item that was neither done, nor credential-gated, nor waiting
+on a device or an operator decision — and the branch had been open, green and unmerged since 12:23. This
+session refreshed it onto `main` (merge `92ca20e`) and re-measured before merging, rather than merging a
+tree CI had not seen.
+
+**What landed.** `web/src/net/sab_ring.ts` and `wasm/net/sab_ring.h` — the same byte layout written
+twice, frames `[u32 len][u8 lane][payload]` with head/tail as `Int32Array` indices;
+`wasm/net/sab_ring_test.c` and `wasm/net/check_sab_ring.mjs` replay one scripted sequence through both
+halves and require the two ring images to be identical byte for byte (including a frame that wraps the
+end of the data region, a ring that fills and refuses, and three writes that are not frames);
+`web/tests/unit/sab_ring.test.ts` is T7's stated JavaScript acceptance (wraparound, back-pressure that
+returns instead of waiting, zero-length frames refused, 10^5 random frames round-tripped);
+`docs/NETCODE_MAP.md` gains the "Transport" section; `wasm-probe.yml` compiles and runs both halves,
+which is why this pull request cost no WASM core build.
+
+**Measured.** Locally, on the merged tree, with Node and Python only (rules 2 and 3):
+`python3 -m unittest discover -s scripts/tests` — **167 tests, OK**;
+`python3 scripts/check_no_game_data.py --all` — clean, 228 tracked files;
+`bash scripts/tests/test_deploy_guard.sh` — all deploy and upload guards hold;
+`bash scripts/tests/test_device_test_serve.sh` — 6 cases pass. In CI on the exact merged head `92ca20e`:
+run `37047248275` (CI) **success** 1m38s and run `37047248317` (WASM toolchain probe, both halves)
+**success** 1m16s.
+
+**The merge exposed a flaky test, and it was not the merge's.** The first `main` run after the merge,
+`37047462284`, failed in *Repo hygiene and workflow lint* / *Unit tests for the hygiene gate*:
+`test_both_disc_routes_serve_the_same_file` (`scripts/tests/test_serve_spike.py:206`) compared the two
+whole responses, headers included, and `http.server` stamps `date` per response — so two requests that
+straddle a second boundary differ on that header alone, and the log shows `18:26:56` against `18:26:57`.
+The tree of `5168783` is byte-identical to `92ca20e` (`8e630c5a`), whose pull-request run was green
+minutes earlier, and the rerun of `37047462284` is green: the same tree, two outcomes. Reproduced
+deterministically on the VPS with the real fixture (stdlib only, no build): two requests one second
+apart, `date` `18:32:09` against `18:32:10`, old assertion `False`, new assertion `True`. PR #81
+asserts `date` present and then drops it; the status, every other header and the bytes are still
+compared. CI run `37048256707` **success** 1m31s (all four jobs); the merge's own `main` run
+`37048453891` **success** 1m43s.
+
+**NOT verified.** The ring under two real threads: the module is built `MELEE_SINGLE_THREAD=1`
+(`wasm/core/CMakeLists.txt`), so no second thread exists to produce or consume one, and nothing here is
+linked into `melee_core_wasm` — there is no consumer yet, and adding it to that build would be a change
+to the simulation path with no measurement behind it. No game frame has crossed a ring.
+
+**Next step.** Unchanged, and now with T7 closed: T9 is credential-gated, T10 depends on it, and what
+remains for the plan is the operator's — O1's legal call, O2–O9's credentials, and the device rows M1,
+M2 and M5 whose in-match mean and p99 are the go/no-go. The renderer's open thread
+(`render/webgpu-lighting`, PR #70) had uncommitted changes in its worktree when this session looked and
+was left untouched, as was the stale uncommitted change in the main checkout's `wasm/net/sab_ring_test.c`.
