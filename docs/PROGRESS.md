@@ -2268,8 +2268,11 @@ reads **210 citations** across the four documents and reported **2 violations**,
 section runs from its banner at 785 to the end of the file, 1090). Both were claims that could not be true
 of the pinned upstream, which is the class this gate exists for. Locally on the VPS, with Python only
 (rules 2 and 3): `python3 -m unittest discover -s scripts/tests` -- **189 tests, OK**, 1 skipped (22 new; the skipped case is the one that reads the pinned submodule, which this checkout does not have and CI does);
-`python3 scripts/check_no_game_data.py --all` -- clean, 234 tracked files; `git diff --check` -- clean.
-In CI: PLACEHOLDER_CI.
+`python3 scripts/check_no_game_data.py --all` -- clean, 236 tracked files; `git diff --check` -- clean.
+In CI on the exact head `537c5c2`: run `37071237555` (CI) **success** 1m54s, all four jobs green, and
+the new step printed the same `210 citations in 4 documents, 0 violation(s)` line the local run did.
+The unit-test step there reports `Ran 189 tests` / `OK` with no skip, so the case that reads the
+pinned submodule is exercised in CI and skipped only in a checkout that has none.
 
 **NOT verified.** Nothing about the renderer, the phone, the disc or the module: this change compiles
 nothing and uploads nothing. The checker reads the submodule's text, so it is silent about whether the
