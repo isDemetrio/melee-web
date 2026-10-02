@@ -41,6 +41,16 @@
 // offscreen texture target -- and the canvas pixel is therefore left to a real device, exactly as the
 // renderer's own tests leave it.
 //
+// THE ADOPTED DEVICE (docs/OPEN_QUESTIONS.md Q10(b)). The third question is whether C++ can adopt
+// a device acquired in JavaScript before the module runs, which is what the simulation's one
+// synchronous `callMain` requires. The pinned port declares the import
+// (`webgpu/include/webgpu/webgpu.h:2265`, `emscripten_webgpu_get_device()`, reading
+// `Module['preinitializedWebGPUDevice']` in `webgpu/src/library_webgpu.js:647-660` of the package
+// Emscripten 4.0.23 pins); this check requires the measured half: the page acquires a device, C++
+// adopts it, and it creates a texture and writes a pixel into it through the adopted device. A
+// `device.lost` on that device and an uncaptured error on it are failures here, because the page's
+// device exists only for this question.
+//
 // The two configurations are the remaining variable: Playwright launches the `chromium-headless-shell`
 // build for `headless: true` unless a channel is named (microsoft/playwright#33566), while
 // `channel: 'chromium'` selects the new headless mode on the full Chromium build. The check passes if
@@ -144,6 +154,16 @@ function shortfalls(result) {
   if (result.canvas !== 'configured and cleared') missing.push(`canvas: ${JSON.stringify(result.canvas)}`);
   // A rejected command is a validation error, and a validation error is not an answer.
   if (result.errors?.length > 0) missing.push(`uncaptured GPU errors: ${JSON.stringify(result.errors)}`);
+  // The adopted device: the open half of Q10(b). A null `adopt` means the module never loaded.
+  if (result.adopt?.device !== true) {
+    missing.push(`adopt: C++ did not adopt the JavaScript device (${JSON.stringify(result.adopt)})`);
+  } else {
+    if (result.adopt.queue !== true) missing.push('adopt: the adopted device gave no queue');
+    if (result.adopt.limits !== true) missing.push('adopt: the adopted device refused to report its limits');
+    if (result.adopt.wrote !== true) missing.push('adopt: the adopted device created no texture, or wrote no pixel');
+  }
+  if (result.adopt_device_lost) missing.push(`adopt: the device the page acquired was lost: ${result.adopt_device_lost}`);
+  if (result.adopt_errors?.length > 0) missing.push(`adopt: uncaptured GPU errors: ${JSON.stringify(result.adopt_errors)}`);
   if (result.pageErrors.length > 0) missing.push(`page errors: ${JSON.stringify(result.pageErrors)}`);
   return missing;
 }
@@ -160,6 +180,7 @@ function diagnostics(result) {
     `canvas: ${JSON.stringify(result.canvas)}; commit: ${JSON.stringify(result.canvas_commit)}`,
     `uncaptured errors: ${JSON.stringify(result.errors)}`,
     `device lost: ${JSON.stringify(result.device_lost)}`,
+    `adopt: device ${JSON.stringify(result.adopt)}; page device ${JSON.stringify(result.adopt_device)}; lost ${JSON.stringify(result.adopt_device_lost)}; errors ${JSON.stringify(result.adopt_errors)}`,
     `error: ${JSON.stringify(result.error)}`,
   ];
 }
@@ -192,3 +213,4 @@ console.log(`  configuration: ${winner.name}`);
 console.log(`  browser: ${winner.browser_version} (${winner.user_agent})`);
 console.log(`  realm: ${winner.realm}; adapter: ${winner.adapter}; readback: ${JSON.stringify(winner.readback)}; canvas: ${winner.canvas}`);
 console.log(`  canvas commit: ${winner.canvas_commit}`);
+console.log(`  adopt: ${JSON.stringify(winner.adopt)}; page device lost: ${JSON.stringify(winner.adopt_device_lost)}`);
