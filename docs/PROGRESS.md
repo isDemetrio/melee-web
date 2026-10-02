@@ -1043,6 +1043,57 @@ needs `cloudflared` and a real tunnel, which no runner has. Its output still pri
 **Next step.** Unchanged: the device rows. M1 and M2 first (M2 decides), then the OPFS run over the
 real host, which this fix is what makes possible over the device server. O1–O9 stay the operator's.
 
+## The device tunnel command gets the tests it never had — 2026-10-01, morning
+
+Two entries in this file ended with the same gap: `scripts/phase0/device_test_serve.sh` has no test,
+because it needs `cloudflared` and a real tunnel and no runner has either. The script is the fallback
+route for a device session -- one command that starts `serve_spike.py`, opens a quick tunnel, checks
+that the page arrives with its isolation header, and prints the address, the user and the password --
+and it hands out that password for an address which is **public** while it runs.
+
+**The suite.** `scripts/tests/test_device_test_serve.sh`, six cases, no tunnel and no disc: `cloudflared`
+is a stub on PATH that prints an address of the shape the script greps for and then stays alive; the
+disc is a sparse zero file of the 1,459,978,240 bytes the server insists on, outside the repository
+(the fixture trick `scripts/tests/test_deploy_guard.sh` already uses); and `curl` is a stub that answers
+the stub tunnel address from a canned response and delegates everything else to the real curl, because
+no certificate for a stub hostname can exist. Everything else is real: the server is the real
+`serve_spike.py` on an ephemeral port, so the readiness loop, the manifest handover, the basic-auth
+user, the printed block and the cleanup after Ctrl-C are exercised for real.
+
+The cases: the usage text; five refusals (unknown argument, missing dist, missing disc image, a dist
+that is the shell and not the spike build, no cloudflared anywhere); a full run with the real manifest
+written by `disc_chunks.py`, asserting the block, the ten-character password, that the local server
+answers the manifest route and the page with that password, and that the server and the tunnel are gone
+after Ctrl-C; a run with a password given on the command line and no manifest, asserting the warning
+and that the block does not name a manifest; a manifest route answering 500, asserting the warning; and
+a dist that never answers the readiness probe, asserting that the run stops naming it.
+
+**The two defects it found.**
+
+1. **A two-character password on a public address.** The generator filtered a single 64-byte read of
+   `/dev/urandom`: measured on the VPS over 200 draws, 110 were shorter than ten characters, the mean
+   was 8.28 and the shortest was **two**. The address is public for as long as the script runs, so a
+   two-character basic-auth password is brute-forced in seconds. Now the read is 4096 bytes (518 to 595
+   usable characters, measured over five draws), the truncation is done by the shell rather than by a
+   second `head` in the pipeline -- so no stage can be killed by SIGPIPE under `pipefail`, the failure
+   mode that killed a CI step in this repository once already -- and the result is checked to be exactly
+   ten characters, with a refusal rather than a short password.
+2. **The manifest line ran into the user line.** `manifest_line` was interpolated into the heredoc line
+   that prints the user field, so a run with a manifest printed `manifest <url>  user  fabri` on one
+   line. The manifest line is now printed on a line of its own, and only when the route answered.
+
+**Measured, on the VPS** (pure bash, python and HTTP on loopback: no build, no ISO, no game data):
+
+| Command | Result |
+| --- | --- |
+| `bash scripts/tests/test_device_test_serve.sh` on the script before the two fixes | **1 assertion failed** ("the user line is not on a line of its own"); the password assertion passed on that draw and fails on about 55% of draws |
+| the same suite after the two fixes | **6 cases, all assertions pass**, run twice |
+| `python3 -m unittest discover -s scripts/tests` | `Ran 135 tests`, `OK` (unchanged) |
+| `bash scripts/tests/test_deploy_guard.sh` | all deploy and upload guards hold |
+| `bash scripts/tests/test_phase0_runner.sh` | 44 checkpoint runner guards hold |
+
+**In CI.** `.github/workflows/ci.yml` gains a `Device tunnel guards` step next to the other two shell
+suites, so the new file runs on every push.
 ## The spike is published, the OPFS path costs nothing, and the optimisation campaign finds its ceiling (2026-10-01, afternoon)
 
 This session did four things in one order: put the page on a stable host, measure the disc cache on a
