@@ -170,6 +170,35 @@ Cloudflare credentials, so the iPhone run can start before Q3/O1 are answered.
 
 ## Q10 — The renderer after step 1: where frames come from, who owns the device, when a frame is shown
 
+**Texture follow-up — 2026-10-02 (`render/webgpu-textures`, draft, unverified).**
+`wasm/render/gx_webgpu.cpp` now binds eight independent textures/samplers through an explicit
+WebGPU layout. It reads only `TextureRef::data` image/TLUT snapshots and calls the existing
+`gx::decode_texture` for I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/C4/C8/C14X2/CMPR. All are
+CPU-repacked to linear RGBA8; CMPR is decompressed, not uploaded as BC1. Each recorded mip is
+decoded with tiled byte offsets and uploaded separately. Wrap (including reserved wrap=repeat),
+min/mag/mip filters and LOD clamps follow pinned `gx_d3d12.cpp:1613–1648`; signed bias /32
+is supplied to WGSL `textureSampleBias` because WebGPU samplers have no bias field. Inverted
+LOD clamps and invalid snapshots fail attachment's draw path rather than being approximated.
+No new cache: snapshots are uploaded per segment and textures destroyed after queue completion;
+image/palette/address reuse therefore cannot preserve stale data. This is deliberately costly.
+
+Only slot 0 is sampled, using raw UV0 and vertex-color MODULATE, including alpha. Other slots
+are bound for future priority 3 shaders, **not** claimed to participate in TEV. Full TEV,
+lighting/texgen, EFB-copy texture lookup, anisotropy overrides, DLSS bias, replacement packs,
+cache performance and device recreation remain open. The existing headless/native/Node paths
+and simulation sources are unchanged.
+
+`web/tests/spike/render.spec.ts` adds actual GPU readback assertions for all eleven formats,
+MODULATE, same-address/hash image and TLUT replacement, forced mip 1, clamp/repeat/mirror and
+linear magnification across a tile boundary. These fixtures bind all eight slots, but establish
+pixel semantics only for slot 0. **None were run in this session.** Build/CI, browser/GPU output,
+preview, actual-game appearance and 2400-checkpoint parity are unverified (parity is reserved
+for the parent session). Signed bias, derivative-driven minification, trilinear mip transitions,
+rectangular chains, non-RGB565 TLUTs, CMPR transparent mode and nonzero palette indices still
+need dedicated pixel fixtures. Hardware sampling/rounding agreement with D3D is not established.
+This entry supersedes the earlier statement below that priority 4 is wholly absent; it does
+not establish priority 4 as validated or complete.
+
 
 **Geometry follow-up — 2026-10-02 (`render/webgpu-geometry`, draft, unverified).**
 `wasm/render/gx_webgpu.cpp` now consumes Draw commands with verified packed offsets,

@@ -139,3 +139,34 @@ for (const [name, geometry, x, expected] of [
 test('geometry also submits through the canvas path without readback assertions', async ({ page }) => {
   expectReplayed(await selftest(page, `${QUERY}&copies=2&geometry=1`), 3, 'canvas');
 });
+
+// These probes cannot pass with the white fallback or a vertex-only fragment shader.
+// Bytes are real GX tiles/TLUTs, decoded by the linked upstream CPU decoder.
+for (const [name, geometry, expected] of [
+  ['I4', 10, [136, 136, 136, 136]],
+  ['I8', 11, [128, 128, 128, 128]],
+  ['IA4', 12, [136, 136, 136, 170]],
+  ['IA8', 13, [128, 128, 128, 192]],
+  ['RGB565', 14, [0, 255, 0, 255]],
+  ['RGB5A3', 15, [255, 0, 255, 255]],
+  ['RGBA8 AR/GB repack', 16, [128, 64, 32, 192]],
+  ['C4 with RGB565 TLUT', 17, [0, 255, 0, 255]],
+  ['C8 with RGB565 TLUT', 18, [0, 255, 0, 255]],
+  ['C14X2 with RGB565 TLUT', 19, [0, 255, 0, 255]],
+  ['CMPR interpolated endpoint', 20, [170, 0, 85, 255]],
+  ['RGBA8 MODULATE including alpha', 30, [64, 32, 16, 96]],
+  ['new image snapshot at the same address/hash', 31, [32, 64, 32, 192]],
+  ['new TLUT snapshot at the same address/hash', 32, [255, 0, 0, 255]],
+  ['RGBA8 mip 1 with LOD clamps', 33, [128, 192, 32, 192]],
+  ['clamp to edge', 34, [32, 64, 32, 192]],
+  ['repeat', 35, [128, 64, 32, 192]],
+  ['mirror repeat', 36, [32, 64, 32, 192]],
+  ['linear magnification across a tile boundary', 37, [80, 64, 32, 192]],
+] as const) {
+  test(`texture: ${name}`, async ({ page }) => {
+    const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=${geometry}&sample-x=320`);
+    expectReplayed(result, 3, 'texture');
+    expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
+    expect(result.render?.readback).toEqual(expected);
+  });
+}
