@@ -2,6 +2,22 @@ name = "melee-web"
 pages_build_output_dir = "web/dist"
 compatibility_date = "2026-09-01"
 
+# The two variables `functions/_middleware.ts` validates the Access JWT against.
+#
+# They are declared here, and not only in the dashboard, because `wrangler pages deploy` writes the
+# project's configuration from this file: a variable set in the dashboard is overridden by the next
+# deploy (developers.cloudflare.com/workers/wrangler/configuration/, "Source of truth"). That is how
+# the spike preview came to answer `403 {"error":"Forbidden"}` to everyone right after a successful
+# Access login, with the variables apparently set in the project.
+#
+# Neither value is a secret: both appear in every Access login redirect, and the AUD is the Access
+# application's own tag. To re-derive them after a change, open any protected page and read the
+# redirect: the team domain is its `<team>.cloudflareaccess.com` host, and the AUD is the `kid` of
+# that URL (the same value as the `aud` claim of its `meta` token). See docs/DEPLOY.md.
+[vars]
+ACCESS_AUD = "a3079f1bb92f23c5299cc29d4436377594caa9cfc3b655c3571206548028906d"
+ACCESS_TEAM_DOMAIN = "jolly-frost-8cc9.cloudflareaccess.com"
+
 # Provision this private bucket and verify the binding in a Pages preview before production.
 # https://developers.cloudflare.com/pages/functions/wrangler-configuration/
 [[r2_buckets]]
@@ -16,3 +32,11 @@ bucket_name = "melee-web-assets"
 [[r2_buckets]]
 binding = "PHASE0_DISC"
 bucket_name = "melee-phase0-disc"
+
+# Pages overrides `vars` for a preview deployment rather than merging them
+# (developers.cloudflare.com/pages/functions/wrangler-configuration/, "Environment-specific
+# overrides"), so the preview states them as well. The spike page is a preview -- branch
+# `phase0-spike` -- and that is the deployment that was failing.
+[env.preview.vars]
+ACCESS_AUD = "a3079f1bb92f23c5299cc29d4436377594caa9cfc3b655c3571206548028906d"
+ACCESS_TEAM_DOMAIN = "jolly-frost-8cc9.cloudflareaccess.com"
