@@ -280,7 +280,7 @@ EM_JS(int, gxw_texture_count, (), {
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
                      const float* constants, const float* raster, int lines, int cull, int zmode, int components), {
   const gpu = Module["gxWebgpu"];
-  const BIND_GROUP_CACHE_LIMIT = 1024;
+  const BIND_GROUP_CACHE_LIMIT = 1024, ARENA_GROWTH_LIMIT = 16 << 20;
   // Draws recorded (heartbeat.ts reports it).
   gpu.drawSerial++;
   // The page's heartbeat (web/src/spike/heartbeat.ts): a frame that draws slowly still beats.
@@ -347,28 +347,33 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     }
     // Room in the batch's arenas, or submit the batch first: a batch is flushed, never
     // overwritten. Textures already bound for this draw were marked with the batch just
-    // submitted; they move to the next one, which this draw opens.
+    // submitted; they move to the next one, which this draw opens. The arena that overflowed
+    // grows (up to ARENA_GROWTH_LIMIT), so that the next frame fits in one batch again.
     const indexBytes = count*4, stride = gpu.uniformStride;
-    let batch = gpu.batch;
+    let batch = gpu.batch, vertexNeed = vertex_bytes, indexNeed = indexBytes;
     if (batch && (batch.uniformSlots >= gpu.uniformSlotLimit ||
         batch.vertexBytes + vertex_bytes > gpu.vertexBuffer.size || batch.indexBytes + indexBytes > gpu.indexBuffer.size)) {
+      const v = batch.vertexBytes + vertex_bytes, i = batch.indexBytes + indexBytes;
+      if (v > gpu.vertexBuffer.size && v <= ARENA_GROWTH_LIMIT) vertexNeed = v;
+      if (i > gpu.indexBuffer.size && i <= ARENA_GROWTH_LIMIT) indexNeed = i;
       gpu.flush();
       for (const s of gpu.slots) s.entry.batch = gpu.batchSerial;
       batch = null;
     }
     // Arenas grow by doubling, only while no batch is open: the replaced buffer is named by
     // submitted work alone, which survives destroy(). https://www.w3.org/TR/webgpu/#buffer-destruction
+    // A single draw larger than the limit still gets an arena that holds it.
     const grow = (name,staging,size,usage) => {
       const old = gpu[name];
       if (old.size >= size) return;
       const bytes = Math.max(size,2*old.size);
       gpu[name] = d.createBuffer({size:bytes,usage:usage|GPUBufferUsage.COPY_DST});
       gpu[staging] = new Uint8Array(bytes);
-      if (old) old.destroy();
+      old.destroy();
     };
     if (!batch) {
-      grow("vertexBuffer","vertexStaging",vertex_bytes,GPUBufferUsage.VERTEX);
-      grow("indexBuffer","indexStaging",indexBytes,GPUBufferUsage.INDEX);
+      grow("vertexBuffer","vertexStaging",vertexNeed,GPUBufferUsage.VERTEX);
+      grow("indexBuffer","indexStaging",indexNeed,GPUBufferUsage.INDEX);
     }
     const groupKey = gpu.slots.map(s => s.entry.id + "/" + s.key).join(",");
     let group = gpu.bindGroups.get(groupKey);
