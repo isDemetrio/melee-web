@@ -132,13 +132,15 @@ EM_JS(int, gxw_texture, (int slot, int width, int height, int levels, int level,
   } catch(error) { gpu.recordFailure("texture", error); gpu.failure = "texture: " + error; return 0; }
 });
 
-// Texture resources are retained until submitted work completes, including error paths.
+// Destroy after submission, including error paths. WebGPU retains allocations needed by
+// previously submitted work. Waiting for a JS completion callback retains every draw's resources
+// for the entire synchronous callMain (measured by render.spec.ts).
+// https://www.w3.org/TR/webgpu/#texture-destruction
 EM_JS(void, gxw_retire_textures, (), {
   const gpu = Module["gxWebgpu"];
   const textures = gpu.slots.map(s => s.texture).filter(t => t !== gpu.white);
   gpu.slots = [];
-  const retire = () => textures.forEach(t => t.destroy());
-  gpu.device.queue.onSubmittedWorkDone().then(retire,retire);
+  textures.forEach(t => t.destroy());
 });
 
 // Explicit float4 rows: no dependency on an unverified C++/WGSL struct ABI.
@@ -225,8 +227,10 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     pass.setScissorRect(r[6],r[7],r[8],r[9]);
     pass.setVertexBuffer(0,vb); pass.setIndexBuffer(ib,"uint32"); pass.drawIndexed(count); pass.end();
     d.queue.submit([encoder.finish()]);
-    // writeBuffer copies WASM bytes now; submitted GPU resources retire after completion.
-    d.queue.onSubmittedWorkDone().then(() => buffers.forEach(b => b.destroy()), () => buffers.forEach(b => b.destroy()));
+    // No future submissions use these buffers. destroy() permits the driver to reclaim them
+    // after its queued work, without waiting for callMain to yield to a JS promise callback.
+    // https://www.w3.org/TR/webgpu/#buffer-destruction
+    buffers.forEach(b => b.destroy());
     return 1;
   } catch(error) {
     gpu.recordFailure("draw", error); buffers.forEach(b => b.destroy()); gpu.failure = "draw: " + error; return 0;

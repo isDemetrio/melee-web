@@ -1891,3 +1891,36 @@ The canvas readback skip remains: documented Chromium failure on first canvas co
 No local builds/tests, no disc data, no simulation changes. NOT verified: the operator's
 2400-checkpoint trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571`, phone device-loss
 reason, 2400-frame canvas survival, preview or GPU memory. Draft PR only, no merge.
+
+### Measurement and targeted lifetime correction
+
+Baseline commit `99f7665`, Actions run [37025783561](https://github.com/isDemetrio/melee-web/actions/runs/37025783561):
+36 passed, 1 skipped. Real WebGPU backend, 128 repetitions / 384 textured draws,
+one synchronous worker task, offscreen texture, correct pixel `[128,64,32,192]`.
+
+| Type | Created | Explicitly destroyed at report | Peak undestroyed |
+| --- | ---: | ---: | ---: |
+| sampler | 3072 | unavailable (no API) | unavailable |
+| texture | 3076 | 3072 | 3076 |
+| buffer | 1157 | 1152 | 1157 |
+| bind group | 384 | unavailable (no API) | unavailable |
+| pipeline | 1 | unavailable (no API) | unavailable |
+
+All transient texture/buffer resources accumulate during the task and retirement runs
+only afterward. This disproves "never released", but confirms an unbounded-with-workload
+retirement backlog. No device loss or validation errors occurred in this baseline.
+These are API lifetime counts, **not GPU allocation bytes or a measured iPhone failure**.
+
+Correction: destroy transient textures/buffers immediately after submission (and on
+failed draws), letting the implementation retire already submitted work, as required by
+[WebGPU buffer destruction](https://www.w3.org/TR/webgpu/#buffer-destruction) and
+[texture destruction](https://www.w3.org/TR/webgpu/#texture-destruction). Also explicitly
+destroy probe/readback buffers (five remained undestroyed in the baseline report).
+No texture/sampler cache added: sampler creation counts do not establish live allocation.
+Pipeline cache unchanged. No simulation, scheduling or Asyncify changes.
+
+Regression coverage now repeats both 384 and 2400 textured draws in one task and requires
+correct readback, zero errors/loss, peak 12 textures / 3 buffers, final 4 persistent
+textures / 0 buffers. Synthetic 2400 XFB copies are not 2400 game frames or actual screen
+presentations. Added unit coverage for deferred loss/uncaptured errors and immutable
+first-failure counters. Final CI pending. Original phone loss reason remains unknown.

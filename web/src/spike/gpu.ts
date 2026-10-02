@@ -17,8 +17,8 @@
  * The device is acquired here, before the simulation starts, because the simulation is one
  * synchronous `callMain` and `requestAdapter` / `requestDevice` resolve only once the event loop
  * turns. Nothing here throws: a browser without WebGPU, a null adapter, a device that cannot be
- * created or a canvas that will not configure all come back as `{ gpu: null, reason }`, and the
- * run goes on headless exactly as it does without a canvas.
+ * created come back as `{ gpu: null, reason }`. Configuration failures keep the diagnostic
+ * object, refuse attachment, and let the run proceed headless.
  *
  * The WebGPU declarations are the few this file uses, written out because the shell carries no
  * `@webgpu/types` (the same choice `platform/capabilities.ts` makes). The numeric flags are the
@@ -144,6 +144,7 @@ async function roundTrip(device: GpuDevice): Promise<string> {
       return JSON.stringify(bytes) === JSON.stringify(expected) ? 'ok' : `wrong bytes ${JSON.stringify(bytes)}`;
     } finally {
       live.mapping.delete(buffer);
+      buffer.destroy();
     }
   } catch (error) {
     return String(error);
@@ -294,6 +295,6 @@ export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] |
     mark(gpu, `readback failed: ${error}`);
     return null;
   } finally {
-    if (buffer) live.mapping.delete(buffer);
+    if (buffer) { live.mapping.delete(buffer); buffer.destroy(); }
   }
 }

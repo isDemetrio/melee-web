@@ -99,7 +99,9 @@ test('one XFB copy shows the EFB as it was before its clear', async ({ page }) =
 
 test('with a canvas, the backend attaches and replays the copies into it', async ({ page }) => {
   // Everything about the canvas path that needs no readback (see THE GAP above).
-  expectReplayed(await selftest(page, `${QUERY}&copies=2`), 2, 'canvas');
+  const result = await selftest(page, `${QUERY}&copies=2`);
+  console.log('canvas device observation', JSON.stringify(result.render));
+  expectReplayed(result, 2, 'canvas');
 });
 
 test('the canvas pixel is the clear colour, on a GPU that survives presenting', async ({ page }) => {
@@ -174,13 +176,29 @@ for (const [name, geometry, expected] of [
   });
 }
 
-// Baseline measurement, before changing resource lifetime. No disc or guest execution.
-test('measure resources across a synchronous burst of textured draws', async ({ page }) => {
-  const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=16&repeats=128`);
-  console.log('synchronous resource baseline', JSON.stringify(result.render));
-  expectReplayed(result, 384, 'texture');
-  expect(result.render?.errors).toEqual([]);
-  expect(result.render?.resources.sampler.created).toBe(3072);
-  expect(result.render?.resources.texture.peakOutstanding).toBe(3076);
-  expect(result.render?.resources.buffer.peakOutstanding).toBeGreaterThanOrEqual(1152);
-});
+// Real backend, one synchronous task, no disc. 800 repetitions yield 2400 XFB copies.
+// This tests submitted work and its pixel, not 2400 browser presentation tasks or the game.
+for (const repeats of [128, 800]) {
+  test(`resources stay bounded through ${repeats * 3} synchronous textured draws`, async ({ page }) => {
+    const copies = repeats * 3;
+    const result = await selftest(page, `${QUERY}&copies=2&target=texture&geometry=16&repeats=${repeats}`);
+    console.log('synchronous resource result', JSON.stringify(result.render));
+    expectReplayed(result, copies, 'texture');
+    expect(result.render?.errors).toEqual([]);
+    expect(result.render?.deviceLoss).toBeNull();
+    expect(result.render?.readback).toEqual([128, 64, 32, 192]);
+    const resources = result.render!.resources;
+    expect(resources.sampler.created).toBe(copies * 8);
+    expect(resources.bindGroup.created).toBe(copies);
+    expect(resources.pipeline.created).toBe(1);
+    expect(resources.texture.created).toBe(copies * 8 + 4);
+    expect(resources.texture.destroyed).toBe(copies * 8);
+    expect(resources.texture.outstanding).toBe(4); // XFB, EFB, depth, white fallback
+    expect(resources.texture.peakOutstanding).toBe(12); // persistent + one draw's eight slots
+    expect(resources.buffer.created).toBe(copies * 3 + 5); // draws + four probes + readback
+    expect(resources.buffer.destroyed).toBe(resources.buffer.created);
+    expect(resources.buffer.outstanding).toBe(0);
+    expect(resources.buffer.peakOutstanding).toBe(3);
+    for (const count of Object.values(resources)) expect(count.failed).toBe(0);
+  });
+}
