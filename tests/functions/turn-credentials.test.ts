@@ -31,7 +31,7 @@ it('returns credentials with STUN first, no token, and exact upstream request', 
   expect(JSON.parse(body)).toEqual({ iceServers: [{ urls: ['stun:stun.cloudflare.com:3478'] }, relay] });
   expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
     'https://rtc.live.cloudflare.com/v1/turn/keys/test-key/credentials/generate-ice-servers',
-    { method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' }, body: '{"ttl":3600}' },
+    { method: 'POST', redirect: 'manual', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' }, body: '{"ttl":3600}' },
   );
 });
 it.each([
