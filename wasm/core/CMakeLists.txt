@@ -32,6 +32,7 @@ file(WRITE "${CMAKE_BINARY_DIR}/melee_opt.txt" "${MELEE_OPT}")
 target_compile_options(core_options INTERFACE ${MELEE_OPT} -g0 -ffp-contract=off -fno-fast-math)
 target_compile_definitions(core_options INTERFACE _FILE_OFFSET_BITS=64 MELEE_SINGLE_THREAD=1)
 if(EMSCRIPTEN)
+  target_compile_definitions(core_options INTERFACE MELEE_OFFLINE_COST=1)
   target_compile_options(core_options INTERFACE -fwasm-exceptions)
   target_link_options(core_options INTERFACE ${MELEE_OPT} -g0 -fwasm-exceptions -ffp-contract=off -fno-fast-math
     -sERROR_ON_UNDEFINED_SYMBOLS=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB

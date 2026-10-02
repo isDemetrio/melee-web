@@ -8,6 +8,9 @@
 #include "gecko_data.h"
 #include "wasm/compat/sha1.h"
 #include <chrono>
+#ifdef MELEE_OFFLINE_COST
+#include <emscripten/emscripten.h>
+#endif
 #include <mutex>
 #include <cstdarg>
 #include <cstdio>
@@ -60,7 +63,49 @@ void log_flush() { fflush(stderr); }
 }
 // Cost accounting is diagnostic only; replace Windows calibrated TSC profiling.
 const double tsc_seconds = 0;
+#ifdef MELEE_OFFLINE_COST
+static double g_cost_seconds[SIM_COST_COUNT]{};
+static uint64_t g_cost_calls[SIM_COST_COUNT]{};
+static FILE* g_decoder_cost = nullptr;
+static void reset_decoder_cost() {
+  std::memset(g_cost_seconds, 0, sizeof g_cost_seconds);
+  std::memset(g_cost_calls, 0, sizeof g_cost_calls);
+}
+void sim_cost_add(int slot, double seconds) {
+  if (slot >= 0 && slot < SIM_COST_COUNT) {
+    g_cost_seconds[slot] += seconds;
+    ++g_cost_calls[slot];
+  }
+}
+// Called once by the spike worker, after /work exists and before callMain.
+extern "C" EMSCRIPTEN_KEEPALIVE int melee_decoder_cost(int mode) {
+  if (mode < 0 || mode > 2 || g_decoder_cost || g_retraces) return 0;
+  if (mode == 1) {
+    g_decoder_cost = std::fopen("/work/decoder_cost.csv", "w");
+    if (!g_decoder_cost) return 0;
+    std::fputs("retrace,sim_ms,match_frame,record_ms,texture_ms,observer_ms,rest_ms,decode_ms,decode_rest_ms,non_decode_ms,record_calls,texture_calls,observer_calls,decode_calls\n", g_decoder_cost);
+  }
+  reset_decoder_cost();
+  offline_cost_mode = mode;
+  return 1;
+}
+static void record_decoder_cost(double sim_ms, uint32_t match_frame) {
+  if (!g_decoder_cost) return;
+  const double record = g_cost_seconds[SIM_RECORD] * 1000;
+  const double texture = g_cost_seconds[SIM_SNAPSHOT] * 1000;
+  const double observer = g_cost_seconds[SIM_OBSERVE] * 1000;
+  const double decode = g_cost_seconds[SIM_DECODE] * 1000;
+  // Exclusive phases sum to sim_ms. Preserve signed residuals: never hide bad accounting.
+  std::fprintf(g_decoder_cost, "%u,%.6f,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,%llu\n",
+      g_retraces, sim_ms, match_frame, record - texture - observer, texture, observer,
+      sim_ms - record, decode, decode - record, sim_ms - decode,
+      (unsigned long long)g_cost_calls[SIM_RECORD], (unsigned long long)g_cost_calls[SIM_SNAPSHOT],
+      (unsigned long long)g_cost_calls[SIM_OBSERVE], (unsigned long long)g_cost_calls[SIM_DECODE]);
+  std::fflush(g_decoder_cost);
+}
+#else
 void sim_cost_add(int, double) {}
+#endif
 // No adapter/presentation latency instrumentation in the offline host.
 TickTiming& tick_timing() { static TickTiming timing; return timing; }
 double now_seconds() {
@@ -304,6 +349,9 @@ void boot_setup() {
   ppc::update_mxcsr(*cpu);
   g_next_frame = std::chrono::steady_clock::now();
   g_sim_resume = g_next_frame;
+#ifdef MELEE_OFFLINE_COST
+  reset_decoder_cost(); // Match the first sim interval; exclude boot/loading before it.
+#endif
 }
 
 // ---------------- guest calls from host ----------------
@@ -540,8 +588,11 @@ static void record_sim_time() {
   const auto now = std::chrono::steady_clock::now();
   uint32_t major = 0, minor = 0, match_frame = 0;
   current_scene(&major, &minor, &match_frame);
-  std::fprintf(g_sim_times, "%u,%.4f,%u\n", g_retraces,
-      std::chrono::duration<double, std::milli>(now - g_sim_resume).count(), match_frame);
+  const double sim_ms = std::chrono::duration<double, std::milli>(now - g_sim_resume).count();
+  std::fprintf(g_sim_times, "%u,%.4f,%u\n", g_retraces, sim_ms, match_frame);
+#ifdef MELEE_OFFLINE_COST
+  record_decoder_cost(sim_ms, match_frame);
+#endif
   std::fflush(g_sim_times);
 }
 
@@ -566,6 +617,9 @@ void retrace() {
   record_sim_time();
   trace_state();
   digest_state();
+#ifdef MELEE_OFFLINE_COST
+  if (offline_cost_mode == 1) reset_decoder_cost();
+#endif
   if (g_sim_times) g_sim_resume = std::chrono::steady_clock::now();
   if (options.frames && g_retraces >= options.frames) request_exit(0);
   if (g_exit) throw ExitRequested{g_exit_code.load()};

@@ -1,3 +1,4 @@
+import type { DecoderCostMode } from './decoder-cost.js';
 import { compareTraces, simTimeStats } from './compare';
 import { DiscCache } from './disc-cache.js';
 import { chooseDisc, type DiscChoice } from './disc-source.js';
@@ -12,6 +13,8 @@ const deleteDisc = element<HTMLButtonElement>('delete-disc');
 const discStatus = element('disc-status');
 const discProgress = element('disc-progress');
 const parameters = new URLSearchParams(location.search);
+const decoderCost: DecoderCostMode = parameters.get('decoder-cost') === 'legacy' ? 'legacy'
+  : parameters.has('decoder-cost') ? 'profile' : 'off';
 const frames = Number(parameters.get('frames') ?? 2400);
 const screen = element('screen');
 const renderOut = element('render');
@@ -208,7 +211,8 @@ run.onclick = async () => {
       try { statsAll = simTimeStats(data.simTimes, false); } catch (error) { errors.push(String(error)); }
       try { statsInMatch = simTimeStats(data.simTimes, true); } catch (error) { errors.push(String(error)); }
     }
-    element('stats').textContent = JSON.stringify({ all: statsAll, in_match: statsInMatch, errors }, null, 2);
+    element('stats').textContent = JSON.stringify({ all: statsAll, in_match: statsInMatch, errors,
+      decoder_cost: data.decoderCost ? { ...data.decoderCost, csv: undefined } : undefined }, null, 2);
     if (reference) {
       try {
         comparison = compareTraces(await reference.text(), data.trace);
@@ -223,6 +227,7 @@ run.onclick = async () => {
       timer_resolution_ms: data.timerResolutionMs, frames, iso_bytes: file.size,
       disc_source: discSource, storage_persisted: storagePersisted, core_load_ms: coreLoadMs,
       exit_code: data.exitCode, final_scene: data.finalScene, wall_ms: data.wallMs, trace_csv: data.trace,
+      decoder_cost: data.decoderCost,
       sim_times_csv: data.simTimes, stats_all: statsAll, stats_in_match: statsInMatch, comparison,
       // Only a ?canvas run has a renderer to report on; a headless result keeps its old shape.
       ...(data.render ? { render: data.render } : {}) };
@@ -233,5 +238,5 @@ run.onclick = async () => {
     download.hidden = false;
     run.disabled = false;
   };
-  worker.postMessage({ iso: file, frames, canvas }, canvas ? [canvas] : []);
+  worker.postMessage({ iso: file, frames, canvas, decoderCost }, canvas ? [canvas] : []);
 };
