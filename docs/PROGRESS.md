@@ -1496,3 +1496,72 @@ checked one by one:
 **Next step.** Unchanged, and now the only thing left that is not a leftover: the decision of the
 operator on `docs/OPEN_QUESTIONS.md` Q10(a) before renderer step 2, then the device rows M1 and M2 (M2
 decides), which no autonomous session can produce.
+
+## The built shell lands where the deploy looks for it (2026-10-02, morning)
+
+`fix/build-output-dir` (PR #42) was written on 2026-10-01 midday and left open. The 2026-10-02 night
+session found the defect it fixes still live on `main`, and did not land it, naming the reason:
+landing it "costs a 35-minute WASM core build", because `web/vite.config.ts` is in
+`phase0-build.yml` paths for `pull_request`. This session landed it. The first half of that reason
+is a measurement, and it does not hold.
+
+**The cost, measured.** The workflow run for this branch on 2026-10-01, `36861922615` at `ff31ca3`,
+took **10m42s** end to end (job `build` 10m38s, the shipped default `-Oz`). The run of this session,
+`36965278604` at `65d1191`, took **5m34s** (job `build` 5m30s, 04:36:22 to 04:41:52). The
+35-minute figure that `docs/AGENT_RULES.md` quotes describes the `-O2`-on-all-guest-code experiment
+(`perf/guest-o2`, `36864866829`, **52m32s**), not a default build. So the price of landing this was
+between five and eleven runner-minutes, and the deferral was not buying what it thought it was.
+
+**The defect, still live on `main` before this.** `web/vite.config.ts` set `outDir: '../dist'`.
+`outDir` is resolved relative to `root`, and `root` is `'.'`, that is `web/`, so `npx vite build`
+wrote the shell to `<repo>/dist`, one level above the shell. Every consumer of that artifact looks
+in `web/dist`: `scripts/deploy.sh` (its default `--dist-dir`, and it refuses to upload without
+`_headers`), `scripts/build_web.sh` (which checks `_headers` right after the build, so the
+documented local build failed the same way), and `wrangler.toml` (`pages_build_output_dir`). Two
+consumers had instead been adapted to the wrong location: the CI size report read `../dist`, and
+`web/playwright.config.ts` served `../dist`. The shell deploy therefore could not have succeeded,
+which is exactly what the first real attempt refused on: `web/dist/_headers is missing`, run
+`36843140022`.
+
+**Changed.** `outDir: 'dist'` in `web/vite.config.ts`, whose comment now names the three things
+that read that directory, and folds in the minor correction `docs/PHASE0_DEPLOY_PLAN.md` section 0
+asks for (the comment claimed `_headers` was "at the repo root"; it is `web/public/_headers`);
+`web/playwright.config.ts` serves `dist`; the CI web job size report reads `dist`. **New guard**:
+the same job asserts immediately after the build that `dist/_headers` and `dist/index.html` exist,
+that `dist/_headers` is byte-identical to `public/_headers`, and that `../dist` was not written.
+That is the criterion `docs/PLAN_BREAKDOWN.md` line 184 states and no job checked.
+
+**How it was landed.** The branch was updated onto `main` by merging `main` into it, not by
+rebasing: a rebase rewrites the remote branch, and a history-rewriting push is refused in this
+session. The tree after the merge differs from `main` in exactly the three files above
+(`git diff origin/main --stat`).
+
+**Measured locally before the push** (pure Python and bash: no build, `docs/AGENT_RULES.md` rules 2
+and 3): `python3 -m unittest discover -s scripts/tests` — **135 tests, OK**, the same count as on
+`main`; `bash scripts/tests/test_deploy_guard.sh` — all guards hold; `bash
+scripts/tests/test_phase0_runner.sh` — 44 guards hold; `bash scripts/tests/test_device_test_serve.sh`
+— 6 cases pass. The layout assertion needs Node, so the CI web job is what decides it.
+
+| Actions run | Conclusion | Measurement |
+| --- | --- | --- |
+| `36965278620` (CI, on `65d1191`) | **success** | 1m35s; hygiene `Ran 135 tests`, OK; web shell green, and the new step prints `web/dist/_headers is byte-identical to web/public/_headers`; the size report reads `dist`, first-load shell 41.3 KB across 4 files (budget 1024 KB); browser tests (Chromium) 51s |
+| `36965278604` (Phase 0 — WASM core, on `65d1191`) | **success** | 5m34s, job `build` 5m30s; the spike page builds around the fresh core and the Chromium harness runs 11 tests: **10 passed, 1 skipped** in 5.0s. The skipped one is the canvas pixel, the gap PR #47 documented |
+
+**What this session did not do, and why.** It did not remove `web/vite.config.ts` from
+`phase0-build.yml` paths, which is the change that would make edits to that file free. The
+2026-10-02 night session wrote that "no target that workflow compiles reads it"; that is not exact.
+The step "Build the spike page around the web core (P0-10)" of that workflow runs `npx vite build`,
+which reads the file, so removing it is a real trade: a `vite.config.ts` that breaks the spike build
+would stop being caught by that workflow, though the `ci.yml` web job builds the same shell and
+would catch most of it. That trade belongs in a pull request of its own, with its own argument and
+its own measurement, not folded into a defect fix. The three superseded pull requests the night
+session listed (#38, #39, #40) are left to the operator, as it left them.
+
+**Not in this step.** Nothing is published: the shell deploy job stays off until
+`CF_DEPLOY_SHELL=true`, the switch PR #35 added, so this change cannot put a page on the project
+address. `wrangler.toml` and `docs/DEPLOY.md` already named `web/dist` and are unchanged;
+`scripts/build_web.sh` is unchanged too, because it becomes correct rather than being corrected.
+
+**Next step.** Unchanged, and now with no leftover pull request of its own: the decision of the
+operator on `docs/OPEN_QUESTIONS.md` Q10(a) before renderer step 2, then the device rows M1 and M2
+(M2 decides). Both are outside what an autonomous session can produce.

@@ -108,14 +108,30 @@ jobs:
         working-directory: web
         run: npx vite build
 
+      - name: The build lands where the deploy looks for it
+        working-directory: web
+        run: |
+          set -euo pipefail
+          # The artifact has to be web/dist: that is what scripts/deploy.sh uploads (and it
+          # refuses to upload it without _headers), what scripts/build_web.sh checks after
+          # the build, and what wrangler.toml names as pages_build_output_dir. A build that
+          # writes anywhere else is a shell that cannot be deployed: the first real deploy
+          # attempt refused with "web/dist/_headers is missing" (run 36843140022) because
+          # the build wrote one level above the shell instead.
+          test -f dist/_headers
+          test -f dist/index.html
+          cmp dist/_headers public/_headers
+          test ! -e ../dist
+          echo "web/dist/_headers is byte-identical to web/public/_headers"
+
       - name: Report and bound the shell size
         working-directory: web
         run: |
           set -euo pipefail
-          du -sh ../dist
+          du -sh dist
           # Only the first-load shell is budgeted: sourcemaps and lazily-imported chunks
           # (the Supabase client) are not part of the first paint.
-          node scripts/check-bundle-size.mjs --dir ../dist --budget-kb 1024
+          node scripts/check-bundle-size.mjs --dir dist --budget-kb 1024
 
       - name: Upload the lockfile for the operator to commit
         if: steps.install.outputs.generated == 'true'

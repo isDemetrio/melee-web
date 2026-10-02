@@ -28,17 +28,17 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: [
     {
-      // The build lands in `../dist` (vite.config.ts sets outDir). Pointing the servers at
-      // `dist` served an empty directory, so every request fell through to a 404 and
-      // Playwright timed out waiting for the server to answer.
-      command: 'node scripts/serve.mjs --dir ../dist --port 4173',
+      // The build lands in `web/dist`: vite.config.ts sets outDir relative to `root`, which
+      // is `web/`, and that is the directory the deploy uploads. `../dist` was where the
+      // build used to write, and is not written any more.
+      command: 'node scripts/serve.mjs --dir dist --port 4173',
       url: 'http://127.0.0.1:4173/',
       reuseExistingServer: false,
       timeout: 30_000,
       stdout: 'pipe',
     },
     {
-      command: 'node scripts/serve.mjs --dir ../dist --port 4174 --no-headers',
+      command: 'node scripts/serve.mjs --dir dist --port 4174 --no-headers',
       url: 'http://127.0.0.1:4174/',
       reuseExistingServer: false,
       timeout: 30_000,
