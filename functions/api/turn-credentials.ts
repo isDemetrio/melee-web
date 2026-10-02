@@ -18,7 +18,11 @@ export const onRequest = async ({ request, env }: Pick<AppContext, 'request' | '
   try {
     upstream = await fetch(`${TURN_ENDPOINT}${encodeURIComponent(env.TURN_KEY_ID)}/credentials/generate-ice-servers`, {
       method: 'POST',
-      redirect: 'error',
+      // `redirect: 'error'` is not implemented by the Workers runtime (workerd accepts only
+      // `follow` and `manual`; it throws `Invalid redirect value` for anything else), so a
+      // Function using it fails on every request. This upstream is not expected to redirect, so
+      // refuse one instead of following it: the `!upstream.ok` check below maps it to 502.
+      redirect: 'manual',
       headers: { Authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ttl }),
     });

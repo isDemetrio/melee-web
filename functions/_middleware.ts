@@ -4,7 +4,7 @@ import type { AppContext, AppEnv } from './types';
 
 type FetchJwks = (url: string) => Promise<Response>;
 const SKEW_SECONDS = 30;
-type ServiceFailureReason = 'access_configuration_missing' | 'access_jwks_unavailable' | 'access_jwks_invalid';
+type ServiceFailureReason = 'access_configuration_missing' | 'access_jwks_unreachable' | 'access_jwks_unavailable' | 'access_jwks_invalid';
 class AccessServiceError extends Error {
   constructor(readonly reason: ServiceFailureReason) { super(reason); }
 }
@@ -48,9 +48,16 @@ async function verify(token: string, env: AppEnv, fetchJwks: FetchJwks): Promise
   try {
     response = await fetchJwks(`${issuer}/cdn-cgi/access/certs`);
   } catch {
+    throw new AccessServiceError('access_jwks_unreachable');
+  }
+  // Follow redirects with the runtime defaults, but accept only the configured team host.
+  let finalHost: string;
+  try {
+    finalHost = new URL(response.url).host;
+  } catch {
     throw new AccessServiceError('access_jwks_unavailable');
   }
-  if (!response.ok) throw new AccessServiceError('access_jwks_unavailable');
+  if (finalHost !== env.ACCESS_TEAM_DOMAIN || !response.ok) throw new AccessServiceError('access_jwks_unavailable');
   let keys: Record<string, unknown>[];
   try {
     const jwks = object(await response.json());
@@ -93,4 +100,4 @@ export function createMiddleware(fetchJwks: FetchJwks) {
   };
 }
 
-export const onRequest = createMiddleware(url => fetch(url, { redirect: 'error' }));
+export const onRequest = createMiddleware(url => fetch(url));

@@ -1710,3 +1710,32 @@ rectangular mip, TLUT variants/index and CMPR transparency fixtures. Slot 0/raw 
 a deliberate TEV subset; slots 1–7 await priority 3 shading. Texgen, lighting, EFB copy texture
 lookup, optional anisotropy/replacements, caching and device recreation remain open. Q10 in
 `docs/OPEN_QUESTIONS.md` records these boundaries. Deliver as a draft PR; stop without merge.
+
+**Landed by the parent session**, measured in the same Chromium harness: **35 passed, 1 skipped**
+(16.2s), the texture cases among them — RGBA8 MODULATE including alpha, image and TLUT replacement
+at an identical address/hash, mip 1 with LOD clamps, clamp/repeat/mirror repeat, and linear
+magnification across a tile boundary. The skipped one is still the canvas pixel (PR #47's gap).
+
+### 2026-10-02 — Access JWKS retrieval (`fix/access-jwks-fetch`)
+
+Changed Pages entry-point retrieval to plain `fetch(url)` and require the final response URL
+host to exactly match `ACCESS_TEAM_DOMAIN`, failing closed on missing/invalid URLs. HTTP
+failures and untrusted final URLs retain `access_jwks_unavailable`; thrown fetches now use
+`access_jwks_unreachable`. Configuration/invalid-JWKS diagnostics, generic token 403s and
+signature verification are unchanged. Updated fake responses with final URLs and added
+same-host path, foreign host, port mismatch, missing/invalid URL, 404/500 and thrown-fetch
+coverage. DEPLOY documents the runtime coverage gap and the required live verification.
+
+Verification: source review and `git diff --check` only. No local build, typecheck or tests,
+no CI outcome, preview publication, actual Cloudflare redirect behaviour or authenticated
+Access request verified. A real deployment and real login are the decisive remaining check;
+the mocked suite cannot establish runtime fetch-option support. No simulation, renderer,
+submodule or CI/guard changes. Delivered as a draft PR; no CI pursuit or merge.
+
+**Same option, second file — added by the parent session.** `functions/api/turn-credentials.ts` sent
+its upstream POST with `redirect: 'error'` too, so it failed in production the same way for the same
+reason, and its mocked test could not see it either. It now uses `redirect: 'manual'`: that upstream
+is not expected to redirect, so a redirect is **refused** rather than followed, and the existing
+`!upstream.ok` check maps it to 502 — no final-host check is needed where nothing is followed. Its
+test's expected request options were updated to match, and a repository-wide search confirms no
+other live occurrence of the option remains.
