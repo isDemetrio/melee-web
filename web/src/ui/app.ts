@@ -175,7 +175,7 @@ function bootScreen(context: AppContext): HTMLElement {
       h('h2', { text: 'Status of this build' }),
       h('p', {
         text:
-          'The web shell, the lobby and the WebRTC transport are implemented. The game core (melee.wasm) is not built yet: it needs the disc, and the build runs in CI. The Game tab says so plainly instead of showing a fake screen.',
+          'Open Game for local play using the operator disc and the CI-built core. Controller, keyboard and touch drive port 1. Game audio and online matches are not connected.',
       }),
     ]),
   );

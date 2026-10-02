@@ -172,9 +172,10 @@ button:focus-visible {
 
 /* Touch overlay: pointer events only, no synthetic click delay (spec §4.2). */
 #touch-overlay {
-  position: fixed;
+  position: absolute;
   inset: auto 0 0 0;
-  height: 45%;
+  height: 60%;
+  z-index: 1;
   pointer-events: none;
   display: none;
 }
@@ -245,4 +246,12 @@ button:focus-visible {
   max-height: 140px;
   overflow: auto;
   white-space: pre-wrap;
+}
+
+#game-stage { position: relative; isolation: isolate; }
+#pad-readout { overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .screen { padding: 12px; }
+  .button-zone { gap: 2px; padding: 2px; grid-template-columns: repeat(3, 1fr); }
+  .touch-button { min-height: 32px; font-size: 11px; }
 }

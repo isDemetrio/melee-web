@@ -120,7 +120,9 @@ bool input_load_script(const char* path) {
   return !g_script.empty();
 }
 void input_mark_match_start() { if (!g_match_start_retrace.load()) g_match_start_retrace.store(retrace_count()); }
+bool (*live_input)(PadState out[4]) = nullptr;
 void input_poll(PadState out[4]) {
+  if (live_input && live_input(out)) return;
   // Replaces keyboard/USB polling: unmentioned ports are disconnected, port 1 neutral.
   for (int i=0; i<4; ++i) { out[i] = {}; out[i].err = i ? -1 : 0; }
   if (!g_script.empty()) {

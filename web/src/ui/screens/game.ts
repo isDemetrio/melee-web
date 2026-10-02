@@ -2,48 +2,15 @@ import { h, type AppContext } from '../context.js';
 import { padStatusBytes } from '../../input/pad.js';
 import { TOUCH_ACTIONS, TouchControls, attachTouchControls } from '../../input/touch.js';
 
-/**
- * Game screen.
- *
- * This screen is honest about the state of the project: the canvas, the touch overlay and the
- * performance readout are real, but there is no game core to draw yet. It says so on screen
- * rather than showing a placeholder that could be mistaken for progress.
- *
- * What is real here:
- *  - the canvas is sized to the GameCube aspect ratio (73:60) and the renderer will
- *    present into it (docs/SPEC_PIANO.md §1.3);
- *  - the touch overlay is the one in `web/src/input/touch.ts`: Pointer Events with
- *    `touch-action: none`, a control stick zone, a C-stick zone and one button per action,
- *    writing the same PAD state the keyboard and the Gamepad API write (§4.2). Its output is
- *    printed on screen as the `PADStatus` bytes it would hand the guest, so what the overlay
- *    does is visible instead of claimed;
- *  - the overlay opacity is a real setting.
- *
- * What is not: nothing polls the overlay. There is no simulation loop, because there is no core
- * (docs/OPEN_QUESTIONS.md Q1), so the bytes on screen are what the overlay *would* give the guest
- * on the next tick, updated on the pointer event that changed them.
- */
+import { PlaySession } from '../../play/session.js';
+
 export function gameScreen(context: AppContext): HTMLElement {
   const screen = h('section', { id: 'screen-game' });
   screen.append(h('h2', { text: 'Game' }));
 
-  const canvas = h('canvas', { id: 'game-canvas', width: '730', height: '600' });
-  screen.append(canvas);
-
-  screen.append(
-    h('div', { class: 'panel' }, [
-      h('h2', { text: 'Core not built yet' }),
-      h('p', {
-        text:
-          'melee.wasm does not exist in this repository, by design: it is generated from the operator\'s own disc and is never committed. ' +
-          'Once the ISO is available the build runs in CI (see docs/PROGRESS.md and docs/OPEN_QUESTIONS.md) and this canvas is handed to the WebGPU presenter.',
-      }),
-      h('p', {
-        class: 'muted',
-        text: 'Nothing on this screen pretends to be the game. The lobby and the transport below it are real and are tested in CI.',
-      }),
-    ]),
-  );
+  const canvas = h('canvas', { id: 'game-canvas', width: '640', height: '480' });
+  const stage = h('div', { id: 'game-stage' }, [canvas]);
+  screen.append(stage);
 
   const controls = new TouchControls({ deadzone: context.settings.controlStickDeadzone });
 
@@ -71,15 +38,18 @@ export function gameScreen(context: AppContext): HTMLElement {
     cStickZone,
     buttonZone,
   ]);
-  document.body.append(overlay);
+  stage.append(overlay);
+  overlay.style.opacity = String(context.settings.touchOverlayOpacity);
+  let session: PlaySession | null = null;
 
   const hex = (bytes: Uint8Array): string =>
     [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join(' ');
 
   const readout = h('p', { class: 'status', id: 'pad-readout' });
 
-  /** Print what the overlay would hand the guest on the next tick. */
+  /** Publish input immediately after touch state changes. */
   const refresh = (): void => {
+    session?.publish();
     const pad = controls.read();
     readout.textContent = `overlay PADStatus: ${hex(padStatusBytes(pad))}  err=${pad.err}`;
   };
@@ -116,7 +86,23 @@ export function gameScreen(context: AppContext): HTMLElement {
     },
   });
 
-  const performance = h('p', { class: 'status', id: 'performance', text: 'simulation: not running' });
+  const performance = h('p', { class: 'status', id: 'performance', text: 'Choose Play to load the disc and start the game.' });
+  const picker = h('input', { id: 'game-disc', type: 'file', accept: '.iso,.gcm', 'aria-label': 'Local disc (optional)' });
+  const play = h('button', { id: 'game-play', text: 'Play', onClick: () => {
+    session?.stop();
+    session = new PlaySession(canvas, controls, context.settings.controlStickDeadzone,
+      (text) => { performance.textContent = text; }, (text) => context.log(text));
+    void session.start(picker.files?.[0] ?? null);
+  } });
+  const stop = h('button', { id: 'game-stop', text: 'Stop', onClick: () => {
+    session?.stop();
+    session = null;
+    performance.textContent = 'Stopped. Press Play to restart.';
+  } });
+  screen.append(h('div', { class: 'panel' }, [
+    h('p', { text: 'Play loads the operator disc from the verified cache / server. You can also select a local ISO. Starts at the game menus; port 1 uses controller, touch or keyboard. Audio and online play are not connected yet. Leaving Game stops the session.' }),
+    picker, h('div', { class: 'row' }, [play, stop]), performance,
+  ]));
 
   screen.append(
     h('div', { class: 'panel' }, [
@@ -145,9 +131,9 @@ export function gameScreen(context: AppContext): HTMLElement {
       readout,
       h('p', {
         class: 'muted',
-        text: 'PADStatus bytes in the guest\'s own order: button, stick_x, stick_y, c_x, c_y, trig_l, trig_r, a, b, err, pad. Nothing polls this yet — there is no simulation loop — so this is what the overlay would hand the guest on the next tick.',
+        text: 'Live input is published through shared memory while the core runs. Keyboard: arrows = stick, Z/X = A/B, C/V = X/Y, Enter = Start, Q/W = L/R, E = Z, I/J/K/L = C-stick.',
       }),
-      performance,
+
     ]),
   );
 
@@ -156,6 +142,7 @@ export function gameScreen(context: AppContext): HTMLElement {
   const observer = new MutationObserver(() => {
     if (!document.body.contains(screen)) {
       observer.disconnect();
+      session?.stop();
       detachTouch();
       for (const type of pointerEvents) overlay.removeEventListener(type, refresh);
       window.removeEventListener('blur', refresh);

@@ -76,3 +76,24 @@ test.describe('touch overlay', () => {
     await expect(page.locator('#pad-readout')).toContainText('00 00 00 00 00 00');
   });
 });
+
+test('overlay stays inside the game stage and navigation removes it', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.click('button:has-text("Game")');
+  await page.check('#touch-overlay-toggle');
+  const stage = await page.locator('#game-stage').boundingBox();
+  const overlay = await page.locator('#touch-overlay').boundingBox();
+  expect(stage).not.toBeNull();
+  expect(overlay).not.toBeNull();
+  expect(overlay!.y).toBeGreaterThanOrEqual(stage!.y);
+  expect(overlay!.y + overlay!.height).toBeLessThanOrEqual(stage!.y + stage!.height + 1);
+  await page.uncheck('#touch-overlay-toggle');
+  await expect(page.locator('#touch-overlay')).toBeHidden();
+  await page.check('#touch-overlay-toggle');
+  await page.click('button:has-text("Settings")');
+  await expect(page.locator('#touch-overlay')).toHaveCount(0);
+  await page.click('button:has-text("Game")');
+  await expect(page.locator('#touch-overlay')).toHaveCount(1);
+  await expect(page.locator('#touch-overlay')).toBeHidden();
+});

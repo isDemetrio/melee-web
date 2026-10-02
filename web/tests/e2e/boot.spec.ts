@@ -53,11 +53,11 @@ test.describe('boot', () => {
     await expect(page.locator('#screen-lobby')).toContainText('Lobby unavailable');
   });
 
-  test('the game screen admits the core is not built', async ({ page }) => {
+  test('the game screen offers disc loading and live play', async ({ page }) => {
     await page.goto('/');
     await page.click('button:has-text("Game")');
     await expect(page.locator('#game-canvas')).toBeVisible();
-    await expect(page.locator('#screen-game')).toContainText('Core not built yet');
+    await expect(page.locator('#screen-game')).toContainText('Play loads the operator disc');
   });
 });
 

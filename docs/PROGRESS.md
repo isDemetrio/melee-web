@@ -2168,3 +2168,32 @@ remains for the plan is the operator's — O1's legal call, O2–O9's credential
 M2 and M5 whose in-match mean and p99 are the go/no-go. The renderer's open thread
 (`render/webgpu-lighting`, PR #70) had uncommitted changes in its worktree when this session looked and
 was left untouched, as was the stale uncommitted change in the main checkout's `wasm/net/sab_ring_test.c`.
+
+## First playable integration — 2026-10-02 (feat/first-playable)
+
+Main Game screen now owns a `PlaySession`: verified chunked R2 → OPFS disc loading (or an
+explicit local ISO), the same CI web core and WebGPU backend as the spike, keyboard/gamepad/touch
+port 1 via an atomic shared-memory mailbox. `native/headless_input.cpp` has an optional host
+callback; browser-only `wasm/core/live_input.cpp` decodes PADStatus explicitly. With no livePad
+option, the original scripted input path remains active. No changes under `wasm/render/`.
+
+Confirmed from `native/headless_main.cpp`: callMain enters guest __start synchronously. Messages
+cannot update input during that call. `web/src/play/worker.ts` explicitly transfers an ImageBitmap
+at retraces and waits for the main-thread acknowledgement, bounding pending frames to one;
+wall-clock pacing does not advance guest time. Stop/navigation terminates the worker, cancels
+downloads and removes input listeners. Audio and online matches are not integrated. Play begins
+at the game's own menus, without the parity input script. Old deployed cores fail visibly with a
+request to rebuild, rather than silently ignoring input.
+
+Overlay is now contained by the game stage instead of fixed over the viewport; initial opacity
+uses settings. The operator's reported visual glitch has NOT been reproduced on their device.
+Open question: whole image or borders, one-time or intermittent, device/browser/orientation and
+exact Settings → overlay steps? Do not identify this layout defect as the proven cause.
+
+Validation is CI-only (pending at initial commit): shared PAD serialization tests, mobile overlay
+containment/navigation, and three consecutive real-core synthetic GX frames presented by the main
+page without yielding the worker task. No game-data fixture. Actual disc boot, character movement,
+phone presentation/performance and long-session GPU resource behavior still need operator testing.
+The required trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` has NOT been verified by this agent;
+the operator runs the unchanged scripted spike to verify it. Merge requires green CI and verified
+preview; neither an input unit test nor synthetic GX proves the first playable acceptance criterion.
