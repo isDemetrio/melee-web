@@ -71,7 +71,8 @@ if(EMSCRIPTEN)
   # against the real compile commands (scripts/phase0/assert_hot_opt.sh).
   set(MELEE_HOT_SOURCES
     "${PORT}/runtime/ppc/ppc_runtime.cpp" "${PORT}/runtime/ppc/interp.cpp"
-    "${PORT}/runtime/gx/gx_core.cpp")
+    "${PORT}/runtime/gx/gx_core.cpp"
+    "${PORT}/runtime/gx/gx_texture.cpp")
   set_source_files_properties(${MELEE_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
   foreach(platform IN ITEMS node web)
     add_executable(melee_core_${platform} $<TARGET_OBJECTS:offline_core>)
