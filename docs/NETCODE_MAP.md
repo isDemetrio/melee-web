@@ -62,6 +62,41 @@ Proposed DataChannel mapping: reliable ordered control channel for selections/ch
 
 The guest EXI payload is a different format: B0 has **25 bytes**: i32 frame, i32 finalized frame, u32 finalized checksum, u8 delay, 12-byte full pad. B1/B2 have 32-byte payloads; B4 has mode + 18-byte connect-code field; B5 has 9 bytes (`exi_slippi.cpp:56–57`, `slippi_online.cpp:463–469,533–540,623–631`). Never substitute the 8-byte peer pad size for the full B0 payload.
 
+## Transport
+
+The two seams the browser build puts in place of ENet over UDP: `web/src/net/transport.ts` (the interface the netcode is written against, with one unreliable and one reliable path) and `web/src/net/webrtc.ts` (the `RTCPeerConnection` implementation of it: one `game` channel `{ordered:false, maxRetransmits:0}` and one `control` channel `{ordered:true}`).
+
+Between those data channels and the WASM netcode thread, `docs/SPEC_PIANO.md` line 215 puts two single-producer/single-consumer rings over `SharedArrayBuffer`, one per direction, so that neither side ever waits on the other. The layout is implemented twice -- `web/src/net/sab_ring.ts` and `wasm/net/sab_ring.h` -- and this is the definition both follow. Every field is little-endian, which is WASM memory order:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | `head`: byte offset of the next write, in `[0, capacity)`; producer-owned |
+| 4 | 4 | `tail`: byte offset of the next read, in `[0, capacity)`; consumer-owned |
+| 8 | 4 | `capacity`: bytes of the data region, a power of two; written once at setup |
+| 12 | 4 | `refused`: frames the producer did not enqueue for lack of space |
+| 16 | `capacity` | data region |
+
+A frame in the data region is `[u32 payload length][u8 lane][payload]`, so a frame occupies `5 + length` bytes:
+
+| Lane | Meaning | ENet channel it mirrors |
+|---|---|---|
+| 0 | reliable, ordered | channel 0 (`slippi_net.cpp:450-452`) |
+| 1 | unreliable, unordered | channel 1 for pads and channel 2 for pad ACKs (`slippi_net.cpp:450-452,326`) |
+
+The rules both implementations follow, each for a reason:
+
+- `capacity` is a power of two, so the wrap arithmetic is a mask rather than a division.
+- One byte is left unused: a frame is written only when `used + size < capacity`, so `head == tail` means "empty" without ambiguity and the ring can never look empty while it is full.
+- A frame may wrap the end of the data region. The producer writes it as at most two segments and publishes `head` only after both; the consumer copies the payload out and publishes `tail` only after that. A consumer that loads `head` therefore never sees half a frame.
+- A zero-byte payload, a payload above `SAB_RING_MAX_FRAME_BYTES` (1024) and a lane outside one byte are not frames: the writer refuses them without touching the ring and without counting them as back-pressure. The maximum is a rejection threshold, not a design limit: the largest message in the table above is a few hundred bytes.
+- The producer never waits. A frame that does not fit is refused (`false` in TypeScript, `SAB_RING_FULL` in C) and the netcode drops the input packet, which is what rollback expects. `refused` counts exactly those.
+- The producer publishes with release semantics (`Atomics.store` in TypeScript, `__atomic_store_n` in C) and the consumer loads with acquire, so the payload writes happen-before the index that publishes them. Without threads the header's accessors fall back to plain accesses.
+- The notify that wakes a waiting consumer is deliberately not part of the layout: the TypeScript side does its half with `Atomics.notify` on the `head` slot, and a threaded Emscripten build would use `emscripten_atomic_notify` from `<emscripten/threading.h>`.
+
+Two implementations of one layout diverge silently, so the agreement is a test and not a comment. `wasm/net/check_sab_ring.mjs` has both halves write the same scripted sequence into a ring and requires the two ring images to be identical byte for byte, then has each half read the other's image back; it runs in `wasm-probe.yml`, "The ring's layout is one definition". The sequence exercises a frame that wraps, a ring that fills, and the three writes that are not frames. The acceptance criteria `docs/PLAN_BREAKDOWN.md` T7 states for the TypeScript half are in `web/tests/unit/sab_ring.test.ts`.
+
+Not measured, and not claimed: the ring under two real threads. The module is built `MELEE_SINGLE_THREAD=1` (`wasm/core/CMakeLists.txt`), so no worker and no second thread exists to produce or consume these rings yet, and no game frame has crossed one. The C half is compiled single-threaded for the layout test and with `-pthread` (compile only) for the atomic branch; what is missing is a run with two threads on one ring.
+
 ## Stock Slippi services and browser disable points
 
 | Service / operation | Implementation and transmitted data | Initial browser-build disposition |

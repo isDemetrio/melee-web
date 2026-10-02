@@ -162,6 +162,33 @@ jobs:
                             'docs/OPEN_QUESTIONS.md Q7 and is not a toolchain defect.\n')
           PY
           exit "$status"
+      - name: The ring's layout is one definition (C and TypeScript agree byte for byte)
+        shell: bash
+        run: |
+          # wasm/net/sab_ring_test.c is standalone C: no upstream include, no game data, no
+          # -pthread. It is compiled here rather than by wasm/probe/CMakeLists.txt because that
+          # project is C++ and the ring is the one probe that also has to be readable from
+          # TypeScript, through web/src/net/sab_ring.ts and Node's type stripping.
+          mkdir -p wasm-probe/out/ring
+          emcc -std=c11 -O2 -Wall -Wextra -Werror \
+            wasm/net/sab_ring_test.c -o wasm-probe/out/ring/sab_ring_test.js \
+            -sENVIRONMENT=node -sEXIT_RUNTIME=1
+          # The same file compiled with threads, compile only: this is the branch of the header
+          # that publishes the two indices with __atomic_load_n/__atomic_store_n, and it is the
+          # branch the real netcode thread will use. The layout test above cannot compile it,
+          # because it is deliberately single-threaded.
+          emcc -std=c11 -O2 -Wall -Wextra -Werror -pthread -c \
+            wasm/net/sab_ring_test.c -o wasm-probe/out/ring/sab_ring_test.threads.o
+          # The emcc output is CommonJS; the repository package.json says "type": "module".
+          printf '{"type":"commonjs"}\n' > wasm-probe/out/ring/package.json
+          node wasm/net/check_sab_ring.mjs wasm-probe/out/ring/sab_ring_test.js \
+            wasm-probe/out/ring | tee wasm-probe/sab-ring.json
+          {
+            echo 'The C and TypeScript halves of the netcode ring agree byte for byte:'
+            echo '~~~json'
+            cat wasm-probe/sab-ring.json
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
