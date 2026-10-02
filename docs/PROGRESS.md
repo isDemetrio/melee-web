@@ -1298,3 +1298,37 @@ deployed, no account was touched, no game data moved, and no source file changed
 
 **Next step.** Unchanged, with one fewer unknown: the device rows (M1, M2, M5) and O1-O10 are the
 operator's, and the renderer's step 2 waits on Q10(a). No autonomous step of the plan is left open.
+
+## Q10(b) is answered by measurement: C++ adopts the device the page acquired (2026-10-02, night)
+
+`render/webgpu-device-import`, PR #52, merged `b617b23`. The branch was written by the 2026-10-01 night
+session and pushed with all seven checks green; it was left open, and the answer it produces was the
+last thing `docs/OPEN_QUESTIONS.md` Q10 called "unknown — needs investigation". This session landed it
+and recorded the answer in that file.
+
+**The measurement, in run `36932059429`** — job `WebGPU toolchain probe`, headless Chromium
+153.0.8010.12, adapter `google swiftshader`, 1m26s, commit `9ab7f53`. The page acquires a device
+before instantiating the module; the pinned Emscripten 4.0.23 port declares the import —
+`webgpu/include/webgpu/webgpu.h:2265` exports `emscripten_webgpu_get_device`, which reads
+`Module['preinitializedWebGPUDevice']` — and C++ adopts the device: it asks it for its queue, reads its
+limits (`maxTextureDimension2D 8192`), creates a 1x1 RGBA8 texture with it and writes a red pixel
+through the adopted queue. Both launch configurations answer
+`adopt: {"device":true,"queue":true,"limits":true,"wrote":true}` with `adopt_device_lost: null` and
+`adopt_errors: []`; `wasm/probe/check.mjs` requires all four of those, so a rejected command — which
+raises a validation error and neither throws nor stops the run — cannot read as an answer. The renderer
+can therefore own the instance, adapter and device instead of reaching them through `EM_JS`: the choice
+Q10(b) leaves to the operator is now an informed one, and `EM_JS` stays the zero-change option.
+
+**The one gap, named rather than papered over.** The probe instantiates its module on the page, while
+the renderer instantiates its own in the worker, `web/src/spike/worker.ts`. The import is a module
+argument read before instantiation and does not depend on the realm, but that is reasoning: adoption
+inside the realm of the worker is not measured. Unchanged as well, the canvas pixel still needs a real
+device, because CI loses the device when the canvas frame is committed (PR #47).
+
+**Also in this PR.** `phase0-build.yml` no longer lists `wasm/probe/**` in `pull_request.paths`: no
+target that workflow compiles reads it, it configures `wasm/core` and reads `wasm/compat` and
+`wasm/render`, so a probe edit no longer buys a 35-minute WASM core build — the same rule the
+`scripts/phase0` list already follows. The probe has its own workflow, and it costs 1m26s.
+
+**Next step.** Unchanged, one unknown shorter: the decision of the operator on Q10(a), where the frames
+of the web build come from, before renderer step 2. Nothing else in the plan is autonomous and open.
