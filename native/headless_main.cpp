@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("TODO(portability): regenerate with --no-slippi; default Slippi translation unsupported");
     if (!host::disc_open(o.iso)) throw std::runtime_error("cannot open ISO " + o.iso);
     // Replaces window, D3D backend, cosmetic setup and audio-device creation. Guest audio
-    // processing remains in hle_stubs/AX; FIFO completion remains in headless_fifo.cpp.
+    // processing remains in hle_stubs/AX; FIFO completion is decoded by gx_core.cpp in the Q10(a) spike.
     ppc::init_dispatch();
     ppc::add_entry_hook(0x8016D800u, [](ppc::Context&) { host::input_mark_match_start(); });
     host::boot_setup();

@@ -175,7 +175,7 @@ by any of the three: it presents the frame's EFB copies and clears, and each cho
 the smallest way and is reversible. Step 2 (draws) is blocked by (a), and (c) decides whether a real
 run shows more than its last frame.
 
-**(a) Where the web build's frames come from.** The shipped modules do not compile
+**(a) Where the web build's frames come from.** Before the spike below, the shipped modules did not compile
 `port/runtime/gx/gx_core.cpp` at all: `native/core_sources.cmake` puts `native/headless_fifo.cpp` in
 its place, a decoder that consumes the FIFO's bytes and drops everything a renderer needs
 (`headless_fifo.cpp`, "Replaces vertex decoding, texture snapshots and draw observation").
@@ -191,6 +191,44 @@ snapshots). Options:
    here, and the 2400-checkpoint comparison would have to pass again before anything else.
 2. Keep growing `headless_fifo.cpp`'s recording, display-only, one priority at a time. The
    simulation path never changes; but it duplicates `gx_core.cpp`'s decoding and can drift from it.
+
+**Option 1 implementation spike — 2026-10-02, `spike/renderer-real-decoder` (not for merge).**
+The operator selected the real decoder, shared across the native oracle and both WASM modules.
+`native/core_sources.cmake` now selects `gx_core.cpp`, `gx_texture.cpp`, `render_observer.cpp`,
+`native_pose_bridge.cpp` and `native_draw_audit.cpp`; the old empty `RenderObserver` definitions
+are removed. The upstream native header directory supplies `PackedAnimation.h` to the pose types.
+`native/real_fifo.cpp` forwards host FIFO writes to `gx::write_fifo`; a stable forwarding backend
+initializes GX once and allows WebGPU to detach during submission without resetting GX state.
+The native and Node targets still have no presentation backend, but now perform real decoding
+and capture. This does not implement draw rasterization in the step-1 WebGPU backend.
+
+The offline service boundary supplies empty online overlay names (no online match), ignores the
+patch-0007 desktop Settings UI notification, and supplies default diagnostic `TickTiming`.
+The guest Settings memory write remains in the real decoder; Slippi EXI fatal guards remain.
+Neither the decoder's guest reads/writes nor its texture RAM watches have been bypassed.
+`native_fifo_test` is unchanged and still tests the legacy decoder, **not** this new path;
+its passing would not establish real-decoder correctness. No CI check or link error flag is relaxed.
+
+**Source-level stopping point, not a measured CI result:** the real observer calls
+`gx::authored_stats()` (e.g. `port/runtime/gx/render_observer.cpp:93` at upstream pin `3aab717`).
+Its definition lives in `authored_pose.cpp:15`, which also calls `NativeMelee::SamplePacked` and
+`SubFrameSolver::{interpolate_matrix,extrapolate_matrix}`. The latter definitions live in
+`subframe.cpp`, which unconditionally includes `<windows.h>` and contains a solver thread pool.
+Thus adding the observer is not a self-contained link closure: it needs a further statistics
+boundary extraction or additional authored/subframe porting. Per the operator's stop rule,
+this branch stops here: no statistics stub, no additional porting, no linker suppression.
+`authored_pose.cpp` is deliberately not selected; unresolved `gx::authored_stats()` is expected
+at executable link, unless an earlier compilation failure prevents reaching it. Other compiler
+or linker failures remain possible and have not been measured.
+
+**Compilation/link evidence:** none for this spike at handoff. No compiler, Node, game run or
+ISO extraction was invoked on the VPS. The worktree's submodule is uninitialized; source review
+used GitHub's contents API at the exact pinned commit, without populating/modifying the submodule
+or touching the other agent's checkout. The existing `gx_core.cpp` header comment remains true
+and needs no patch; `headless_fifo.cpp` now identifies its legacy-test-only role.
+Commit/push/PR are the handoff: CI is neither polled nor declared successful. The parent session
+owns CI diagnosis and, if executable artifacts become available, the 2400-checkpoint native/web
+comparison **from the same commit**. No parity result or final experimental verdict is asserted.
 
 **(b) Who owns the GPU objects.** The brief for step 1 asked for a backend that owns the instance,
 adapter and device. In step 1 the worker acquires them in JavaScript (`web/src/spike/gpu.ts`) and the

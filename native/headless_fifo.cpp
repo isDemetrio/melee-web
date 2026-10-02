@@ -1,4 +1,6 @@
-// Minimal guest-visible FIFO decoder, derived from pinned gx_core.cpp.
+// Legacy minimal guest-visible FIFO decoder, derived from pinned gx_core.cpp.
+// Retained for native_fifo_test; Q10(a)'s spike executables use the real decoder.
+// This test does not validate the real decoder or establish checkpoint parity.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "headless.h"
 #include "gx_core.h"

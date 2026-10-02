@@ -6,8 +6,8 @@
 // source rectangle to the canvas, then a copy with `clear` set clears the EFB to its clear colour.
 // So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console.
 //
-// What it does not do yet. Draws are not rasterised (the decoder does not even record them, see
-// native/headless_fifo.cpp), the clear covers the whole EFB rather than the source rectangle, Z is
+// What it does not do yet. Draws are not rasterised (Q10(a) now selects the real decoder, but
+// this backend still ignores its draws), the clear covers the whole EFB rather than the source rectangle, Z is
 // not cleared, and half-scale, Y scale, gamma and copy formats are ignored. Those are priorities 2-5.
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain

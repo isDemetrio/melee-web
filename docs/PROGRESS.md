@@ -1625,3 +1625,14 @@ paths, so a change to the workflow is exercised by the workflow.
 renderer step 2, then the device rows M1 and M2 (M2 decides), then O1–O9 and M5. Nothing else in
 `docs/PHASE0_DEPLOY_PLAN.md` §5–§6 is autonomous and open, and the leftover this session was named
 for is now closed.
+
+## 2026-10-02 — Real GX decoder spike handoff (`spike/renderer-real-decoder`)
+
+Shared native/Node/web sources now select the upstream real decoder plus observer/pose/audit
+dependencies and an offline FIFO/backend adapter. Source review found an unresolved
+`render_observer -> authored_stats -> authored_pose/subframe` closure; stopped before extending
+the porting scope, with no fake statistics implementation or relaxed check. Details and exact
+evidence are under Q10(a) in `docs/OPEN_QUESTIONS.md`. Legacy FIFO tests remain unchanged.
+No local build, Node, ISO operation, CI polling or checkpoint comparison. This is an unmeasured,
+not-for-merge experiment; the parent session owns CI results and same-commit 2400-checkpoint
+validation if link closure is subsequently resolved.

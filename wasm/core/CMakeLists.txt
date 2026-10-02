@@ -42,7 +42,7 @@ add_library(guest STATIC ${GUEST_SOURCES}
   "${MELEE_GEN}/function_names.cpp" "${MELEE_GEN}/gecko_data.cpp")
 target_link_libraries(guest PUBLIC core_options)
 # P0-05 compile gate for the exact proposed upstream component boundary.
-# The proven offline executable below uses the SAME host/FIFO/services as native/.
+# The experimental offline executable below uses the SAME host/real GX/services as native/.
 add_library(runtime_core STATIC
   "${PORT}/runtime/ppc/ppc_runtime.cpp" "${PORT}/runtime/ppc/interp.cpp"
   "${PORT}/runtime/host/host.cpp" "${PORT}/runtime/host/vcdiff.cpp"
