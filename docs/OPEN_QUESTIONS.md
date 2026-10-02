@@ -240,14 +240,28 @@ success is still unmeasured. Bringing in the full sampler would instead require
 including its unconditional `<windows.h>` and solver thread pool. That would be a separate
 porting task; it is neither required for counter storage nor attempted here.
 
-**Compilation/link evidence:** none for this spike, including this follow-up. No compiler, Node, game run or
-ISO extraction was invoked on the VPS. The worktree's submodule is uninitialized; source review
-used GitHub's contents API at the exact pinned commit, without populating/modifying the submodule
-or touching the other agent's checkout. The existing `gx_core.cpp` header comment remains true
-and needs no patch; `headless_fifo.cpp` now identifies its legacy-test-only role.
-Commit/push/PR are the handoff: CI is neither polled nor declared successful. The parent session
-owns CI diagnosis and, if executable artifacts become available, the 2400-checkpoint native/web
-comparison **from the same commit**. No parity result or final experimental verdict is asserted.
+**Link and parity evidence — 2026-10-02, the experiment is measured.** The link closure compiles and
+links: on branch `spike/renderer-real-decoder` the `Phase 0 — Linux headless reference (offline)` job
+(run `36999621064`) and the `Phase 0 — WASM core` job (run `36999621081`) both completed green, so
+the real decoder builds for the native reference and for the web module from the same commit. Both
+were then dispatched with their opt-in private artifacts (`37000659238` → `melee-core-headless`,
+`37000662755` → `melee-core-wasm-node`) and run **on the operator's own disc** with
+`scripts/phase0/run_checkpoints.sh` and the project's `parity_vs_onett.txt` script, 2400 retraces:
+
+| Run | trace SHA-1 | final scene |
+| --- | --- | --- |
+| native, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| web module, real decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+| reference of 2026-09-30, legacy decoder | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762` |
+
+All three traces are 2401 rows and `diff` reports **no differing line**. The real decoder therefore
+does not change the simulated state: the parity guarantee that the legacy decoder made possible
+survives the substitution, and it survives it for the same reason on both sides — the comparison is
+between the web module and the native reference **of one commit**, both now on the real decoder, and
+it is *also* identical to the trace taken before the substitution. `native_fifo_test` still exercises
+the legacy decoder only and is not evidence for this path; no CI check, guest read/write or texture
+RAM watch was relaxed to reach this point. Option 1 is adopted.
+
 
 **(b) Who owns the GPU objects.** The brief for step 1 asked for a backend that owns the instance,
 adapter and device. In step 1 the worker acquires them in JavaScript (`web/src/spike/gpu.ts`) and the
