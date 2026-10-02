@@ -169,6 +169,14 @@ in `[vars]` and again in `[env.preview.vars]` (Pages *overrides* `vars` for a pr
 rather than merging them, so the preview has to state them too), which is what makes the deploy
 carry them. The dashboard copy can stay; the file is the source of truth.
 
+**An environment-specific block must repeat that environment's bindings too.** Making the preview
+state `[env.preview.vars]` also made its configuration explicit, and the top-level `[[r2_buckets]]`
+stopped reaching it: the published preview then answered
+`503 {"error":"Disc storage unavailable"}` from `functions/phase0/[[path]].ts` — the status that
+Function returns when `env.PHASE0_DISC` is absent. The bindings are declared under `env.preview` as
+well now. Whenever a preview or production block is added, list the `vars` **and** the
+`r2_buckets` that environment needs: a partial block does not inherit the rest.
+
 With the updated middleware, a request carrying a token gets these deployment diagnostics:
 
 | HTTP | Exact JSON response | Meaning / action |
