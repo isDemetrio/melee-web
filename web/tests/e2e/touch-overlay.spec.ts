@@ -88,6 +88,207 @@ test.describe('touch overlay', () => {
   });
 });
 
+/** An element's box, or a failure naming it: a control with no box is a control nobody can see. */
+async function boxOf(page: Page, selector: string): Promise<{ x: number; y: number; width: number; height: number }> {
+  const box = await page.locator(selector).boundingBox();
+  if (!box) throw new Error(`${selector} has no layout: it is not displayed`);
+  return box;
+}
+
+function centreOf(box: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/** The twelve PADStatus bytes the game screen prints, as numbers. */
+async function padBytes(page: Page): Promise<number[]> {
+  const text = (await page.locator('#pad-readout').textContent()) ?? '';
+  const match = /PADStatus: ((?:[0-9a-f]{2} ?){12})/.exec(text);
+  if (!match) throw new Error(`no PADStatus in the readout: ${text}`);
+  const bytes = match[1];
+  if (!bytes) throw new Error(`empty PADStatus capture in the readout: ${text}`);
+  return bytes.trim().split(' ').map((byte) => parseInt(byte, 16));
+}
+
+/** The product of the element's opacity and every ancestor's: what actually reaches the screen. */
+async function shownOpacity(page: Page, selector: string): Promise<number> {
+  return page.evaluate((target) => {
+    let opacity = 1;
+    for (let node = document.querySelector(target); node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility !== 'visible') return 0;
+      opacity *= Number(style.opacity);
+    }
+    return opacity;
+  }, selector);
+}
+
+/**
+ * Whether an element puts pixels on the screen: the container is captured with the element shown
+ * and again with it hidden, and the two captures must differ. An element that is in the DOM but
+ * transparent, empty, zero-sized or drawn in the colour of what is behind it gives two equal
+ * captures.
+ */
+async function paints(page: Page, container: string, element: string): Promise<boolean> {
+  const shown = await page.locator(container).screenshot();
+  await page.locator(element).evaluate((node) => { (node as HTMLElement).style.visibility = 'hidden'; });
+  const hidden = await page.locator(container).screenshot();
+  await page.locator(element).evaluate((node) => { (node as HTMLElement).style.visibility = ''; });
+  return !shown.equals(hidden);
+}
+
+test.describe('a stick a player can find', () => {
+  test('both sticks and the buttons are drawn, on a black frame and on a white one', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await page.click('button:has-text("Game")');
+    await page.check('#touch-overlay-toggle');
+
+    const viewport = { width: 390, height: 844 };
+    for (const [base, zone] of [['#stick-base', '#stick-zone'], ['#c-stick-base', '#c-stick-zone']] as const) {
+      await expect(page.locator(base)).toBeVisible();
+      const box = await boxOf(page, base);
+      const area = await boxOf(page, zone);
+      // A thumb-sized circle, resting inside its own zone and inside the viewport.
+      expect(box.width).toBeGreaterThanOrEqual(48);
+      expect(Math.abs(box.width - box.height)).toBeLessThan(1);
+      const centre = centreOf(box);
+      expect(centre.x).toBeGreaterThan(area.x);
+      expect(centre.x).toBeLessThan(area.x + area.width);
+      expect(centre.y).toBeGreaterThan(area.y);
+      expect(centre.y).toBeLessThan(area.y + area.height);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+      expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+      // At the default overlay opacity (0.5) it is still half there, not a ghost.
+      expect(await shownOpacity(page, base)).toBeGreaterThanOrEqual(0.3);
+      // The drawing does not take the finger: the zone does.
+      expect(await hitAt(page, centre)).toBe(zone.slice(1));
+    }
+    expect((await boxOf(page, '#stick-knob')).width).toBeGreaterThanOrEqual(24);
+
+    // The canvas is black until a game runs; the character select is mostly white, and that is
+    // where the old buttons (white on translucent white) disappeared. Both must show on both.
+    for (const frame of ['#000', '#fff']) {
+      await page.locator('#game-canvas').evaluate((canvas, colour) => {
+        (canvas as HTMLElement).style.background = colour;
+      }, frame);
+      expect(await paints(page, '#stick-zone', '#stick-base'), `stick on ${frame}`).toBe(true);
+      expect(await paints(page, '#c-stick-zone', '#c-stick-base'), `C-stick on ${frame}`).toBe(true);
+      expect(await paints(page, '#button-zone', '#touch-a'), `A on ${frame}`).toBe(true);
+    }
+  });
+
+  test('the knob follows the finger, the bytes are the zone’s, and both return on release', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await page.click('button:has-text("Game")');
+    await page.check('#touch-overlay-toggle');
+
+    const rest = centreOf(await boxOf(page, '#stick-base'));
+    const zone = await boxOf(page, '#stick-zone');
+    // The base's radius is the full-deflection travel (touch.ts, zoneRadius).
+    const radius = Math.min(zone.width, zone.height) / 2;
+    expect((await boxOf(page, '#stick-base')).width / 2).toBeCloseTo(radius, 0);
+
+    // Land away from the resting base: the stick's neutral is where the finger lands, and the
+    // base goes there.
+    const landing = { x: zone.x + zone.width * 0.3, y: rest.y + 20 };
+    /** How far, in CSS pixels, an element's centre is from a point. */
+    const offBy = async (selector: string, point: { x: number; y: number }): Promise<number> => {
+      const centre = centreOf(await boxOf(page, selector));
+      return Math.max(Math.abs(centre.x - point.x), Math.abs(centre.y - point.y));
+    };
+
+    await page.mouse.move(landing.x, landing.y);
+    await page.mouse.down();
+    await expect(page.locator('#stick-base')).toHaveAttribute('data-active', 'true');
+    await expect.poll(() => offBy('#stick-base', landing)).toBeLessThan(2);
+    await expect.poll(() => offBy('#stick-knob', landing)).toBeLessThan(2);
+    expect((await padBytes(page)).slice(2, 4)).toEqual([0, 0]);
+
+    // Half travel to the right: the knob is under the finger, and stick_x is about half (63).
+    const halfway = { x: landing.x + radius / 2, y: landing.y };
+    await page.mouse.move(halfway.x, halfway.y);
+    await expect.poll(() => offBy('#stick-knob', halfway)).toBeLessThan(2);
+    await expect.poll(async () => (await padBytes(page))[2]).toBeGreaterThanOrEqual(60);
+    expect((await padBytes(page))[2]).toBeLessThanOrEqual(66);
+    expect((await padBytes(page))[3]).toBe(0);
+
+    // Past the rim: the knob stops on it and the stick reads full.
+    await page.mouse.move(landing.x + radius * 2, landing.y);
+    await expect(page.locator('#pad-readout')).toContainText('00 00 7f 00 00 00');
+    await expect.poll(() => offBy('#stick-knob', { x: landing.x + radius, y: landing.y })).toBeLessThan(2);
+
+    // Release: neutral bytes, the base back at rest, the knob centred on it.
+    await page.mouse.up();
+    await expect(page.locator('#pad-readout')).toContainText('00 00 00 00 00 00');
+    await expect(page.locator('#stick-base')).toHaveAttribute('data-active', 'false');
+    await expect.poll(() => offBy('#stick-base', rest)).toBeLessThan(1);
+    await expect.poll(() => offBy('#stick-knob', rest)).toBeLessThan(1);
+  });
+
+  test('a held button is drawn pressed', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await page.click('button:has-text("Game")');
+    await page.check('#touch-overlay-toggle');
+
+    const a = centreOf(await boxOf(page, '#touch-a'));
+    await expect(page.locator('#touch-a')).toHaveAttribute('data-pressed', 'false');
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await expect(page.locator('#touch-a')).toHaveAttribute('data-pressed', 'true');
+    await expect(page.locator('#touch-b')).toHaveAttribute('data-pressed', 'false');
+    await page.mouse.up();
+    await expect(page.locator('#touch-a')).toHaveAttribute('data-pressed', 'false');
+  });
+});
+
+for (const viewport of [{ width: 390, height: 640 }, { width: 844, height: 390 }]) {
+  test(`the controls stay on screen while the page scrolls (${viewport.width}×${viewport.height})`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await page.click('button:has-text("Game")');
+    await page.check('#touch-overlay-toggle');
+
+    // Nothing on the page is wider than the phone: a page that pans sideways moves the controls
+    // under the player's thumb.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+
+    // To the bottom of the page, where the Input panel is. The page must really have scrolled,
+    // or the rest of this test proves nothing.
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
+
+    const controls = [
+      ['#stick-base', 'stick-zone'],
+      ['#c-stick-base', 'c-stick-zone'],
+      ['#touch-a', 'touch-a'],
+      ['#touch-start', 'touch-start'],
+    ] as const;
+    for (const [selector, hit] of controls) {
+      const box = await boxOf(page, selector);
+      expect(box.y, `${selector} top`).toBeGreaterThanOrEqual(0);
+      expect(box.y + box.height, `${selector} bottom`).toBeLessThanOrEqual(viewport.height);
+      expect(box.x + box.width, `${selector} right`).toBeLessThanOrEqual(viewport.width);
+      // In view and not covered by the panels scrolling under the stage.
+      expect(await hitAt(page, centreOf(box)), `${selector} hit`).toBe(hit);
+    }
+
+    // And it still steers from there.
+    const zone = await boxOf(page, '#stick-zone');
+    const radius = Math.min(zone.width, zone.height) / 2;
+    const centre = centreOf(await boxOf(page, '#stick-base'));
+    await page.mouse.move(centre.x, centre.y);
+    await page.mouse.down();
+    await page.mouse.move(centre.x + radius, centre.y);
+    await expect(page.locator('#pad-readout')).toContainText('00 00 7f 00 00 00');
+    await page.mouse.up();
+    await expect(page.locator('#pad-readout')).toContainText('00 00 00 00 00 00');
+  });
+}
+
 test('overlay stays inside the game stage and navigation removes it', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');

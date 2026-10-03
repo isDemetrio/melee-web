@@ -184,6 +184,13 @@ button:focus-visible {
   display: block;
 }
 
+/* A held finger must stay a gesture: no selection, no callout menu. */
+#touch-overlay {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 .stick-zone,
 .c-stick-zone,
 .button-zone {
@@ -194,9 +201,51 @@ button:focus-visible {
   touch-action: none;
 }
 
-/* Control stick, C-stick and buttons, left to right. The zone *is* the control: deflection is
-   measured in finger travel from where the finger landed (web/src/input/touch.ts), so there is
-   no stick to aim at. */
+/* Control stick, C-stick and buttons, left to right. The zone is the control: deflection is
+   measured in finger travel from where the finger landed (web/src/input/touch.ts). But it is
+   drawn, because a player cannot aim at a stick that is not there: a base resting in the zone,
+   which moves to where the finger lands, and a knob that follows the finger (game.ts,
+   paintStick sets their size and place). Neither takes pointer events, so the finger always
+   lands on the zone. The colours are a dark fill inside a light rim, which reads on a black
+   frame and on a white one alike. */
+.stick-base {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.stick-base[data-active='true'] {
+  border-color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46%;
+  height: 46%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, 0.6);
+  background: rgba(225, 225, 232, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+#c-stick-knob {
+  background: rgba(245, 197, 24, 0.95);
+  color: #2b2100;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .stick-zone {
   left: 0;
   width: 40%;
@@ -223,15 +272,26 @@ button:focus-visible {
   align-items: center;
   justify-content: center;
   min-height: 44px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  /* Dark fill, light rim, shadowed label: the earlier white-on-translucent-white vanished on the
+     character select's white panels. */
+  border: 2px solid rgba(255, 255, 255, 0.8);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
   color: #fff;
+  text-shadow: 0 1px 2px #000;
   font-size: 14px;
   font-weight: 600;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* A press the player can see, so a missed tap is not mistaken for a dropped one. */
+.touch-button[data-pressed='true'] {
+  background: rgba(255, 255, 255, 0.85);
+  color: #000;
+  text-shadow: none;
 }
 
 .status {
@@ -249,6 +309,22 @@ button:focus-visible {
 }
 
 #game-stage { position: relative; isolation: isolate; }
+/* With the overlay on, the game and its controls are pinned to the top of the viewport and the
+   page scrolls under them, so reaching the Input panel no longer scrolls the controls away. The
+   stage is capped at 60% of the viewport's height (width = height × 73/60, so 73svh), or a
+   landscape phone would be all stage and the panels could never be reached. */
+#game-stage[data-touch='true'] {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 2;
+  align-self: center;
+  width: 100%;
+  max-width: 73vh;
+  max-width: 73svh;
+}
+/* iOS sizes a file input to its label ("nessun file selezionato"), wider than a phone's panel:
+   the page grew sideways and panned under the player's thumb. */
+input[type='file'] { max-width: 100%; }
 #pad-readout { overflow-wrap: anywhere; }
 @media (max-width: 480px) {
   .screen { padding: 12px; }
