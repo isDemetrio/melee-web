@@ -46,13 +46,18 @@ export class PlaySession {
       const presenter = this.canvas.getContext('bitmaprenderer');
       if (!presenter) throw new Error('ImageBitmap presentation is unavailable.');
       let iso = picked;
+      // The cache the disc came from: the worker reads it through an OPFS handle (disc-reader.ts).
+      let discIdentity: string | null = null;
       if (!iso) {
         this.status('Checking / downloading the verified disc cache…');
         const store = opfsDiscStoreFactory();
         this.closeStore = () => store.close();
-        iso = await new DiscCache(store).downloadDisc({ signal: this.abort.signal,
+        const cache = new DiscCache(store);
+        iso = await cache.downloadDisc({ signal: this.abort.signal,
           onProgress: (p) => this.status(`Disc: ${Math.floor(p.receivedBytes / p.totalBytes * 100)}% verified`),
         });
+        discIdentity = await cache.cacheId();
+        // With the store worker gone no other handle holds the file, so the play worker can open one.
         store.close();
         this.closeStore = null;
       }
@@ -104,7 +109,7 @@ export class PlaySession {
         else if (message.type === 'ended') this.fail(`Game ended (code ${message.exitCode}).`);
         else if (message.type === 'ready') this.status('Core ready · starting game…');
       };
-      worker.postMessage({ iso, pad: this.shared.buffer, flight: this.flight.buffer, split: this.perf.split });
+      worker.postMessage({ iso, discIdentity, pad: this.shared.buffer, flight: this.flight.buffer, split: this.perf.split });
     } catch (error) {
       if (!this.disposed) this.fail(String(error));
       else this.log(`Stopped loading: ${String(error)}`);

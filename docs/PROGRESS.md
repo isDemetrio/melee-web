@@ -2802,3 +2802,85 @@ alpha/blend merge, with an unpushed version of this same guard file in its workt
 fix (PR #91) names the next on-screen defect: the TEV colour (RENDERER_MAP priority 3, "full TEV
 remains open"). What remains beyond that still needs the operator: O1's legal call, O2-O9's
 credentials, and the device rows M1, M2 and M5.
+
+## Disc stalls: the one-second read is WebKit's worker run loop, and the game stops entering it (2026-10-03, `fix/disc-stalls`)
+
+**The defect, in the operator's three iPhone reports** (iOS 18.7, Safari 27; cores `612a856` and
+`b5b3385`). `scripts/analysis/disc_stalls.py` (new) reads them: **31 frames** have disc reads of
+250 ms or more, and every one is between **1002.7 and 1046.9 ms**, whatever the size (1,055 bytes in
+28 of them, 46,749, 196,031 and 186,719 in the other three). It is a fixed cost, not a slow transfer.
+Every one of the 31 came after **2.06 s or more** with no disc read; of the **1,479** reading frames
+whose previous read was under a second earlier, **none** took over 63.4 ms. In a match every stall is
+the same read, every ~107 retraces.
+
+**What that read is.** The play page's own core, run in Node on the VPS (headless, the operator's
+disc, `parity_vs_onett.txt`; harness `~/incoming/phase0/disc-stalls/readlog.mjs`, not committed: it
+runs the private core), logging every WORKERFS read and mapping it to the FST. In a match the core
+reads one file only: the stage music stream (`onetto.hps` on Onett). Every ~107 retraces it reads a
+**32-byte block header** and then ~64 KiB over the next four frames. Through musl's stdio a 32-byte
+`fread` is a 31-byte read plus a 1,024-byte buffer fill: the **1,055 bytes** of the reports. In the
+menus the same shape is `menu01.hps` and the `.ssm` sound banks. The music plays with `--volume 0`:
+the stream advances whatever the volume.
+
+**Hypotheses, as the evidence sorts them.**
+- *A network fetch where OPFS was expected*: no. The play page's disc is the `File` from the OPFS
+  cache (`DiscCache.downloadDisc` → `getFile()`), mounted with WORKERFS; `/phase0/disc` is only
+  fetched to fill that cache, and the asset layer (`web/src/assets/`) is not used by the play page.
+- *Decompression or decryption*: no. `disc_read` (native/headless_host.cpp) is `fseeko` + `fread` on
+  the raw image; the ADPCM decode is the game's, inside `core_ms`, not `disc_ms`.
+- *A blocking write*: no. The meter wraps WORKERFS's `stream_ops.read` only; the core's writes go to
+  MEMFS (`/work`, `/card`).
+- *A synchronous read on the hot path*: yes, and the second comes from WebKit. WORKERFS reads each
+  slice with `FileReaderSync`; WebKit runs that as a synchronous blob load, spinning the worker's run
+  loop (`WorkerDedicatedRunLoop::runInMode`) until it completes. Since WebKit **302518@main**
+  (commit `7b65bcf29a`, 2025-11-04, "Work around CF timers not being serviced promptly",
+  rdar://154763428), when a CFRunLoop timer of the thread is overdue by **more than one second**,
+  `runInMode` calls `CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1, returnAfterSourceHandled=true)`.
+  A timer firing is not a source, so the call waits out the full second. The play worker never
+  returns to its run loop while `callMain` runs: its timers are serviced only inside these reads.
+  Reads less than a second apart service them before they are a second overdue (0 stalls in 1,479);
+  after a gap of 2 s or more, whether one is overdue depends on when a timer fell due in the gap:
+  31 of those 48 reads stalled. In a match the gap is 3.5-10 s (one header every ~107 retraces at
+  11-13 fps): 6 of 6 in-match headers stalled in the first report, 8 of 10 in the second (the two
+  that did not came under a second after the stall at retrace 2048), 4 of 7 in the third,
+  alternating. The source was read on WebKit `main` (2026-10-02); that
+  Safari 27 ships this code is inferred from the date and from the measured 1.00 s, not read from
+  Apple's build.
+
+**The change.** `web/src/play/disc-reader.ts` (new): before `callMain`, the play worker opens the
+cached disc's OPFS file with `createSyncAccessHandle()` and routes WORKERFS's reads of that one file
+to `handle.read(view, { at })`, straight into the wasm heap. WebKit implements that read as a seek
+and a read on a file handle the worker holds (`FileSystemSyncAccessHandle::read`): no blob load, no
+run loop. The meter (`meterDiscReads`) is installed after it and wraps it, so `disc_ms`/`disc_bytes`
+are the same measure before and after. `session.ts` passes the cache identity
+(`DiscCache.cacheId()`). A picked disc has no handle and keeps `FileReaderSync`; so does a cached
+disc whose handle cannot be opened (another tab holding it, say). Either way the report's `notes`
+say which path was used (`disc read through an OPFS sync access handle`, or `disc read with
+FileReaderSync: <reason>`). A short read throws with the offset, so the game stops and says so.
+
+**Memory.** Nothing is cached. The handle reads into the heap the core already allocated, so the
+per-read `ArrayBuffer` that `FileReaderSync` made is gone too.
+
+**Measured here** (Node only, no browser). The real web core, `parity_vs_onett.txt`, 2400
+retraces, with `--state-trace` (`~/incoming/phase0/disc-stalls/route.mjs`, which imports the real
+`disc-reader.ts` and `frame-meter.ts` with `--experimental-transform-types`). WORKERFS as shipped:
+trace SHA-1 `c79c53b9…`, 2,162 reads, 2,162 `FileReaderSync` calls. Through the handle: trace
+`c79c53b9…`, 2,162 reads, **0** `FileReaderSync` calls after the mount, and the SHA-256 of every
+(position, length, bytes) the core received is the same in both runs (`5dd4fb1e…`). Unit tests:
+`web/tests/unit/disc-reader.test.ts` (routing, end of disc, short read, size check, the meter
+wrapping it, names agreeing with `opfs-worker.ts`) and `scripts/tests/test_disc_stalls.py`.
+
+**Not reproduced in CI, and why.** The one-second block exists only where WebKit uses CF
+(`#if USE(CF)`: Apple platforms). CI's browsers are Chromium and Linux WebKit (GLib), and Node has
+no `FileReaderSync` at all; a test there would pass with or without this change. The measure is the
+operator's report: `python3 scripts/analysis/disc_stalls.py <report.json>` exits 1 on any disc read
+of 250 ms or more and prints which path the worker used.
+
+**Not verified by this agent.** The phone: whether the stalls are gone (expected: `disc_stalls.py`
+exits 0 and the report's `notes` name the OPFS handle). That `createSyncAccessHandle()` opens in the
+play worker on iOS right after the store worker is closed: no Web Lock is taken, and a second tab
+playing would hold the handle (the worker then falls back, with a note). The trace
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571` through the operator's own procedure: only the Node run
+above. Not addressed: the spike page (`web/src/spike/worker.ts`) still reads with `FileReaderSync`;
+the other synchronous entries into the worker's run loop, of which the play worker has none while
+the game runs. Nothing was built locally.
