@@ -4,12 +4,13 @@
 // What it does. A persistent EFB texture (gx::EFB_WIDTH x gx::EFB_HEIGHT) and the canvas. Each
 // EfbCopy is replayed in frame order, the way GX executes it: an XFB copy first copies the EFB's
 // source rectangle to the canvas, then a copy with `clear` set clears the EFB to its clear colour.
-// So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console.
+// So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console. A colour
+// copy to RAM is kept as a texture that draws sampling its address read (gxw_copy, as upstream).
 //
 // Geometry is drawn with WGSL generated per draw state by gx_wgsl.cpp -- the TEV, texture coordinate
 // generation, colour channels, alpha test and fog -- then GX's blend state (gxw_draw). Lighting and
 // indirect texturing remain open (gx_wgsl.cpp says what each falls back to). Clears cover the whole
-// EFB; half-scale, Y scale, gamma and copy formats remain open (priorities 2-5).
+// EFB; half-scale, Y scale, gamma, copy formats and depth copies remain open (priorities 2-5).
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
 // offscreen texture, which is how CI reads the backend's output back without committing a canvas
@@ -41,6 +42,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <emscripten/emscripten.h>
 
 // The two JavaScript halves stay at file scope, where Emscripten's EM_JS examples put them: the macro
@@ -116,6 +118,9 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
     // whose `batch` is batchSerial may be named by the unsubmitted encoder and is not evicted
     // (gxw_bind). Buffers are replaced only between batches (gxw_draw), so never under an open one.
     gpu.batch = null; gpu.batchSerial = 1; gpu.batchSubmits = 0;
+    // EFB copies to textures (gxw_copy), by guest destination address, and the replaced or dropped
+    // copy textures that wait for the submit of the batch that may still name them.
+    gpu.efbCopies = new Map(); gpu.copySerial = 0; gpu.copyGarbage = [];
     gpu.openBatch = () => gpu.batch || (gpu.batch = {encoder:gpu.device.createCommandEncoder(),
       pass:null, state:null, vertexBytes:0, indexBytes:0, uniformBytes:0, lastUniform:-1, lastRows:0});
     gpu.endPass = (b) => { if (b.pass) { b.pass.end(); b.pass = null; b.state = null; } };
@@ -130,6 +135,8 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
       if (b.uniformBytes) q.writeBuffer(gpu.uniforms,0,gpu.uniformStaging,0,b.uniformBytes);
       q.submit([b.encoder.finish()]);
       gpu.batchSubmits++;
+      for (const t of gpu.copyGarbage) t.destroy();
+      gpu.copyGarbage = [];
     };
     gpu.backendDevice = gpu.device;
     return 1;
@@ -139,15 +146,46 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
   }
 });
 
-// One EfbCopy: the XFB half (EFB source rectangle to the canvas), then the clear half, recorded
-// into the batch after the draws before it. An XFB copy submits the batch: the canvas texture it
-// wrote is presented once the worker's task ends or transfers it. 1 on success.
-EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, int clear, int argb, int clear_z), {
+// One EfbCopy: the copy half (EFB source rectangle to the canvas, or to a texture), then the clear
+// half, recorded into the batch after the draws before it. An XFB copy submits the batch: the canvas
+// texture it wrote is presented once the worker's task ends or transfers it. 1 on success.
+//
+// A copy to a texture (`copy_to`, the guest destination address; 0 for none) is upstream's
+// execute_copy (gx_d3d12.cpp): the EFB rectangle is kept on the GPU, in a texture that a draw
+// naming that address samples instead of guest RAM (gxw_bind), which this backend never writes. The
+// texture is the EFB's own pixels at full size: the copy format is not converted and a half-scale
+// copy is not downscaled, as upstream (normalised texture coordinates sample the same picture). This
+// is how the game's render-to-texture reaches the TEV -- the fighters' shadows projected onto the
+// stage are such a copy -- and without it those stages read whatever RAM held.
+EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, int clear, int argb, int clear_z, int copy_to), {
   const gpu = Module["gxWebgpu"];
+  const EFB_COPY_LIMIT = 64;
   try {
     const batch = gpu.openBatch();
     gpu.endPass(batch);
     const encoder = batch.encoder;
+    if (copy_to) {
+      const w = Math.min(src_w, gpu.efb.width - src_x), h = Math.min(src_h, gpu.efb.height - src_y);
+      let e = gpu.efbCopies.get(copy_to);
+      if (e) gpu.efbCopies.delete(copy_to);
+      if (w > 0 && h > 0) {
+        // A texture of another size is replaced; one the open batch may name is destroyed only
+        // after that batch is submitted (gpu.flush).
+        if (e && (e.texture.width !== w || e.texture.height !== h)) { gpu.copyGarbage.push(e.texture); e = null; }
+        if (!e) {
+          const texture = gpu.device.createTexture({size:[w,h],format:gpu.format,
+            usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
+          e = {id:-(++gpu.copySerial), texture, view:texture.createView()};
+        }
+        encoder.copyTextureToTexture({texture:gpu.efb, origin:[src_x, src_y]}, {texture:e.texture}, [w, h]);
+        gpu.efbCopies.set(copy_to, e);
+        if (gpu.efbCopies.size > EFB_COPY_LIMIT) {
+          const [oldest, old] = gpu.efbCopies.entries().next().value;
+          gpu.efbCopies.delete(oldest); gpu.copyGarbage.push(old.texture);
+        }
+        gpu.efbCopyTextures = (gpu.efbCopyTextures | 0) + 1;
+      } else if (e) gpu.copyGarbage.push(e.texture);
+    }
     if (to_xfb) {
       const target = gpu.xfb ? gpu.xfb : gpu.context.getCurrentTexture();
       let w = src_w, h = src_h;
@@ -205,7 +243,10 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
 // being bound and every draw recorded since the last submit -- are never evicted: such a batch
 // may exceed the budget rather than destroy what its unsubmitted encoder uses (WebGPU would
 // reject the whole submit). Pool order is least recently used first, so they are its tail.
-EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, int mode0, int mode1), {
+//
+// `copy_addr` names an EFB copy instead (gxw_copy): its texture is bound, or white when there is none
+// at that address (the copy was dropped, or had no pixels).
+EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, int mode0, int mode1, int copy_addr), {
   const gpu = Module["gxWebgpu"];
   const SAMPLER_CACHE_LIMIT = 256;
   const TEXTURE_POOL_LIMIT = 1024, TEXTURE_POOL_BYTES = 64 << 20;
@@ -223,6 +264,12 @@ EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, 
         mipmapFilter:mip===2?"linear":"nearest",lodMinClamp:lo,lodMaxClamp:hi});
       if (gpu.samplers.size >= SAMPLER_CACHE_LIMIT) gpu.samplers.delete(gpu.samplers.keys().next().value);
       gpu.samplers.set(key, sampler);
+    }
+    if (copy_addr) {
+      const e = gpu.efbCopies.get(copy_addr);
+      gpu.slots[slot] = {entry:e || gpu.whiteEntry, sampler, key};
+      gpu.efbCopyBinds = (gpu.efbCopyBinds | 0) + 1;
+      return 1;
     }
     if (!content) { gpu.slots[slot] = {entry:gpu.whiteEntry, sampler, key}; return 1; }
     let entry = gpu.texturePool.get(content), fresh = false;
@@ -478,6 +525,10 @@ struct Content { int id; std::shared_ptr<const gx::TextureSnapshot> snapshot; };
 std::unordered_map<ContentKey, Content, ContentKeyHash> g_contents;
 std::unordered_map<int, ContentKey> g_content_keys;
 int g_next_content = 0;
+// Guest addresses an EFB copy has written a texture to (gxw_copy). A draw whose texture is at one of
+// them samples that copy, not the bytes in RAM. As upstream's efb_copies_ the set is keyed by address
+// alone, so it holds as many entries as the game has copy destinations.
+std::unordered_set<uint32_t> g_efb_copy_addrs;
 
 // All source reads are from TextureSnapshot, never host::ram/guest addresses. A snapshot already
 // in the pool is neither decoded nor uploaded again (gxw_bind).
@@ -486,7 +537,11 @@ bool upload_textures(const gx::DrawCall& dc) {
   for (int slot=0; slot<8; ++slot) {
     const auto& t=dc.textures[slot];
     if (!t.used) {
-      if (!gxw_bind(slot,0,0,0,1,0,0)) return false;
+      if (!gxw_bind(slot,0,0,0,1,0,0,0)) return false;
+      continue;
+    }
+    if (g_efb_copy_addrs.count(t.addr)) {
+      if (!gxw_bind(slot,0,0,0,1,t.mode0,t.mode1,int(t.addr))) return false;
       continue;
     }
     const bool supported=t.format<=6 || t.format==8 || t.format==9 || t.format==10 || t.format==14;
@@ -506,7 +561,7 @@ bool upload_textures(const gx::DrawCall& dc) {
       g_content_keys.emplace(found->second.id,key);
     }
     const int content=found->second.id;
-    const int bound=gxw_bind(slot,content,t.width,t.height,t.mip_levels,t.mode0,t.mode1);
+    const int bound=gxw_bind(slot,content,t.width,t.height,t.mip_levels,t.mode0,t.mode1,0);
     if (!bound) return false;
     // Only a miss evicts, and never this draw's textures, so `content` is not among these.
     for (int gone; (gone=gxw_evicted());) {
@@ -606,8 +661,11 @@ class WebGpuBackend final : public gx::Backend {
         continue;
       }
       const gx::EfbCopy& c = frame.copies[command.index];
+      // A colour copy to RAM becomes a texture (gxw_copy); depth copies are not kept.
+      const bool to_texture = !c.to_xfb && !c.is_depth && c.dest_addr;
+      if (to_texture) g_efb_copy_addrs.insert(c.dest_addr);
       if (!gxw_copy(int(c.src_x), int(c.src_y), int(c.src_w), int(c.src_h), c.to_xfb, c.clear,
-                    int(c.clear_color), int(c.clear_z))) {
+                    int(c.clear_color), int(c.clear_z), to_texture ? int(c.dest_addr) : 0)) {
         // The device is unusable: stop recording frames altogether, back to exactly headless.
         // Return at once; the decoder clears `frame` when this call returns.
         host::gx_set_backend(nullptr);
@@ -853,7 +911,30 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
       }
     }
-    for(int layer=0;layer<(geometry==49 ? 0 : 3);layer++) {
+    // 50: an EFB copy to a texture (gxw_copy). A green triangle; a 4x4 copy from inside it to guest
+    // address 0x100000, with a clear; then the triangle again, white, textured from that address.
+    // The probe reads the copied green. A backend that samples guest RAM there draws the snapshot
+    // that address's TextureRef carries instead: the RGBA8 fixture, (128,64,32,192).
+    if (geometry==50) {
+      for(int pass=0;pass<2;pass++) {
+        gx::DrawCall r=dc;
+        if (pass==1) {
+          r.textures[0]=fixture_texture(6); r.textures[0].addr=0x100000; r.textures[0].width=4; r.textures[0].height=4;
+          const gx::EfbCopy copy{0x100000,0,318,238,4,4,6,false,true,false,false,false,argb,0xFFFFFF,1.0f};
+          frame.copies.push_back(copy); frame.commands.push_back({gx::FrameCommand::Copy,uint32_t(frame.copies.size()-1)});
+        }
+        r.first_vertex=frame.vertices.size(); r.first_segment=frame.segments.size(); r.segment_count=1;
+        for(int i=0;i<3;i++) {
+          gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1]; v.pos[2]=-0.3f; v.posmtx=3; v.nrm[2]=1; v.texmtx[0]=60;
+          v.col0[0]=pass ? 255 : 0; v.col0[1]=255; v.col0[2]=pass ? 255 : 0; v.col0[3]=255; v.col1[3]=255;
+          v.uv[0][0]=0.5f; v.uv[0][1]=0.5f;
+          frame.vertices.push_back(v);
+        }
+        frame.segments.push_back({r.first_vertex,3,r.primitive});
+        frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
+      }
+    }
+    for(int layer=0;layer<(geometry==49 || geometry==50 ? 0 : 3);layer++) {
       if (geometry>=10) {
         static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
         const bool alpha_probe=geometry>=40 && geometry<=44;
@@ -894,7 +975,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
       frame.draws.push_back(dc); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
     }
     gx::EfbCopy copy{}; copy.src_w=640; copy.src_h=480; copy.to_xfb=true;
-    frame.copies.push_back(copy); frame.commands.push_back({gx::FrameCommand::Copy,0});
+    frame.copies.push_back(copy); frame.commands.push_back({gx::FrameCommand::Copy,uint32_t(frame.copies.size()-1)});
     g_webgpu->submit_frame(frame);
   }
   return gx_webgpu_presented();
