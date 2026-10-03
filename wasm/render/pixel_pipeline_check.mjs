@@ -28,6 +28,9 @@
 // Geometry 50 is the source those stages read when the game renders to a texture (its fighters'
 // shadows): an EFB copy kept on the GPU and sampled at its guest address.
 //
+// Geometry 51 is the depth tolerance that keeps the game's shadow backdrop quad: a triangle a float
+// beyond the near plane must still be drawn.
+//
 // Geometry 49 is not a value: it draws 48 pseudo-random register states per call (192 here), and
 // passes when none of the shaders they generate is rejected. A WGSL generator that emits invalid code
 // for some combination of stages, inputs, compares, swaps, texgens or fog fails it.
@@ -63,6 +66,7 @@ const PROBES = [
   { geometry: 49, name: '192 pseudo-random pixel pipeline states compile', repeats: 4, expected: null },
   // The copied 4x4 of the green triangle, not the RGBA8 snapshot (128,64,32,192) at that address.
   { geometry: 50, name: 'EFB copy to a texture, sampled by a later draw at its address', expected: [0, 255, 0, 255] },
+  { geometry: 51, name: 'a triangle 2^-23 beyond the near plane is drawn (Dolphin 1 - 1e-7)', expected: [0, 255, 0, 255] },
 ];
 
 const server = spawn(process.execPath, [`${web}scripts/serve.mjs`, '--dir', dist, '--port', String(PORT)],

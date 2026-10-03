@@ -223,6 +223,11 @@ std::string generate_wgsl(const ShaderUid& uid) {
       "  let p = vec4f(dot(u.rows[6u + m], raw), dot(u.rows[7u + m], raw), dot(u.rows[8u + m], raw), 1.0);\n"
       "  var clip = vec4f(dot(u.rows[0], p), dot(u.rows[1], p), dot(u.rows[2], p), dot(u.rows[3], p));\n"
       "  clip.z = -clip.z;\n"
+      // Dolphin's VertexShaderGen for a host without depth clamping (WebGPU has no user clip
+      // distances): depth scaled by 1 - 1e-7, so a primitive on the near plane up to rounding is
+      // not clipped. The shadow pass's white backdrop quad is one, 1.8e-8 beyond it; clipped, the
+      // projected shadow texture is black and the stage under it too.
+      "  clip.z = clip.z * (1.0 - 1e-7);\n"
       "  clip = vec4f(clip.xy * sign(u.rows[4].zw * vec2f(-1.0, 1.0)) + clip.w * u.rows[4].zw, clip.zw);\n"
       "  if (clip.w == 1.0) { clip = vec4f(round(clip.xy * u.rows[5].xy) * u.rows[5].zw, clip.zw); }\n"
       "  var o: Out;\n"

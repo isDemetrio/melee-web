@@ -934,7 +934,21 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
       }
     }
-    for(int layer=0;layer<(geometry==49 || geometry==50 ? 0 : 3);layer++) {
+    // 51: Dolphin's near-plane tolerance (gx_wgsl.cpp). A green triangle whose clip z is the next
+    // float after w (1 + 2^-23): scaled by 1 - 1e-7 it lands on the plane and is drawn; unscaled,
+    // WebGPU clips it and the probe reads the clear colour. The game's shadow backdrop quad is such a
+    // primitive (1.8e-8 beyond the plane).
+    if (geometry==51) {
+      dc.first_vertex=frame.vertices.size(); dc.first_segment=frame.segments.size(); dc.segment_count=1;
+      for(int i=0;i<3;i++) {
+        gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1]; v.pos[2]=-std::nextafter(1.0f,2.0f); v.posmtx=3; v.texmtx[0]=60;
+        v.col0[1]=255; v.col0[3]=255; v.col1[3]=255;
+        frame.vertices.push_back(v);
+      }
+      frame.segments.push_back({dc.first_vertex,3,dc.primitive});
+      frame.draws.push_back(dc); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
+    }
+    for(int layer=0;layer<(geometry==49 || geometry==50 || geometry==51 ? 0 : 3);layer++) {
       if (geometry>=10) {
         static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
         const bool alpha_probe=geometry>=40 && geometry<=44;
