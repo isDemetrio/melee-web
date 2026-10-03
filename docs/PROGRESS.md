@@ -2952,3 +2952,26 @@ residuals. Queue prototype coverage and a pre-game known submission expose count
 times and validation status. Details: [ATTRIBUTE_RESIDUAL](ATTRIBUTE_RESIDUAL.md).
 No renderer changes or optimizations. Actions/page verification pending; phone live
 residual and the 2400-checkpoint replay need operator evidence / runner disc access.
+
+## 2026-10-03 — the CI checkpoint replay is exercised: parity no longer needs the operator
+
+`ci.yml` gained an opt-in `checkpoint_build_run` input in `dd19661` (PR #97): it replays the 2400
+checkpoints on a runner against the private R2 disc, and had never been dispatched. It has now
+been: run `37148808325` on `main` (`9e9b6e73`), `checkpoint_build_run=37144772311` (the private
+`melee-core-wasm-node` artifact of `dd19661`), **success**, five jobs, 1m50s in total, the replay
+job 106 s of it. From the job log: the disc came from R2 in 27 s and verified as 1,459,978,240
+bytes, SHA-1 `d4e70c064cc714ba8400a849cf299dbd1aa326fc`; the replay took 41 s, 2401 rows, trace
+SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`, `final scene: mode=2 state=2 match_frame=762
+(retraces=2400)`; the artifact's source tree and `main`'s agree under `native wasm patches upstream
+web/src`. Details, and the two dispatches that use it: [ATTRIBUTE_RESIDUAL](ATTRIBUTE_RESIDUAL.md),
+"The gate is exercised".
+
+**What it unblocks.** The trace was the one item in nearly every renderer entry of this file that
+could not be closed without the operator. It can now be closed in CI, in about two minutes of
+runner time, for any branch whose compiled tree matches a successful `phase0-build` run that
+uploaded the private Node artifact. The phone rows are unaffected: the gate replays Node, not
+Safari.
+
+**Next step.** The first candidate that needs it is `render/webgpu-lighting` (PR #70), open since
+2026-10-02 and `CONFLICTING` with `main`; its rebase waits for `fix/tev-colour` to land, because
+that branch's `wasm/render/gx_wgsl.cpp` header states that the lights themselves are PR #70's.

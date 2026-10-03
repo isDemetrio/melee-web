@@ -68,3 +68,36 @@ final scene, then removes the disc/module/replay files without uploading them.
 This checks the full reference digest, not a cell-by-cell reference-file diff.
 R2 access must succeed; a Pages-only token cannot silently skip the gate.
 The read uses the documented [Wrangler R2 get command](https://developers.cloudflare.com/r2/reference/wrangler-commands/#r2-object-get).
+
+## The gate is exercised — 2026-10-03, first run
+
+The paragraph above described the replay; it had never been dispatched. It has now been run once:
+`ci.yml` dispatched on `main` (`9e9b6e73`) with `checkpoint_build_run=37144772311` — run
+`37148808325`, 2026-10-03 19:41:39 UTC, **success**, five jobs, 1m50s end to end; the replay job
+itself took **106 s** (19:41:42 → 19:43:28).
+
+What the job did, read from its own log (`gh run view 37148808325 --log`):
+
+| Step | Measured |
+| --- | --- |
+| Source identity | `SOURCE_SHA=dd1966133b290a83ca88bf38a2a4019589e6fac7`; `git diff --exit-code $SOURCE_SHA HEAD -- native wasm patches upstream web/src` exit 0, so the artifact's source tree and `main`'s agree in every compiled path |
+| Private artifact | `melee-core-wasm-node`, 3,483,581 bytes, artifact `11281094282`, from run `37144772311` |
+| Private disc from R2 | wrangler 4.147.0, `Downloading "melee-ntsc102.iso" from "melee-phase0-disc"` → `Download complete` in **27 s** |
+| Disc revision | `disc image verified: 1459978240 bytes, sha1 d4e70c064cc714ba8400a849cf299dbd1aa326fc` |
+| Replay | `wall clock: 41s for 2400 requested frames`, exit 0, `trace rows: 2401`, `trace sha1: c79c53b9cdf81426fa0277e7497a69e55bc5f571`, `final scene: mode=2 state=2 match_frame=762 (retraces=2400)` |
+
+So R2 access succeeds and the gate is not silently skipped: the whole reference digest is checked
+on the runner, on a commit that is not the artifact's own commit (the allowance the job documents),
+in under two minutes of runner time.
+
+**What this changes.** The standing gap in the renderer entries of `docs/PROGRESS.md` — "NOT
+verified: the 2400-checkpoint trace; the operator runs it" — no longer needs the operator's machine
+or the phone. The flow for a renderer change is: dispatch `phase0-build.yml` on the branch with the
+typed `upload_module` input, then dispatch `ci.yml` with `checkpoint_build_run=<that run id>`. The
+identity check is what ties the two: the branch's `native wasm patches upstream web/src` must be
+byte-identical to the head of the build run that produced the artifact.
+
+**Not established.** One run, on one commit pair. The gate says nothing about the browser: it
+replays the Node module, so a renderer change is covered only in the sense that the simulated state
+is unchanged — the pixels remain `web/tests/spike/render.spec.ts`'s business, and the device rows
+remain the operator's.
