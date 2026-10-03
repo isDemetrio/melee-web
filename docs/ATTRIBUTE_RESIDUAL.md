@@ -58,3 +58,13 @@ operator must produce the new phone report and inspect `summary.in_match.reconci
 and `queue_probe` (plus gameplay method totals). No live residual value or checkpoint
 parity is claimed until the relevant replay has actually run. The required 2400-row
 reference remains SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`.
+
+
+The optional `ci.yml` dispatch input `checkpoint_build_run` reuses the private Node
+artifact from a successful core build, checks that its source matches the code
+under test, and downloads the existing private R2 disc on the runner using CI
+credentials. The runner verifies disc revision, full trace SHA-1, 2400 rows and
+final scene, then removes the disc/module/replay files without uploading them.
+This checks the full reference digest, not a cell-by-cell reference-file diff.
+R2 access must succeed; a Pages-only token cannot silently skip the gate.
+The read uses the documented [Wrangler R2 get command](https://developers.cloudflare.com/r2/reference/wrangler-commands/#r2-object-get).
