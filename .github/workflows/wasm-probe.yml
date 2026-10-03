@@ -111,6 +111,15 @@ jobs:
           path: wasm-probe/out/wasm
           if-no-files-found: error
           retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-probe-x86-dump
+          # The x86 result dump, 64 MB. The arm64 job classifies its own dump against this
+          # one, which is what turns "the digests differ" into a named divergence: the same
+          # module, one engine version, and the first triple of each kind that differs.
+          path: wasm-probe/wasm.bin
+          if-no-files-found: error
+          retention-days: 3
       - name: Classify FMA divergences and gate
         shell: bash
         run: |
@@ -237,6 +246,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -244,6 +254,10 @@ jobs:
         with:
           name: wasm-probe-module
           path: wasm-probe/out/wasm
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-probe-x86-dump
+          path: wasm-probe/x86
       - name: Runner and engine version
         shell: bash
         run: |
@@ -267,6 +281,34 @@ jobs:
             echo "== ${test}"
             (cd wasm-probe/out/wasm && node "${test}.js")
           done
+      - name: Build the probe comparison tool on this architecture
+        shell: bash
+        run: |
+          # The submodule is checked out for this step, not for the module: the port
+          # comparison tool (wasm/probe/fma_vectors.cpp) is compiled here and pointed at
+          # the two dumps, so a divergence is classified by the same code the x86 job
+          # classifies with, rather than by a second implementation of the same rules.
+          # The x86 job compiles its native baseline before the patch series and therefore
+          # needs no include root; this one is compiled after it, because only the patched
+          # ppc.h routes the four FMA operations away from <immintrin.h>. -I. is what
+          # resolves the wasm/compat/fma.h that patch 0001 adds. --compare never calls
+          # fmadd, so the arithmetic of this build is not what it is used for.
+          bash scripts/apply_patches.sh
+          g++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math \
+            -I. -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
+            wasm/probe/fma_vectors.cpp -o wasm-probe/out/fma_vectors
+      - name: Classify the cross-architecture divergence
+        shell: bash
+        run: |
+          # In this invocation the tool labels one file "native" and the other "wasm". Here
+          # "native" is WASM-x86 and "wasm" is WASM-arm64 -- one module, two engines. The
+          # labels are the ones the tool already uses, unchanged, so this table means what
+          # the x86 job table means: kind, input class, path, first triple of a kind.
+          # This step is not the gate: the digest comparison below is, and it is what decides
+          # the job. A tool that cannot read its inputs still leaves the job red there.
+          wasm-probe/out/fma_vectors --compare wasm-probe/x86/wasm.bin wasm-probe/arm64.bin \
+            > wasm-probe/arm64-divergence.txt || true
+          cat wasm-probe/arm64-divergence.txt
       - name: Compare the two architectures
         shell: bash
         run: |
@@ -294,6 +336,7 @@ jobs:
           name: wasm-probe-arm64
           path: |
             wasm-probe/arm64-parity.txt
+            wasm-probe/arm64-divergence.txt
             wasm-probe/arm64-bench.json
             wasm-probe/arm64-wasm.sha256
           if-no-files-found: warn
