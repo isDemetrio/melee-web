@@ -2,6 +2,7 @@ import { detectCapabilities, type CapabilityReport } from './platform/capabiliti
 import { Shell } from './ui/app.js';
 import { AudioBootstrap } from './ui/audio.js';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type Settings } from './ui/settings.js';
+import { dropStaleServiceWorker } from './ui/sw-cleanup.js';
 import type { AppContext } from './ui/context.js';
 
 /**
@@ -69,6 +70,17 @@ async function main(): Promise<void> {
 
   if ('serviceWorker' in navigator && window.isSecureContext) {
     try {
+      const dropped = await dropStaleServiceWorker({
+        controller: navigator.serviceWorker.controller,
+        guard: window.sessionStorage,
+        getRegistrations: () => navigator.serviceWorker.getRegistrations(),
+        cacheNames: () => caches.keys(),
+        deleteCache: (name) => caches.delete(name),
+        reload: () => window.location.reload(),
+        log: (line) => shell.log(line),
+      });
+      // A reload is taking over: booting on would register the worker again on the way out.
+      if (dropped) return;
       await navigator.serviceWorker.register('/sw.js');
       shell.log('service worker registered');
     } catch {
