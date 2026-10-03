@@ -10,6 +10,7 @@ import {
 } from '../../input/touch.js';
 
 import { PlaySession } from '../../play/session.js';
+import { ReportControls } from '../../play/report-panel.js';
 
 export function gameScreen(context: AppContext): HTMLElement {
   const screen = h('section', { id: 'screen-game' });
@@ -143,10 +144,12 @@ export function gameScreen(context: AppContext): HTMLElement {
 
   const performance = h('p', { class: 'status', id: 'performance', text: 'Choose Play to load the disc and start the game.' });
   const picker = h('input', { id: 'game-disc', type: 'file', accept: '.iso,.gcm', 'aria-label': 'Local disc (optional)' });
+  // Where each frame's time goes, and the report the operator sends (web/src/play/report.ts).
+  const reports = new ReportControls((text) => context.log(text));
   const play = h('button', { id: 'game-play', text: 'Play', onClick: () => {
     session?.stop();
     session = new PlaySession(canvas, controls, context.settings.controlStickDeadzone,
-      (text) => { performance.textContent = text; }, (text) => context.log(text));
+      (text) => { performance.textContent = text; }, (text) => context.log(text), reports.begin());
     void session.start(picker.files?.[0] ?? null);
   } });
   const stop = h('button', { id: 'game-stop', text: 'Stop', onClick: () => {
@@ -156,7 +159,7 @@ export function gameScreen(context: AppContext): HTMLElement {
   } });
   screen.append(h('div', { class: 'panel' }, [
     h('p', { text: 'Play loads the operator disc from the verified cache / server. You can also select a local ISO. Starts at the game menus; port 1 uses controller, touch or keyboard. Audio and online play are not connected yet. Leaving Game stops the session.' }),
-    picker, h('div', { class: 'row' }, [play, stop]), performance,
+    picker, h('div', { class: 'row' }, [play, stop]), performance, reports.element,
   ]));
 
   screen.append(

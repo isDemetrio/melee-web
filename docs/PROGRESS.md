@@ -2559,6 +2559,152 @@ the causes above); the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` (no chan
 simulation, `wasm/` or `web/public/sw.js` — the operator runs it). Nothing was built or run locally:
 typecheck, unit and browser tests are CI's.
 
+## The game page measures its frames, and the operator can send a report (2026-10-03, `perf/play-instrument`)
+
+**Why this.** The operator played a real match on the phone: the game reaches the match and can be
+played, but it lags, is not fluid, and every so often freezes and stutters; the menus are fluid.
+PR #86 already cut the WebGPU calls from 28,131 to 2,283 per frame and is in production, and the
+lag is still there. The spike page could say where a frame's time went; the game page could not
+say anything, so the only measure of the lag was an impression. This change gives the game page
+the spike's instrumentation and report. It changes no C++, nothing under `wasm/render/`, nothing
+under `web/src/input/`, and not `web/public/sw.js`.
+
+### What the report measures, per frame
+
+A frame is one cycle of the play worker, from the end of one retrace's presentation to the end of
+the next one's (`web/src/play/frame-meter.ts`). Five clock reads cut it into four parts that add up
+to the cycle exactly:
+
+| column | what it is |
+| --- | --- |
+| `core_ms` | `callMain` from the end of the last presentation to the next retrace beat: simulation, GX decoding, the backend's JS and C++, every WebGPU call |
+| `webgpu_ms`, `webgpu_calls` | inside `core_ms`: time inside WebGPU calls, read around each call, and their number; split into `resources_ms` (create/destroy), `encode_ms` (encoder and pass), `queue_ms` (writeBuffer/writeTexture/submit), `present_ms` (getCurrentTexture) |
+| `disc_ms`, `disc_bytes` | inside `core_ms`: WORKERFS reads of the disc |
+| `decode_ms`, `non_decode_ms` | inside `core_ms`, only with **core split** on: the core's own profiler (patch 0008), GX decoding against everything else |
+| `bitmap_ms` | `OffscreenCanvas.transferToImageBitmap` |
+| `ack_ms` | posting the frame and waiting for the page to present it |
+| `idle_ms` | the 60 Hz pacing wait: time left over |
+| `draws`, `created`, `pipelines_created` | renderer draw beats; GPU objects created, render pipelines among them |
+| `match_frame`, `hidden` | from `--sim-times` (the spike's definition of in-match); a frame that waited on a hidden page |
+
+The WebGPU calls are timed from JavaScript, by replacing the methods of the device, queue, canvas
+context and of the encoders, passes, textures and buffers the device returns with timed calls of
+the originals (same `this`, arguments, results and exceptions). The backend in `wasm/render/` is
+not edited. Calls made while the backend attaches, before the first frame, are not counted.
+
+### Freezes, slow frames, and a record that survives the tab
+
+- **Flight recorder.** Six words of shared memory: the last completed frame, what the worker is
+  doing right now (`core`, `webgpu <method>`, `disc`, `bitmap`, `ack`, `idle`) and the draws so far
+  in this frame. A frozen worker cannot post, but the page reads these on every animation frame.
+- **Freezes**: no new frame for 250 ms with the page visible. Each one records the frame it is stuck
+  in, when, how long, the draws it had reached, and a histogram of what the worker was doing at
+  each sample -- e.g. `webgpu device.createRenderPipeline`, or `ack` when it was the page that did
+  not answer. The live line under the game says `FROZEN in frame N` while it lasts.
+- **Slow frames**: 50 ms or more. Each gets a one-line motive -- its largest part, the three slowest
+  WebGPU methods in it, pipelines created, disc bytes read -- and the 200 worst are kept.
+- **Sampled phases**: the same flight recorder, sampled at ~60 Hz for the whole session: a
+  statistical profile that does not depend on the timer resolution.
+- **Persisted record**: every 2 s the page writes the spike's heartbeat record
+  (`melee-spike-heartbeat/1`, under its own key `melee-play-heartbeat`) with a compact frame
+  summary. A tab that is killed mid-match leaves it; the next visit to the Game screen shows it and
+  **Save report** sends it as `melee-play-partial/1`, until Play is pressed again.
+
+### The report's form
+
+`melee-play-report/1` reuses the spike's pieces rather than inventing a second form:
+`simTimeStats` for every column (count, mean, p95, p99, max, nearest-rank), `stats_all` /
+`stats_in_match` over the core's sim_times rows, the heartbeat record (`heartbeat.ts`) and, with the
+core split, `decoderCostReport`. On top: `summary.{all,in_match}` (fps, percent of the time in each
+part, frames over 20/33/50/100/250/1000 ms, the meter's estimated own cost), `webgpu_methods`
+(calls, ms and the longest single call of every method, all frames and in-match), `slow_frames`,
+`freezes`, `sampled_phases`, `page_transfer_ms`, `frames_csv` (the last 36,000 frames) and
+`not_measured`. **Save report** downloads it; **Share report** opens the share sheet where the
+browser can share files and downloads otherwise.
+
+### What it cannot measure (also written into every report, `not_measured`)
+
+- The GPU process and the GPU after a call has returned. On WebKit each call is an IPC message;
+  `webgpu_ms` is only the synchronous send. Metal encoding and GPU execution show up only where a
+  later synchronous call has to wait for them (`queue.submit`, `getCurrentTexture`, `bitmap_ms`).
+- GPU completion and GPU time: `callMain` never yields, so `onSubmittedWorkDone`, `mapAsync` and
+  timestamp queries cannot resolve during the game.
+- Simulation against drawing inside `core_ms` without the core split: then `core_ms - webgpu_ms -
+  disc_ms` is the simulation and our renderer code together. With it, the profiler's own clock
+  reads add time (they cost ~3.4 ms per frame on the iPhone before PR #71, measured then).
+- Garbage collection, which lands in whichever part was running.
+- Calls shorter than the timer resolution (reported as `timer_resolution_ms`).
+- The meter's own cost, about `2 x webgpu_calls x clock_cost_ns` per frame, inside `core_ms`.
+- When a presented bitmap reaches the screen (the compositor).
+
+### Step 3: the biggest item is not known yet, and why
+
+There is no phone measurement of the game page in this session, so nothing was optimised: picking
+a target now would be the hypothesis the task rules out. What the earlier numbers already say is
+that the spike's iPhone frame was ~42 ms of which our own code was ~2.4 ms (an estimate, see the
+draw-cost section) and the rest was **inside the WebGPU calls or waiting on the GPU, in proportions
+no tool here could split**. The report is built to split exactly that:
+
+| if the report says | then |
+| --- | --- |
+| `webgpu_ms` dominates, spread over `encode_ms` / `queue_ms` | per-call cost in WebKit: fewer calls -- the renderer's task (`wasm/render/`, another agent) |
+| `bitmap_ms` or `present_ms` dominates | the worker waits for the GPU / GPU process: GPU-side work (6 render passes per match frame since PR #86, each loading and storing the EFB; texture uploads) or the presentation path |
+| `ack_ms` dominates | the page's main thread is late to present: page-side work (the touch overlay repaints on every pointer event, PR #89) |
+| `core_ms - webgpu_ms - disc_ms` dominates | simulation or our renderer code: run a second match with **core split** on |
+| slow frames name `device.createRenderPipeline` / `createShaderModule` | pipeline compilation stutter: compile pipelines ahead of use (renderer) |
+| freezes in `disc` | synchronous disc reads mid-match |
+
+### Step 4: the intermittent freezes
+
+**Not reproduced.** There is no device here and the disc cannot run in CI. The report now records
+each freeze with its frame and what the worker was doing; the next report from the phone is the
+measurement.
+
+### What the operator does
+
+1. Game → Play, play a match as before.
+2. **Save report** (or **Share report**) and send the JSON.
+3. If the report says `core_ms - webgpu_ms - disc_ms` is large: tick **core split** and play a
+   second match; send that report too.
+4. If the tab dies: open the Game screen again and press **Save report** before Play.
+
+### Verified
+
+- `ci.yml` dispatched on this branch (`gh workflow run ci.yml --ref perf/play-instrument`), run
+  `37107061668`: all four jobs green; typecheck; **342 unit tests**, including 21 new ones
+  (`web/tests/unit/play-meter.test.ts`, `play-report.test.ts`) that check the partition sums to the
+  cycle, that wrapped calls keep `this`/arguments/results/exceptions and restore the flight
+  recorder's phase when they throw, the CSV tail, the motive text, freeze detection (and that boot
+  and a hidden page are not freezes), the persisted record under its own key; and the Chromium
+  e2e suite. The first dispatch (`37106999704`) failed typecheck on a test fake (`submit` without
+  its argument), fixed in the next commit.
+- `web/tests/spike/playable.spec.ts` now also downloads the report after the three real-core
+  selftest frames and checks frames 1-3, three draws each, nine `pass.drawIndexed`, and the
+  partition. It runs in `Phase 0 — WASM core` on the pull request.
+- `scripts/check_no_game_data.py --all`: clean. PR #89 (`fix/touch-stick`) landed on `main` while
+  this was open; `main` is merged into this branch, and `web/src/ui/screens/game.ts` merged without
+  a conflict (only this file's own section of `docs/PROGRESS.md` had to be placed after #89's).
+
+### NOT verified by this agent
+
+- **Anything on the phone**: the report's numbers, the meter's overhead on JavaScriptCore
+  (~2,300 timed calls per frame: two clock reads and a few typed-array writes each), whether
+  Safari's share sheet accepts the JSON file, whether the frame rate changes with the meter on.
+- **The trace** `c79c53b9cdf81426fa0277e7497a69e55bc5f571`: not run by this agent. The spike's
+  scripted run is unchanged in its arguments; the spike worker only had two helpers moved out
+  (`timerResolutionMs` to `spike/clock.ts`, `renderProgress` to `spike/gpu.ts`). The play worker
+  now passes `--sim-times`, which reads the scene words and writes no guest state
+  (`native/headless_host.cpp`, `record_sim_time` / `current_scene`).
+- The core split in a live game: `_melee_decoder_cost(1)` and the incremental read of
+  `/work/decoder_cost.csv` have only the selftest path in CI, which runs no simulation, so CI does
+  not exercise them; that file grows ~250 bytes per frame in MEMFS while the split is on.
+- `--sim-times` and the disc-read meter in a real game: same reason, no disc in CI.
+- Long sessions: the page keeps 36,000 frame rows; the statistics spread up to 36,000 values into
+  `Math.max`, below JavaScriptCore's argument limit as far as known, not measured.
+
+**Next step.** The operator's report from a match. Then the biggest item it names, per the table
+above; if it is inside WebGPU or the GPU, that goes to the renderer's agent with the numbers.
+
 ## Transparent pixels stop being drawn: GX alpha test and blending in WebGPU (2026-10-03, `fix/font-alpha`)
 
 **Symptom.** On the phone, magenta blocks behind the memory-card text, a white box around the title

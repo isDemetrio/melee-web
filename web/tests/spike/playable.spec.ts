@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 
 test.use({ launchOptions: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] } });
@@ -74,6 +75,31 @@ test('main page presents consecutive real core frames while worker stays synchro
     [1, 2, 3].map((serial) => ({ serial, width: 640, height: 480 })));
   // The acknowledgement follows a transferFromImageBitmap that did not throw (session.ts).
   expect(presented).toBe(3);
+
+  // The report the operator sends (web/src/play/report.ts) has the same three frames, each cut into
+  // its parts by the worker's meter (frame-meter.ts), with the real core and a real WebGPU device.
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('#game-report')]);
+  const report = JSON.parse(await readFile(await download.path(), 'utf8'));
+  expect(report.schema).toBe('melee-play-report/1');
+  expect(report.state).toBe('Game ended (code 0).');
+  expect(report.frames_total).toBe(3);
+  expect(report.timer_resolution_ms).toBeGreaterThan(0);
+  expect(report.clock_cost_ns).toBeGreaterThan(0);
+  expect(report.not_measured.length).toBeGreaterThan(0);
+  const [header, ...lines] = (report.frames_csv as string).split('\n');
+  const columns = header!.split(',');
+  const rows = lines.map((line) => Object.fromEntries(line.split(',').map((cell, i) => [columns[i], Number(cell)])));
+  expect(rows.map((row) => row.retrace)).toEqual([1, 2, 3]);
+  // One renderer beat per draw, three per selftest frame, and each of them reached drawIndexed.
+  expect(rows.map((row) => row.draws)).toEqual([3, 3, 3]);
+  expect(report.webgpu_methods.all['pass.drawIndexed'].calls).toBe(9);
+  expect(report.webgpu_methods.all['queue.submit'].calls).toBeGreaterThan(0);
+  for (const row of rows) {
+    expect(row.webgpu_calls).toBeGreaterThan(0);
+    expect(row.webgpu_ms).toBeLessThanOrEqual(row.core_ms! + 0.002);
+    // Four parts from five clock reads, each rounded to a microsecond.
+    expect(Math.abs(row.core_ms! + row.bitmap_ms! + row.ack_ms! + row.idle_ms! - row.cycle_ms!)).toBeLessThan(0.005);
+  }
 });
 
 test('the presented frames carry the selftest colour, on a GPU that survives presenting', async ({ page }) => {
