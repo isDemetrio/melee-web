@@ -2802,3 +2802,19 @@ alpha/blend merge, with an unpushed version of this same guard file in its workt
 fix (PR #91) names the next on-screen defect: the TEV colour (RENDERER_MAP priority 3, "full TEV
 remains open"). What remains beyond that still needs the operator: O1's legal call, O2-O9's
 credentials, and the device rows M1, M2 and M5.
+
+## 2026-10-03 — Core budget decision, no implementation
+
+Analysis on `perf/core-budget`, base `029f41d`, in [CORE_BUDGET_DECISION.md](CORE_BUDGET_DECISION.md).
+Recomputed the three operator play reports from their raw CSVs: all in-match means agree with
+summaries. The internal split excludes a measured 15.991–23.950 ms/frame residual included in the
+page's core timer. Backend submission belongs to decode/end-frame (14.648 ms in the split report),
+not non-decode. Queue calls are absent from all method tables despite submissions in the code;
+API totals therefore need coverage verification before a GPU conclusion.
+
+Decision: first propose attribution of the timer residual and queue coverage; first renderer
+candidate is preparing state once per DrawCall instead of per segment. Savings are conditional
+scenarios, not device measurements; no evidence yet for 60 fps with four players. No source edits,
+local builds/tests, game execution, or game data added; the concurrent TEV file was only read.
+Next: review the decision with the operator and choose one experiment. Every implementation must
+retain the 2400-checkpoint trace, verify rendering separately, and win on the operator's phone.
