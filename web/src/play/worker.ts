@@ -1,8 +1,9 @@
 import { clockCostNs, timerResolutionMs } from '../spike/clock.js';
 import { openGpu, renderProgress } from '../spike/gpu.js';
 import { heartbeatSender } from '../spike/heartbeat.js';
+import { openCachedDisc, readDiscThrough, type OpfsDirectory, type SyncReadHandle } from './disc-reader.js';
 import { coreSplitOf, CsvTail, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, type FrameRecord,
-  type TailFs } from './frame-meter.js';
+  type TailFs, verifyQueueHooks } from './frame-meter.js';
 import { PRESENTED, readPad } from './shared-pad.js';
 
 interface Core {
@@ -17,8 +18,14 @@ interface Core {
   _melee_live_input_version?(): number;
   _melee_decoder_cost?(mode: number): number;
 }
-/** The page's request: a disc, the input mailbox, the flight recorder, and whether to split the core. */
-interface PlayRequest { iso: File; pad: SharedArrayBuffer; flight: SharedArrayBuffer; split?: boolean; selftest?: boolean }
+/**
+ * The page's request: a disc, the input mailbox, the flight recorder, and whether to split the core.
+ * `discIdentity` names the OPFS cache the disc came from; a picked disc has none.
+ */
+interface PlayRequest {
+  iso: File; discIdentity?: string | null; pad: SharedArrayBuffer; flight: SharedArrayBuffer; split?: boolean;
+  selftest?: boolean;
+}
 /** How often the frame records are posted to the page; a slow frame is posted at once. */
 const FLUSH_MS = 250;
 const SIM_TIMES = '/work/sim_times.csv';
@@ -39,6 +46,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     // can and cannot see). The calls themselves are forwarded unchanged.
     const meter = new FrameMeter(new Int32Array(event.data.flight), () => performance.now());
     instrumentGpu(gpu, meter);
+    const queueProbe = await verifyQueueHooks(gpu.device, meter);
     const url = '/spike-core/melee_core_web.js';
     const head = await fetch(url, { method: 'HEAD' });
     if (!head.ok || !head.headers.get('content-type')?.includes('javascript')) {
@@ -92,7 +100,9 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
       printErr: (line: string) => scope.postMessage({ type: 'log', line }),
       gxWebgpu: gpu,
       livePad: () => readPad(shared),
-      heartbeat: (retraces: number) => {
+      heartbeatReturned: (retraces: number) => meter.heartbeatReturned(retraces),
+      heartbeat: (retraces: number, timingRetrace?: number, simMs?: number, csvMs?: number) => {
+        const entered = retraces >= 0 ? performance.now() : 0;
         if (gpu.failure) throw new Error(gpu.failure);
         beat(retraces);
         // The renderer also beats, with -1, before every draw (gx_webgpu.cpp: the spike's stall
@@ -102,7 +112,11 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         let simLines: string[] = [], decoderLines: string[] = [];
         try { simLines = tail(simTail, sim); } catch (error) { tailFailed(simTail!, error); simTail = null; }
         try { decoderLines = tail(decoderTail, decoder); } catch (error) { tailFailed(decoderTail!, error); decoderTail = null; }
-        meter.coreEnd(retraces, matchFrameOf(simLines, retraces), coreSplitOf(decoderLines, retraces));
+        const readDone = performance.now();
+        const coreTiming = timingRetrace === retraces && Number.isFinite(simMs) && Number.isFinite(csvMs)
+          ? { retrace: timingRetrace, simMs: simMs!, csvMs: csvMs! } : null;
+        meter.coreEnd(retraces, matchFrameOf(simLines, retraces), coreSplitOf(decoderLines, retraces),
+          { entered, readDone, core: coreTiming });
         // callMain never yields. Explicit bitmap presentation releases the WebGPU canvas
         // image every retrace, instead of waiting for the worker's task to return.
         const bitmap = canvas.transferToImageBitmap();
@@ -124,6 +138,9 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     const core = await factory(options);
     if (core._melee_live_input_version?.() !== 1) throw new Error('This deployed core predates live input; rebuild it in CI.');
     if (core._gx_webgpu_attach?.() !== 1) throw new Error(`Renderer attach failed: ${gpu.failure ?? opening.reason}`);
+    // The disc's reads go through an OPFS sync access handle when there is one (disc-reader.ts says
+    // why), installed before the meter so the meter wraps the read the core really uses.
+    const disc = event.data.selftest ? null : await routeDiscReads(core.FS.filesystems, event.data, notes);
     const discNote = meterDiscReads(core.FS.filesystems, meter);
     if (discNote) notes.push(discNote);
     // The clock, measured: every number in the report is quantised to the first, and the meter
@@ -143,7 +160,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         else split = true;
       }
     }
-    scope.postMessage({ type: 'perf-meta', commit, opt, timerResolutionMs: resolution, clockCostNs: clockNs, split, notes,
+    scope.postMessage({ type: 'perf-meta', commit, opt, queueProbe, timerResolutionMs: resolution, clockCostNs: clockNs, split, notes,
       crossOriginIsolated: scope.crossOriginIsolated });
     if (event.data.selftest) {
       if (!core._gx_webgpu_selftest) throw new Error('Core has no renderer selftest');
@@ -152,6 +169,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         // Geometry 1 draws three triangles, so the renderer's per-draw beats run here too.
         core._gx_webgpu_selftest(0xff2080c0, 2, 1);
         options.heartbeat(frame);
+        options.heartbeatReturned(frame);
       }
       flush();
       scope.postMessage({ type: 'ended', exitCode: 0 });
@@ -170,9 +188,39 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     const exitCode = core.callMain(['--iso', `/disc/${event.data.iso.name}`, '--headless', '--fast',
       '--frames', '4294967295', '--time-base', '1', '--volume', '0', '--card-dir', '/card',
       '--sim-times', SIM_TIMES]);
+    disc?.close();
     flush();
     scope.postMessage({ type: 'ended', exitCode });
   } catch (error) {
     scope.postMessage({ type: 'error', message: String(error) });
   }
 };
+
+const FALLBACK_NOTE = 'disc read with FileReaderSync';
+const STALL_RISK = 'on Safari, a read after more than a second without one can block the game for a second';
+
+/** Open the cached disc for sync reads and route WORKERFS to it; null, with a note, when it cannot. */
+async function routeDiscReads(filesystems: Record<string, unknown>, request: PlayRequest,
+  notes: string[]): Promise<SyncReadHandle | null> {
+  if (!request.discIdentity) {
+    notes.push(`${FALLBACK_NOTE}: a picked disc has no OPFS handle; ${STALL_RISK}`);
+    return null;
+  }
+  let handle: SyncReadHandle;
+  try {
+    handle = await openCachedDisc(() => navigator.storage.getDirectory() as unknown as Promise<OpfsDirectory>,
+      request.discIdentity);
+  } catch (error) {
+    notes.push(`${FALLBACK_NOTE}: the cached disc could not be opened for sync reads (${error}); ${STALL_RISK}`);
+    return null;
+  }
+  try {
+    readDiscThrough(filesystems, request.iso, handle);
+  } catch (error) {
+    handle.close();
+    notes.push(`${FALLBACK_NOTE}: ${error}; ${STALL_RISK}`);
+    return null;
+  }
+  notes.push('disc read through an OPFS sync access handle');
+  return handle;
+}

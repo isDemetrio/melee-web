@@ -17,7 +17,7 @@
  *  - `getFile()` records whether it was asked for while a handle was open.
  *
  * It is not a file system: no quota, no locking, no cross-tab visibility. Those are noted where
- * they matter.
+ * they matter. A handle held by another context is played by `heldElsewhere`.
  */
 
 import type {
@@ -124,11 +124,23 @@ export class FakeSyncFileHandle implements SyncFileHandleLike {
   fileReadWhileOpen = false;
   /** Test-only: make the next write store only half of what it was given. */
   shortWrite = false;
+  /**
+   * Test-only: another context holds the file for this many more attempts, each refused with
+   * `name` (WebKit says `InvalidStateError`, Chromium `NoModificationAllowedError`).
+   */
+  heldElsewhere: { name: string; attempts: number } | null = null;
+  /** Test-only: every `createSyncAccessHandle()` call, refused or not. */
+  openAttempts = 0;
   openHandles = 0;
 
   constructor(readonly name: string) {}
 
   async createSyncAccessHandle(): Promise<SyncAccessHandleLike> {
+    this.openAttempts++;
+    if (this.heldElsewhere && this.heldElsewhere.attempts > 0) {
+      this.heldElsewhere.attempts--;
+      throw new FakeFsError(this.heldElsewhere.name, 'the file is held by another sync access handle');
+    }
     this.openHandles++;
     this.maxOpen = Math.max(this.maxOpen, this.openHandles);
     const handle = new FakeSyncAccessHandle(this);

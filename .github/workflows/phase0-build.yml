@@ -237,9 +237,17 @@ jobs:
           set -euo pipefail
           npx playwright install --with-deps chromium
           npx playwright test -c playwright.spike.config.ts
-      # The backend's pixel pipeline -- TEV, fog, alpha test, blending -- read back off the same
-      # Chromium WebGPU device with the same page (probes 15 and 40-49 of gx_webgpu_selftest). The
-      # script says why it is not a case in render.spec.ts yet.
+      - name: Upload synthetic page report (no game data)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-instrumentation-report
+          path: web/test-results/**/play-report.json
+          if-no-files-found: warn
+          retention-days: 3
+      # The backend's pixel pipeline -- TEV, fog, alpha test, blending, EFB copies to textures --
+      # read back off the same Chromium WebGPU device with the same page (probes 15 and 40-51 of
+      # gx_webgpu_selftest). The script says why it is not a case in render.spec.ts yet.
       - name: TEV, fog, alpha test and blending in Chromium (no ISO)
         env:
           SPIKE_DIST: ${{ runner.temp }}/spike-dist

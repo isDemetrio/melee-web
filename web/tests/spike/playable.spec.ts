@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 
 test.use({ launchOptions: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] } });
@@ -66,7 +66,7 @@ async function playSelftest(page: Page): Promise<Presentation> {
   });
 }
 
-test('main page presents consecutive real core frames while worker stays synchronous', async ({ page }) => {
+test('main page presents consecutive real core frames while worker stays synchronous', async ({ page }, testInfo) => {
   const { presented, frames } = await playSelftest(page);
   // Three heartbeats, each a 640x480 bitmap, in order. The worker blocks after each until the
   // page acknowledges that serial, so reaching "ended" at all needs every acknowledgement. Each
@@ -80,6 +80,15 @@ test('main page presents consecutive real core frames while worker stays synchro
   // its parts by the worker's meter (frame-meter.ts), with the real core and a real WebGPU device.
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#game-report')]);
   const report = JSON.parse(await readFile(await download.path(), 'utf8'));
+  await writeFile(testInfo.outputPath('play-report.json'), JSON.stringify(report, null, 2));
+  await testInfo.attach('play-report', { path: testInfo.outputPath('play-report.json'), contentType: 'application/json' });
+  expect(report.queue_probe.passed).toBe(true);
+  for (const method of ['queue.writeBuffer', 'queue.writeTexture', 'queue.submit']) {
+    expect(report.queue_probe.observed[method].calls).toBe(1);
+    expect(report.queue_probe.observed[method].ms).toBeGreaterThanOrEqual(0);
+  }
+  expect(report.webgpu_methods.all['queue.writeBuffer'].calls).toBeGreaterThan(0);
+  expect(report.webgpu_methods.all['queue.writeBuffer'].ms).toBeGreaterThanOrEqual(0);
   expect(report.schema).toBe('melee-play-report/1');
   expect(report.state).toBe('Game ended (code 0).');
   expect(report.frames_total).toBe(3);

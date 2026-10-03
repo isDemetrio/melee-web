@@ -257,6 +257,23 @@ describe('OpfsDiscStore', () => {
     await expect(current.disc.length()).rejects.toThrow(/no createSyncAccessHandle\(\)/);
   });
 
+  it('waits for the handle of a game that was just stopped, and reports one that stays held', async () => {
+    const current = setup();
+    await current.disc.append(0, piece(4, 1));
+    const file = requireFile(current);
+    const waits: number[] = [];
+    const store = new OpfsDiscStore({ root: async () => current.root, locks: null,
+      wait: async (ms) => { waits.push(ms); } }).forIdentity(IDENTITY);
+    // Play pressed again: the stopped game's worker is gone, its handle not yet released.
+    file.heldElsewhere = { name: 'InvalidStateError', attempts: 2 };
+    expect(await store.length()).toBe(4);
+    expect(waits).toEqual([50, 100]);
+    // A game running in another tab holds it for good: reported, not waited out for ever.
+    file.heldElsewhere = { name: 'NoModificationAllowedError', attempts: Infinity };
+    await expect(store.length()).rejects.toThrow(/held by another sync access handle, still after 10000 ms/);
+    expect(file.maxOpen).toBe(1);
+  });
+
   it('takes the cache lock, exclusively, once per operation', async () => {
     const current = setup(true);
     await current.disc.append(0, piece(4, 1));
