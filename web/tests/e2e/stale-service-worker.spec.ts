@@ -29,10 +29,18 @@ test.describe('a service worker from an earlier visit', () => {
     // Reload: a worker now controls the page from the start, which is what the operator meets.
     await page.reload();
 
+    // The cleanup asks for a reload of its own, so the execution context can be destroyed under
+    // this read: that is a navigation in flight, not a failure, and it is retried.
+    const readGuard = async (): Promise<string | null> => {
+      try {
+        return await page.evaluate(() => sessionStorage.getItem('melee-sw-stale-dropped'));
+      } catch {
+        return null;
+      }
+    };
+
     // The cleanup ran and asked for a reload. Nothing else writes this key.
-    await expect
-      .poll(() => page.evaluate(() => sessionStorage.getItem('melee-sw-stale-dropped')), { timeout: 20_000 })
-      .toBe('1');
+    await expect.poll(readGuard, { timeout: 20_000 }).toBe('1');
 
     // And dropping the worker must not leave a blank screen.
     await expect(page.locator('#screen-boot')).toBeVisible();
