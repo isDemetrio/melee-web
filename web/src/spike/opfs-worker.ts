@@ -13,7 +13,8 @@
  *     while a sync access handle is open, a second `createSyncAccessHandle()` on the same file
  *     fails. Every operation is queued behind the previous one and the handle is closed in a
  *     `finally`, so an operation that throws cannot leave the file locked for the rest of the
- *     session.
+ *     session. A handle another context holds -- the play worker of a game just stopped -- is
+ *     waited for while it may be being released, then reported (`sync-handle.ts`).
  *  2. **A piece is flushed before the caller is told it is stored.** `flush()` is what makes the
  *     bytes survive a tab that is closed mid-download. Without it the resume scan would re-read a
  *     hole that the file system had not written yet.
@@ -41,6 +42,7 @@
  */
 
 import type { DiscStore } from './disc-cache.js';
+import { openSyncHandle, type Wait } from './sync-handle.js';
 
 /** The directory inside the origin private file system that holds the cached disc. */
 export const DISC_DIRECTORY = 'phase0-disc';
@@ -101,6 +103,8 @@ export interface OpfsWorkerDeps {
   readonly root: () => Promise<SyncDirectoryLike>;
   /** `navigator.locks.request`, or null where the browser has no Web Locks. */
   readonly locks: LockRequest | null;
+  /** How a retry waits for a handle that is being released (`sync-handle.ts`); a timer by default. */
+  readonly wait?: Wait;
 }
 
 /** A refusal this worker makes, as opposed to one the platform makes. */
@@ -321,7 +325,8 @@ export class OpfsDiscStore {
         'this browser has no createSyncAccessHandle(), so the disc cannot be written into OPFS',
       );
     }
-    return file.createSyncAccessHandle();
+    // The play worker of a game that was just stopped may still hold the file (sync-handle.ts).
+    return openSyncHandle(file, this.deps.wait);
   }
 }
 
