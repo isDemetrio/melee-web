@@ -6,8 +6,9 @@
 // (wasm/render/gx_webgpu.cpp). Without a canvas, or when any of that fails, the run is exactly the
 // headless run it always was; the reason is reported, never thrown.
 import { decoderCostReport, type DecoderCostMode } from './decoder-cost.js';
-import { fillTarget, mark, observeGpuEvents, openGpu, probe, readPixel, type Diagnostic, type SpikeGpu } from './gpu.js';
-import { heartbeatSender, type RenderProgress } from './heartbeat.js';
+import { timerResolutionMs } from './clock.js';
+import { fillTarget, mark, observeGpuEvents, openGpu, probe, readPixel, renderProgress, type Diagnostic, type SpikeGpu } from './gpu.js';
+import { heartbeatSender } from './heartbeat.js';
 
 interface CoreFS {
   mkdir(path: string): void;
@@ -46,17 +47,6 @@ const log = (line: string): void => { lines.push(line); scope.postMessage({ type
  * simulation number and nothing about the run depends on it.
  */
 const startedMs = performance.now();
-
-/** Smallest observable step of performance.now(): the resolution every sim_ms is quantised to. */
-function timerResolutionMs(): number {
-  let best = Number.POSITIVE_INFINITY;
-  let last = performance.now();
-  for (let i = 0; i < 200_000; i++) {
-    const now = performance.now();
-    if (now > last) { best = Math.min(best, now - last); last = now; }
-  }
-  return best;
-}
 
 /** The run's message: a disc to simulate, or the renderer self-test; a canvas for either, or none. */
 interface RunRequest {
@@ -97,16 +87,6 @@ interface RenderReport {
     backendUsedThisDevice: boolean;
     backendCopies: number;
   }) | null;
-}
-
-/** The renderer's counts for a heartbeat (heartbeat.ts), read off the object gx_webgpu.cpp writes. */
-function renderProgress(gpu: SpikeGpu): RenderProgress {
-  return {
-    draws: gpu.drawSerial ?? 0, copies: gpu.backendCopies ?? 0,
-    texturePool: gpu.texturePool?.size ?? null, bindGroupCache: gpu.bindGroups?.size ?? null,
-    texturesCreated: gpu.resources.texture.created, bindGroupsCreated: gpu.resources.bindGroup.created,
-    failure: gpu.failure ?? null,
-  };
 }
 
 /** Attach the core's WebGPU backend to an opened device. Never throws: false and a reason instead. */

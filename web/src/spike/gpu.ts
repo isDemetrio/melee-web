@@ -26,6 +26,7 @@
  */
 
 import { countResources, snapshotResources, type ResourceCounts } from './gpu-resources.js';
+import type { RenderProgress } from './heartbeat.js';
 
 const TEXTURE_COPY_SRC = 0x01;
 const TEXTURE_COPY_DST = 0x02;
@@ -302,4 +303,14 @@ export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] |
   } finally {
     if (buffer) { live.mapping.delete(buffer); buffer.destroy(); }
   }
+}
+
+/** The renderer's counts for a heartbeat (heartbeat.ts), read off the object gx_webgpu.cpp writes. */
+export function renderProgress(gpu: SpikeGpu): RenderProgress {
+  return {
+    draws: gpu.drawSerial ?? 0, copies: gpu.backendCopies ?? 0,
+    texturePool: gpu.texturePool?.size ?? null, bindGroupCache: gpu.bindGroups?.size ?? null,
+    texturesCreated: gpu.resources.texture.created, bindGroupsCreated: gpu.resources.bindGroup.created,
+    failure: gpu.failure ?? null,
+  };
 }
