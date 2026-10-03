@@ -347,7 +347,7 @@ export async function readCells(gpu: SpikeGpu, clear: readonly number[]): Promis
         for (let y = cy; y < cy + CELL; y++) {
           for (let x = cx; x < cx + CELL; x++) {
             for (let c = 0; c < 4; c++) {
-              const v = bytes[y * ROW_BYTES + x * 4 + c];
+              const v = bytes[y * ROW_BYTES + x * 4 + c]!;
               hash = Math.imul(hash ^ v, 0x01000193) >>> 0;
               if (v !== clear[c]) other = true;
             }
