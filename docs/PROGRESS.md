@@ -2428,3 +2428,65 @@ match frame. Separate PR, CI green; its selftest now draws, so three frames exac
   `writeBuffer`s on the device.
 - The split of the ~40 ms between IPC, Metal encoding and GPU waits.
 - Pictures from the real game: CI checks synthetic pixels; the bench checks bytes and state.
+
+## The touch stick is drawn, and the controls stay with the game (2026-10-03, fix/touch-stick)
+
+**What the operator reported.** On the phone the game reached the character select through the
+on-screen controls (so touch reaches the guest), then stopped: "il pad per muoversi è invisibile",
+the controls "non sempre sono ben visibili" and "di tanto in tanto sono un po buggati". Two screenshots
+(title screen, character select) show the buttons and no stick at all.
+
+**1. The stick is drawn.** It was a design decision (styles.css: "the zone *is* the control … there is
+no stick to aim at") and it does not survive a real player. Each zone now draws a base and a knob
+(`web/src/ui/screens/game.ts`, `paintStick`): at rest the base sits in the middle of its zone; when a
+finger lands, the base moves under it — that point is the stick's neutral, as before — and the knob
+follows the finger, stopping on the rim; on release both return. The base's radius *is* the
+full-deflection travel (`zoneRadius`), so the rim is where the stick reads 127. The C-stick is drawn
+the same way (yellow knob, "C"). Neither drawing takes pointer events, so the finger still lands on the
+zone, and the PAD bytes come from the same `TouchControls.read()` as before: `view()` and `knobOffset()`
+(`web/src/input/touch.ts`) are read-only, and a unit test runs the same gesture with and without the
+drawing and compares the states. One stated difference between picture and input: past the rim on a
+diagonal the knob stays on the circle while the bytes (clamped per axis, unchanged) go up to (127, 127);
+the deadzone is not drawn.
+
+**2. The controls stay on screen.** With the overlay on, `#game-stage` is `position: sticky` at the top of
+the viewport (safe-area aware) and the page scrolls under it. The stage is capped at 60 % of the
+viewport height (`max-width: 73svh`, since height = width × 60/73), or a landscape phone would be all
+stage and the panels could never be reached; with the overlay off the layout is the old one. The
+scroll-into-view on enabling is kept as a fallback.
+
+**3. The intermittency — what was found, and what was not.** Not reproduced on a device; these are the
+defects found in the code and visible in the two screenshots, each fixed:
+- *Buttons that vanish on bright frames.* The buttons were white text on a 12 % white fill with a 35 %
+  white rim, at the default overlay opacity of 0.5. On the character select's white panels that is
+  white on white: in the second screenshot the buttons are barely findable. Now a dark fill inside a
+  light rim with a shadowed label; an e2e test captures each control on a black and on a white canvas
+  and requires the element to change the pixels (it fails on the old style for the white case).
+- *An invisible C-stick between the stick and the buttons.* 18 % of the overlay's width was a C-stick
+  nobody could see. A thumb aimed at the right edge of the stick or the left of the buttons landed
+  there, and on the menus a C-stick does nothing visible. It is drawn now.
+- *A page that pans sideways.* iOS sizes a file input to its label ("Scegli file nessun file
+  selezionato"); in the first screenshot it overflows its panel past the screen edge, and in the second
+  the whole page is shifted left (the title and the stage's right edge are cut). A page wider than the
+  phone moves under the thumb. `input[type='file'] { max-width: 100% }`; the e2e test asserts no
+  horizontal overflow at 390 px — in Chromium, whose file input is narrower, so it would not have
+  caught the iOS case by itself.
+- *No feedback on a press.* A missed tap and a dropped one looked the same. A held button is now drawn
+  pressed (`data-pressed`).
+- *Hardening, not a proven cause:* `-webkit-touch-callout: none` and `user-select: none` on the whole
+  overlay (the stick zones had neither), so a long hold cannot start a selection or a callout, which on
+  iOS would cancel the pointer. Not verified on a device.
+
+**Tests.** e2e (`web/tests/e2e/touch-overlay.spec.ts`): both sticks visible, ≥ 48 px, inside their zones
+and the viewport, effective opacity ≥ 0.3, and painting pixels on black and white frames; the knob under
+the finger at half travel (stick_x 60–66), on the rim past it (0x7f), and back at rest on release with
+neutral bytes; a held button drawn pressed; at 390×640 and 844×390, scrolled to the bottom of the page,
+both sticks, A and Start inside the viewport and hit-tested as themselves, and the stick still writes
+0x7f. The existing overlay tests are unchanged. Unit: `view`, `held`, `knobOffset`, and the
+same-bytes-with-drawing check.
+
+**Not verified by this agent.** Anything on the phone (that the stick is found and usable, Safari's
+sticky behaviour with the URL bar, the long-press hardening, whether the operator's "buggy" is any of
+the causes above); the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` (no change touches the
+simulation, `wasm/` or `web/public/sw.js` — the operator runs it). Nothing was built or run locally:
+typecheck, unit and browser tests are CI's.
