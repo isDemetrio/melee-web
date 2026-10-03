@@ -2887,3 +2887,43 @@ playing would hold the handle (the worker then falls back, with a note). The tra
 above. Not addressed: the spike page (`web/src/spike/worker.ts`) still reads with `FileReaderSync`;
 the other synchronous entries into the worker's run loop, of which the play worker has none while
 the game runs. Nothing was built locally.
+
+### The handle the play worker holds, and pressing Play again (same branch, second pass)
+
+**Re-checked, not re-derived.** The three reports, through `disc_stalls.py` again: 31 stalls, all
+1002.7-1046.9 ms, all after a gap of 2.06 s or more; 0 of the 1,485 reading frames with a gap under
+2 s took over 63.4 ms. WebKit `7b65bcf29a` read through the GitHub API: the diff is the
+`CFRunLoopRunInMode(kCFRunLoopDefaultMode, timeout <= -1 ? 1 : 0, returnAfterSourceHandled=true)`
+described above. `FileSystemSyncAccessHandle::read` on WebKit `main` is `m_file.seek` +
+`m_file.read` on the worker thread, with no run loop; it takes a `BufferSource`, not an
+`AllowSharedBufferSource`, which is fine because the core's memory is not shared (no `-pthread`,
+`wasm/core/CMakeLists.txt`).
+
+**The regression the first pass introduced.** The play worker now holds an exclusive sync access
+handle on the cached disc for the whole game. Stopping a game terminates the worker; the platform
+releases the handle afterwards. Pressing Play again runs `DiscCache.downloadDisc`, whose first
+store call on a complete cache is `length()`, which opens a sync access handle on the same file. On
+WebKit a held file is refused with `InvalidStateError` (`FileSystemStorageHandle::createSyncAccessHandle`:
+`acquireLockForFile` fails), on Chromium with `NoModificationAllowedError`; either way the game
+would not start, where before this branch it did.
+
+**Measured in CI, Chromium** (`web/tests/e2e/opfs-handoff.spec.ts`: one worker takes the handle and
+spins forever, as the play worker does inside `callMain`; the page terminates it; a second worker
+tries to open the file every 25 ms). Run 37122663499 (a first version that retried for 3.15 s): six
+refusals, opened at 3,156 ms, on the last attempt. Run 37122843727 (25 ms polling, three runs):
+released at **2,011, 2,009 and 2,019 ms** after `terminate()`, 79 `NoModificationAllowedError` each;
+a handle that was `close()`d is free at once (13 ms, 0 refusals). The 2 s is Blink's
+`kForcibleTerminationDelay` (`worker_thread.cc`): a busy worker is only forced to stop after it.
+
+**The change.** `web/src/spike/sync-handle.ts` (new): `openSyncHandle` retries those two refusals,
+at 50, 100, 200 ms and then every 250 ms, for up to `HANDOFF_BUDGET_MS` = 10 s (five times the
+Chromium release), then throws "held by another sync access handle, still after 10000 ms" with the
+platform's error as `cause`. The store worker (`opfs-worker.ts`, every operation) and the play
+worker's own open (`disc-reader.ts`) use it. Any other error passes at once. The browser test fails
+if the release takes more than half the budget. Unit tests: `sync-handle.test.ts`, one new case in
+`opfs-worker.test.ts` (fake file held for two attempts, then for ever), one in `disc-reader.test.ts`.
+
+**Not verified.** How long WebKit on iOS takes to release the handle of a terminated busy worker:
+the browser test is Chromium only. If it is over 10 s, Play again fails with the message above
+instead of starting. A game in a second tab still holds the file: that tab's Play now fails after
+10 s with that message (before this branch both tabs could play).
