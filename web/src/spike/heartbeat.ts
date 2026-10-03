@@ -131,6 +131,11 @@ export interface StoredHeartbeat {
   receivedAt: string | null;
   /** The last log lines, which is where the scene changes are. */
   logTail: string[];
+  /**
+   * The play page's frame summary so far (web/src/play/report.ts, `PlayReport.stored`): what a
+   * session that was killed mid-match still says about where its time went. Absent in the spike's.
+   */
+  perf?: unknown;
 }
 
 export const STORAGE_KEY = 'melee-spike-heartbeat';
@@ -138,10 +143,13 @@ export const LOG_TAIL = 40;
 
 interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void }
 
-/** A failed write (storage full, disabled) is reported to the caller, not dropped. */
-export function storeHeartbeat(storage: StorageLike, record: StoredHeartbeat): string | null {
+/**
+ * A failed write (storage full, disabled) is reported to the caller, not dropped. `key` keeps the
+ * play page's record (web/src/play/report.ts) apart from the spike's on the same origin.
+ */
+export function storeHeartbeat(storage: StorageLike, record: StoredHeartbeat, key = STORAGE_KEY): string | null {
   try {
-    storage.setItem(STORAGE_KEY, JSON.stringify(record));
+    storage.setItem(key, JSON.stringify(record));
     return null;
   } catch (error) {
     return `heartbeat not persisted: ${error}`;
@@ -149,9 +157,9 @@ export function storeHeartbeat(storage: StorageLike, record: StoredHeartbeat): s
 }
 
 /** The record a previous run left, or null; an unreadable one is returned as an error string. */
-export function loadHeartbeat(storage: StorageLike): StoredHeartbeat | string | null {
+export function loadHeartbeat(storage: StorageLike, key = STORAGE_KEY): StoredHeartbeat | string | null {
   let text: string | null;
-  try { text = storage.getItem(STORAGE_KEY); } catch (error) { return `stored heartbeat unreadable: ${error}`; }
+  try { text = storage.getItem(key); } catch (error) { return `stored heartbeat unreadable: ${error}`; }
   if (text === null) return null;
   try {
     const record = JSON.parse(text) as StoredHeartbeat;
