@@ -2763,3 +2763,42 @@ quad blends at alpha 68: on the console that quad's colour is KONST, not magenta
 texture only); the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` with `parity_vs_onett.txt` (the
 operator runs it; this change touches no simulation code); the character nameplate ("Ma|io") was
 not on screen in the replayed frames. Nothing was built locally.
+
+## The EM_JS traps are checked in seconds, not by a build (2026-10-03, `ci/em-js-body-guard`)
+
+**What.** `scripts/tests/test_em_js_bodies.py` (new) reads every `EM_JS` body in
+`wasm/render/gx_webgpu.cpp` and models the two lexers that meet there. `EM_JS` stringifies its
+body and the preprocessor lexes that text first, so a `//` written inside a template literal is
+a C comment: the emitted JavaScript loses the rest of that line, and when what it loses is the
+text that closes a literal, an interpolation or a call, the body never parses. The other
+direction -- a `//` written through a string literal, `${"// ..."}` -- survives preprocessing and
+is emitted into the shader text, where stringification has already turned the body's newlines
+into spaces, so it swallows the rest of its WGSL line. The guard checks both: the text
+JavaScript receives must still close, and no comment may reach the shader text through a string
+literal. The deliberate form is a bare `//` at the start of a line of generated WGSL, which the
+preprocessor strips; both live instances in `gxw_draw` (the viewport comment and the alpha-test
+comment) use it and pass.
+
+**Why it is worth a file.** Each trap cost a full WASM build to find (runs `37014818279` and
+`37038473832`), and neither is visible to any check that runs after the build. The hygiene job
+now reads them in seconds.
+
+**Measured, with no compiler** (rules 2 and 3). 9 tests, OK against `main`'s file; the same
+guard fails on `render/webgpu-lighting`'s unmerged file (line 147, `${"// Emulate the D3D
+viewport in clip space."}`) and passes on that branch's local fix `81681f4`, so the guard and the
+renderer thread's own conclusion agree. `python3 -m unittest discover -s scripts/tests` -> Ran
+203 tests, OK; `python3 scripts/check_no_game_data.py --all` clean; the deploy guards hold. In
+CI: run `37116934962` on `463c93f`, all four jobs green (CI, 1m19s), the hygiene job running the
+same 203 tests. It costs no core build: `phase0-build.yml`'s paths do not include
+`scripts/tests/`.
+
+**Not covered.** The guard is a model of two lexers, not a compiler: regular-expression literals
+are not modelled, a `//` that reaches the shader by concatenation is not detected, and it says
+nothing about whether the emitted WGSL is valid. It reads one file, listed in `SOURCES`.
+
+**Next step.** Unchanged, and one leftover shorter. The plan's autonomous work is the renderer's,
+and its open thread is PR #70 (`render/webgpu-lighting`, conflicting with `main` since the
+alpha/blend merge, with an unpushed version of this same guard file in its worktree). The alpha
+fix (PR #91) names the next on-screen defect: the TEV colour (RENDERER_MAP priority 3, "full TEV
+remains open"). What remains beyond that still needs the operator: O1's legal call, O2-O9's
+credentials, and the device rows M1, M2 and M5.
