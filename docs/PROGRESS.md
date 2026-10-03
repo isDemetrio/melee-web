@@ -2868,7 +2868,10 @@ trace SHA-1 `c79c53b9…`, 2,162 reads, 2,162 `FileReaderSync` calls. Through th
 `c79c53b9…`, 2,162 reads, **0** `FileReaderSync` calls after the mount, and the SHA-256 of every
 (position, length, bytes) the core received is the same in both runs (`5dd4fb1e…`). Unit tests:
 `web/tests/unit/disc-reader.test.ts` (routing, end of disc, short read, size check, the meter
-wrapping it, names agreeing with `opfs-worker.ts`) and `scripts/tests/test_disc_stalls.py`.
+wrapping it, names agreeing with `opfs-worker.ts`) and `scripts/tests/test_disc_stalls.py`. In CI: run
+`37121870236` on `602bcba`, all four jobs green: typecheck, the 8 `disc-reader` tests among 31 test
+files, the build, 207 hygiene tests, and the Chromium browser tests. No core build: the change is
+outside `phase0-build.yml`'s paths.
 
 **Not reproduced in CI, and why.** The one-second block exists only where WebKit uses CF
 (`#if USE(CF)`: Apple platforms). CI's browsers are Chromium and Linux WebKit (GLib), and Node has
