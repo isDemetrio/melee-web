@@ -29,6 +29,12 @@
  *  - The D-pad is not on the overlay (`TOUCH_ACTIONS`). Melee uses it for taunts and for
  *    nothing else in a match, and eight more buttons would cover a phone screen.
  *
+ * The zone is still the control, but it is drawn: a player who cannot see a stick does not know
+ * where to put a thumb (the operator's first session stopped there). `view` and `knobOffset`
+ * describe the drawing — a base resting in the zone that moves to where the finger lands, and a
+ * knob that follows the finger — without feeding back into `read()`: the PAD bytes for a given
+ * gesture are the same with or without it.
+ *
  * Nothing here touches the DOM, `navigator` or a clock: `TouchControls` is a state machine over
  * plain numbers, so the unit tests drive it under Node. The DOM wiring is `attachTouchControls`,
  * which takes its elements as arguments and describes them structurally — the same shape of
@@ -206,6 +212,22 @@ export class TouchControls {
   }
 
   /**
+   * The gesture holding a zone, for drawing it; null when no finger holds it. A copy, so the
+   * caller cannot move the stick by writing to it: `read()` stays the only way to the PAD state.
+   */
+  view(zone: TouchZone): StickView | null {
+    const gesture = zone === 'stick' ? this.stick : this.cStick;
+    if (!gesture) return null;
+    return { origin: gesture.origin, point: gesture.point, radius: gesture.radius };
+  }
+
+  /** True while at least one finger holds this action. For drawing the button pressed. */
+  held(action: PadAction): boolean {
+    for (const held of this.buttons.values()) if (held === action) return true;
+    return false;
+  }
+
+  /**
    * One tick's state.
    *
    * An overlay that is switched off reads as an *unplugged* port (`err: -1`), not as a pad at
@@ -263,6 +285,32 @@ export class TouchControls {
     const y = clampStick((gesture.origin.y - gesture.point.y) * scale);
     return applyDeadzone(x, y, this.deadzone);
   }
+}
+
+/** What drawing a held zone needs: the stick's neutral, the finger, and the full travel. */
+export interface StickView {
+  readonly origin: TouchPoint;
+  readonly point: TouchPoint;
+  readonly radius: number;
+}
+
+/**
+ * Where the knob is drawn, relative to the base's centre (which sits on `origin`): the finger's
+ * own travel, kept inside the circle of full deflection.
+ *
+ * This is a drawing, not the input. The PAD value is still `deflection` above, which clamps each
+ * axis on its own, so a diagonal past the rim reads up to (127, 127) while the knob stays on the
+ * rim; and the deadzone is not drawn. What the knob guarantees is the part a player aims with:
+ * it moves with the finger, the rim is full deflection along an axis, and it is centred when
+ * no finger holds the zone.
+ */
+export function knobOffset(view: StickView): TouchPoint {
+  const x = view.point.x - view.origin.x;
+  const y = view.point.y - view.origin.y;
+  const distance = Math.hypot(x, y);
+  if (distance <= view.radius) return { x, y };
+  const scale = view.radius / distance;
+  return { x: x * scale, y: y * scale };
 }
 
 /** A rectangle in CSS pixels. `DOMRect` satisfies it, and so does a plain object. */

@@ -14,6 +14,7 @@ import {
   TOUCH_ACTIONS,
   TouchControls,
   attachTouchControls,
+  knobOffset,
   pointerOf,
   zoneRadius,
 } from '../../src/input/touch.js';
@@ -231,6 +232,69 @@ describe('TouchControls', () => {
     controls.releaseAll();
     expect(controls.tracked).toBe(0);
     expect(controls.read()).toEqual(neutralPad());
+  });
+});
+
+describe('drawing the overlay', () => {
+  it('describes the held stick without letting the drawing move it', () => {
+    const controls = enabled();
+    expect(controls.view('stick')).toBeNull();
+
+    controls.down(1, 'stick', { x: 100, y: 50 }, RADIUS);
+    controls.move(1, { x: 125, y: 50 });
+    const view = controls.view('stick');
+    expect(view).toEqual({ origin: { x: 100, y: 50 }, point: { x: 125, y: 50 }, radius: RADIUS });
+    expect(controls.view('c-stick')).toBeNull();
+
+    // A copy: writing to it is not a way to the PAD state.
+    (view as { point: { x: number; y: number } }).point = { x: 900, y: 50 };
+    expect(controls.read().stickX).toBe(63);
+
+    controls.release(1);
+    expect(controls.view('stick')).toBeNull();
+  });
+
+  it('reads the same bytes whether or not anything is drawn', () => {
+    // The drawing is read-only: the same gesture, drawn after every move or never, writes the
+    // same PAD state.
+    const drawn = enabled();
+    const plain = enabled();
+    const path = [{ x: 110, y: 50 }, { x: 140, y: 20 }, { x: 300, y: -200 }, { x: 80, y: 90 }];
+    drawn.down(1, 'stick', { x: 100, y: 50 }, RADIUS);
+    plain.down(1, 'stick', { x: 100, y: 50 }, RADIUS);
+    for (const point of path) {
+      drawn.move(1, point);
+      plain.move(1, point);
+      const view = drawn.view('stick');
+      if (view) knobOffset(view);
+      expect(drawn.read()).toEqual(plain.read());
+    }
+  });
+
+  it('keeps the knob on the finger inside the rim and on the rim outside it', () => {
+    const origin = { x: 100, y: 50 };
+    expect(knobOffset({ origin, point: origin, radius: RADIUS })).toEqual({ x: 0, y: 0 });
+    expect(knobOffset({ origin, point: { x: 125, y: 30 }, radius: RADIUS })).toEqual({ x: 25, y: -20 });
+    // Full deflection to the right is the rim, and past it the knob stops there.
+    expect(knobOffset({ origin, point: { x: 150, y: 50 }, radius: RADIUS })).toEqual({ x: 50, y: 0 });
+    expect(knobOffset({ origin, point: { x: 400, y: 50 }, radius: RADIUS })).toEqual({ x: 50, y: 0 });
+    // Past the rim on a diagonal it stays on the circle, in the finger's direction.
+    const diagonal = knobOffset({ origin, point: { x: 200, y: -50 }, radius: RADIUS });
+    expect(Math.hypot(diagonal.x, diagonal.y)).toBeCloseTo(RADIUS, 9);
+    expect(diagonal.x).toBeCloseTo(-diagonal.y, 9);
+  });
+
+  it('reports a button held while any finger holds it', () => {
+    const controls = enabled();
+    expect(controls.held('A')).toBe(false);
+    controls.press(1, 'A');
+    controls.press(2, 'A');
+    expect(controls.held('A')).toBe(true);
+    expect(controls.held('B')).toBe(false);
+    controls.release(1);
+    expect(controls.held('A')).toBe(true);
+    controls.release(2);
+    expect(controls.held('A')).toBe(false);
   });
 });
 
