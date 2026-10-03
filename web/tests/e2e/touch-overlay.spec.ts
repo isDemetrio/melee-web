@@ -104,7 +104,9 @@ async function padBytes(page: Page): Promise<number[]> {
   const text = (await page.locator('#pad-readout').textContent()) ?? '';
   const match = /PADStatus: ((?:[0-9a-f]{2} ?){12})/.exec(text);
   if (!match) throw new Error(`no PADStatus in the readout: ${text}`);
-  return match[1].trim().split(' ').map((byte) => parseInt(byte, 16));
+  const bytes = match[1];
+  if (!bytes) throw new Error(`empty PADStatus capture in the readout: ${text}`);
+  return bytes.trim().split(' ').map((byte) => parseInt(byte, 16));
 }
 
 /** The product of the element's opacity and every ancestor's: what actually reaches the screen. */
