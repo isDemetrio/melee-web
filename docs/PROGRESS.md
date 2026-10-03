@@ -2802,3 +2802,82 @@ alpha/blend merge, with an unpushed version of this same guard file in its workt
 fix (PR #91) names the next on-screen defect: the TEV colour (RENDERER_MAP priority 3, "full TEV
 remains open"). What remains beyond that still needs the operator: O1's legal call, O2-O9's
 credentials, and the device rows M1, M2 and M5.
+
+## The TEV is generated: name tags, menu colours, and what the stage's shadow pass needed (2026-10-03, `fix/tev-colour`)
+
+**Symptom.** On the phone, in a match, a white rectangle where each player's name tag ("P1", "P2")
+should be, with a white triangle under it; in the menus, the 1-P layers drawn washed out (a
+magenta cast on the memory-card dialog, white where Melee is dark blue).
+
+**Cause, of the two hypotheses: the TEV; the palette textures are not involved.** The fragment
+shader was `vertex colour x texture 0` (PR #91 said so). The CPU replay's per-draw state shows the
+tag as three draws: a plate with colour KONST (50,0,0) and alpha from register C0 = 0 (invisible on
+the console), drawn opaque white because the vertex colour is white; and the "P1" glyphs and the
+triangle, KONST (242,89,89) x an IA4 texture, drawn white for the same reason (P2: KONST
+(101,101,255)). On the 1-P select, the backdrop is untextured blended quads whose colour is KONST
+blues and purples (0,11,26; 53,14,135; 128,179,255) with alpha A0, a full-screen one included: all
+drawn opaque white. None of these draws reads a CI4/CI8 texture (they are untextured, IA4 or I4).
+
+**Change.** `wasm/render/gx_wgsl.cpp` generates the WGSL in C++, once per shader uid, as a
+transcription of upstream's `gx_shader.cpp`: every TEV stage on signed integers (the four inputs,
+bias, add/subtract, scale, clamp or the 11-bit range, the compare modes, the four output registers
+and the overflow wrap), the ras and texture swap tables, konst selections, each stage's texture
+map and coordinate; the alpha test on the TEV alpha; fog; texgens with the dual post-transform;
+colour channels from the vertex or the material register. Generating in C++ keeps the shader text
+out of the EM_JS lexer traps; `gxw_draw` receives the shader's id and, the first time, its WGSL.
+Uniforms become variable-size slots of the rows each shader reads (122 + 3 per texgen, 2048 bytes
+for a one-texgen draw, was 1792 for all). Two findings on the way:
+- Fog's A and C are 11-bit-mantissa floats with the sign in bit 19 (Dolphin's FogParam0/3);
+  upstream's `f11` reads bit 20, the projection bit of FogParam3. Probe 48 tells them apart.
+- With the TEV honoured, Onett's roofs went black: their stages multiply by the fighters' shadow
+  texture, which the game renders and copies out of the EFB. Two things were missing. The copy
+  itself: colour copies to RAM are now kept as GPU textures sampled at their guest address, as
+  upstream's `execute_copy` / `get_texture` (no format conversion, no half-scale downscale). And
+  the shadow pass's white backdrop quad: it lies 1.8e-8 beyond the near plane and was clipped;
+  the vertex shader now scales depth by 1 - 1e-7, Dolphin's `VertexShaderGen` for a host without
+  depth clamping. Probes 50 and 51.
+
+**How it was shown** (VPS, `~/incoming/phase0/tev/`, not committed: it runs the private core
+against the disc). The replay of PR #91 (`raster-tev.mjs`) now shades a TEV-branch core with
+`tev-eval.mjs`, a CPU model of the generated shaders that reads each draw's BP/XF registers and its
+real uniform rows. Before = the core of run 37108849528 (`main`'s renderer); after = run
+37148896688 (`8d62c9c`).
+- Name tags, boxes around the tag draws, retraces 1700-2300 (`parity_vs_onett.txt`, every 100):
+  P1 white 53.0% -> 0.0%, red 0.0% -> 22.3%; P2 white 56.4% -> 2.7% (the white house behind it),
+  blue 0.0% -> 26.3%. Identical at all seven retraces.
+- Menus (`classic.txt`), share of near-white pixels: 1-P select (retrace 1700) 55.4% -> 0.4%;
+  1-P menu (1000) 13.4% -> 0.0%; title (600) 24.3% -> 2.0%; memory card (300) 81.1% -> 2.4%,
+  and its pink/magenta pixels (R and B 40 and 25 above G) 7.9% -> 0.0%.
+- The phone's own screenshot of the select has no magenta-tinted pixel in the 1-P panel (0 with
+  R and B 6 above G): what it shows is the white the replay reproduces; the cast the replay finds
+  is the memory-card one, from the same cause (a quad whose TEV colour is KONST, drawn with its
+  magenta vertex colour).
+- The simulation trace with the backend attached: 2400 checkpoints, `c79c53b9cdf81426fa0277e7497a69e55bc5f571`,
+  before and after.
+- Cost: 83 shaders and 112 pipelines in 2400 match retraces, 42 / 52 on the menu path; 1,755 EFB
+  copy textures (about one per frame) bound 161,460 times.
+
+**Test.** `wasm/render/pixel_pipeline_check.mjs` (was `alpha_blend_check.mjs`), run by
+`phase0-build.yml`, reads the self-test's probes back off CI Chromium's WebGPU. New: 45 the tag
+plate (KONST colour, C0 alpha, blended) [137,108,140,191]; 46 its glyphs (KONST x I8, A0 x TEXA)
+[122,45,45,128]; 47 two stages through an unclamped register with a swap table, a scale, a
+subtraction and per-component compares [23,0,0,223]; 48 fog [84,152,56,192]; 49 192
+pseudo-random register states that must all compile; 50 an EFB copy sampled by a later draw; 51 a
+triangle one float beyond the near plane. Values computed by hand and, separately, by
+`tev-eval.mjs`. The fixtures get the MODULATE state a textured draw sets (a zeroed TEV outputs
+PREV: black); `render.spec.ts`'s probe 30 becomes [65,32,16,96], GX's integer MODULATE
+((128 x 129 + 128) >> 8) where a float product gave 64. Runs 37143981923, 37146343733,
+37148896688: 42 spike tests and every probe green.
+
+**Not done, and what happens instead.**
+- Lighting: a lit channel gets its material colour. Every lit draw measured has a white material,
+  which is what was drawn before; the lights are PR #70's, which now has to rebase onto the C++
+  generator. The title logo's chrome (an environment-mapped reflection) is the visible case.
+- Indirect texturing (no measured draw uses it), the texture coordinate scale registers, Z
+  textures, dither. EFB copies: no format conversion (intensity copies keep RGB), no downscale,
+  depth copies not kept.
+- The replay is not a GPU: level-0 sampling, its own transcription of the shader (CI's probes are
+  what check the WGSL). Found on the way: the replay's alpha-test emulation for PR #91 parsed a
+  `// alpha test:` marker the preprocessor strips from the EM_JS body, so it never ran there.
+- Not verified by this agent: the phone (the user's eye is the verdict on colour), the canvas
+  path on a real GPU, and iPhone pipeline compile time for the larger shaders.
