@@ -7,7 +7,7 @@ the CI checkout only.
 
 | Patch | Upstream files touched | Reason | Applied by | Verified by |
 | --- | --- | --- | --- | --- |
-| `0001-ppc-portable-fma-and-intrinsics.patch` | `port/runtime/ppc/ppc.h` | Portable intrinsic shim and single-rounding FMA family for Emscripten/non-MSVC, routed through `wasm/compat/fma.h`: `fma` is `std::fma` plus the guard for musl `fma.c`'s zero-addend shortcut and the guard that returns a NaN operand quieted and unnegated, and `fmsub`/`fnmadd`/`fnmsub` carry their own copy of the NaN guard because they negate an operand before calling `fma` (see below); MSVC branch unchanged | `scripts/apply_patches.sh` (CI only) | Local `git apply --check`; `wasm/probe/fma_shim_test.cpp` and the corpus comparison in the WASM probe (run 36677219860: 0 divergences in 8 000 000 results) |
+| `0001-ppc-portable-fma-and-intrinsics.patch` | `port/runtime/ppc/ppc.h` | Portable intrinsic shim and single-rounding FMA family for Emscripten/non-MSVC, routed through `wasm/compat/fma.h`: `fma` is `std::fma` plus the guard for musl `fma.c`'s zero-addend shortcut and the guard that returns a NaN operand quieted and unnegated, and `fmsub`/`fnmadd`/`fnmsub` carry their own copy of the NaN guard because they negate an operand before calling `fma`, and an invalid operation with no NaN operand (`0 * inf`, `inf - inf`) is pinned to the reference's indefinite `0xFFF8000000000000` instead of being left to the engine (see below); MSVC branch unchanged | `scripts/apply_patches.sh` (CI only) | Local `git apply --check`; `wasm/probe/fma_shim_test.cpp` and the corpus comparison in the WASM probe (run 36677219860: 0 divergences in 8 000 000 results); the cross-architecture comparison (run 37101091371: WASM-x86 and WASM-arm64 digests identical, 0 divergent) |
 | `0001-ppc-portable-fma-and-intrinsics.patch` | `port/runtime/gx/gx_texture.h` | Explicit `<stddef.h>` for the public `size_t` parameter; avoid reliance on MSVC transitive includes | `scripts/apply_patches.sh` (CI only) | Local `git apply --check`; `ctest` in the WASM probe builds and runs `texture_snapshot_test` under Node |
 | `0002-native-linux-runtime.patch` | `port/runtime/ppc/ppc.h` | Restore native x86 `<immintrin.h>` in the non-MSVC path introduced by 0001: Linux runtime uses MXCSR and TSC while WASM must not include x86 intrinsics | `scripts/apply_patches.sh` (CI only) | Patch-series applicability checked in a temporary tree; native build/runtime verification pending GitHub Actions and an operator ISO run |
 | `0002-native-linux-runtime.patch` | `port/runtime/hle/hle_dvd.cpp` | Under `MELEE_HEADLESS`, drain and join the DVD worker before C++ static destruction on Linux; Windows retains its detached worker | `scripts/apply_patches.sh` (CI only) | Patch-series applicability checked in a temporary tree; CI and ISO shutdown verification pending |
@@ -43,11 +43,11 @@ zero, infinity and NaN *factor* to `x*y + z`: when a factor is zero the exact pr
 signed zero and the correct result is the IEEE addition of the two zeros
 (`fma(-0, 5, +0)` is `+0`, not `-0`).
 
-The guard does not touch NaN bit patterns. `fma.c:54-55` still sends every non-finite
-operand through ordinary WASM arithmetic, whose NaN sign and payload the specification
-leaves to the engine, so a NaN *result* of a non-finite operation remains the platform's
-rather than the reference's. That residual is measured by the probe and is a policy question
-for the operator (`docs/OPEN_QUESTIONS.md` Q7); the gate stays strict until it is answered.
+The guard does not touch NaN *operands*, and the NaN bit pattern of an operation that had
+no NaN operand is a different case: `fma.c:54-55` sends every non-finite operand through
+ordinary WASM arithmetic, whose NaN sign and payload the specification leaves to the engine,
+so before the pin a NaN *result* of such an operation was the platform's rather than the
+reference's. That case is no longer left to the engine -- see the next section.
 
 ## The NaN-sign class: our own negation, not the platform's latitude
 
@@ -102,6 +102,57 @@ arithmetic may differ; these changes remove divergences our shim invented, and e
 in Q7 required them gone. The Q7 question is now moot for this corpus: nothing diverges, so
 there is nothing to exempt. `docs/OPEN_QUESTIONS.md` Q7 records that.
 
+
+### The invalid-operation NaN is pinned to the reference's value (2026-10-03, `ci/wasm-arm64-parity`)
+
+The arm64 job of the WASM probe runs the module the x86 job built under Node on aarch64 and
+compares the two dumps. That is the browser-to-browser question, because the peers of a
+netcode match are engines on different machines and not one Node build. Run 37097105278
+measured **3,040 divergent results out of 8,000,000**, every one of them class `nan-sign`,
+every one of them an invalid operation with no NaN operand, and the first of them at triple 12:
+
+```
+fmadd a=7ff0000000000000 c=0000000000000000 b=0000000000000000
+      WASM-x86 fff8000000000000   WASM-arm64 7ff8000000000000
+```
+
+`0 * inf` and `inf - inf` are the invalid operations. x86 answers them with its indefinite
+NaN, `0xFFF8000000000000`; ARM's default NaN is positive, `0x7FF8000000000000`. The
+specification leaves that choice to the engine, and this shim had been leaving it there on
+purpose, so the same module produced different bits on two architectures -- a desync waiting
+for the frame that feeds `0 * inf` into an FMA, and the option `docs/OPEN_QUESTIONS.md` Q7
+records as chosen, applied to the case that was still open.
+
+`wasm/compat/fma.h` now pins it. `pinned(r)` returns the reference's indefinite NaN whenever
+an operation that had no NaN operand produces a NaN: with no NaN operand that can only be an
+invalid operation, so the test is exact and costs one compare per call. It wraps the two
+places where the engine's arithmetic can produce that NaN -- the zero-addend path's
+`x*y + z`, and the `std::fma` call.
+
+| measured in CI | before (run 37097105278) | after (run 37101091371) |
+| --- | ---: | ---: |
+| WASM-x86 digest | `6b79b92a…f66afc9` | `6b79b92a…f66afc9` (unmoved) |
+| WASM-arm64 digest | `ddb759d8…b86393e5` | `6b79b92a…f66afc9` (identical) |
+| divergent results, WASM-x86 vs WASM-arm64 | 3,040 | **0** |
+| divergent results, WASM vs native x86 intrinsics | 0 | 0 |
+
+The x86 digest not moving is the check that the pin is a no-op where the engine already
+returned the reference's value; the arm64 digest becoming the x86 one is the fix. Both jobs
+print `GATE PASS`, and the x86 job still prints `arithmetic parity (native reference):
+nan-vs-number=0, zero-sign=0, subnormal=0, value=0`.
+
+Verified without a compiler, on the operator's VPS (rules 2 and 3): a model of
+`wasm/probe/fma_vectors.cpp` and this shim reproduces the x86 dump byte for byte (0
+mismatches in 8,000,000 results), reproduces the arm64 digest when the engine's NaN is the ARM
+default, and counts exactly those 3,040 engine-NaN results. It also found the boundary this
+change must not cross, and the corpus confirms it: the exact product of two finite doubles may
+round to an infinity, and that is an overflow, not an invalid operation --
+`fmsub(max, max, +inf)` is `-inf`. `wasm/probe/fma_shim_test.cpp` pins that case and the eight
+invalid ones, each to the value the real module produced for that triple.
+
+Not measured: what the pin costs on the hot path. `fmadd_ns_per_op` moved from 36.82 to 22.90
+(x86) and from 23.71 to 25.06 (arm64) across runs and runners, so no cost is resolvable from
+these numbers and none is claimed; it is one compare per call.
 
 ### 0008 — optional offline WASM decoder phase accounting
 

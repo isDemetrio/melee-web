@@ -100,9 +100,16 @@ still exists in the probe and is unused in CI; the gate is strict.
 
 What is *not* settled by this, and stays open as a later question rather than as Q7:
 
-- browser-to-browser determinism: the peers are engines, not this one Node build. The
-  WASM-x86 vs WASM-arm64 comparison is the measurement that speaks to it, and ARM's default
-  NaN is positive, so NaN sign is a candidate there (`wasm/README.md`, next measurements 2).
+- browser-to-browser determinism: **measured 2026-10-03, and the candidate was real.** The
+  arm64 job of the WASM probe runs the x86-built module under Node on aarch64. Run
+  37097105278: 3,040 of the 8,000,000 corpus results differed between WASM-x86 and
+  WASM-arm64, every one of them `nan-sign`, every one of them an invalid operation with no
+  NaN operand (`0 * inf`, `inf - inf`) -- the NaN bit pattern the specification leaves to the
+  engine, where ARM's default NaN is positive and x86's is negative. `wasm/compat/fma.h` now
+  pins that result to the reference's indefinite `0xFFF8000000000000`, so the module gives the
+  same bits on either engine; run 37101091371 re-measured 0 divergent and two identical
+  digests (`wasm/README.md`, next measurements 2; `docs/PORT_CHANGES.md`, "The
+  invalid-operation NaN is pinned to the reference's value").
 - whether the guards cost anything on the hot path: the benchmark shows native 3.06 ns/op
   against WASM 21.26 ns/op for a dependent `fmadd` chain, with no threshold and no baseline
   from before the guards, so it does not say. `docs/PROGRESS.md`, "Measured numbers".

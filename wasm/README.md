@@ -233,9 +233,12 @@ cases included.
 1. Done: run 36677219860, 8,000,000 results, 0 divergent, identical digests. The
    native-vs-WASM corpus comparison is closed; the strict gate passes and no exemption is
    in use.
-2. Run the same WASM binary on an arm64 runner and compare WASM-x86 against
-   WASM-arm64 dumps. That, not native-vs-WASM, is the browser-to-browser netcode
-   question; ARM's default NaN is positive, so NaN sign is a candidate there.
+2. Done: runs 37097105278 and 37101091371 (`ci/wasm-arm64-parity`). The first measured
+   3,040 divergent results out of 8,000,000 between WASM-x86 and WASM-arm64 -- all of them
+   `nan-sign`, all of them an invalid operation with no NaN operand -- and the second, after
+   `wasm/compat/fma.h` pinned that NaN to the reference's indefinite value, measured 0, with
+   two identical digests. The browser-to-browser question is answered by measurement rather
+   than assumed, and the answer was "the engine differs" until the shim stopped letting it.
 3. With the running build: count NaN operands and NaN results of every
    `fmadd`/`fmsub`/`fnmadd`/`fnmsub` (and the rest of the FP helpers) over real
    gameplay and replays. It is no longer needed to decide whether NaN bits may differ —

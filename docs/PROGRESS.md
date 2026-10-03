@@ -2428,3 +2428,71 @@ match frame. Separate PR, CI green; its selftest now draws, so three frames exac
   `writeBuffer`s on the device.
 - The split of the ~40 ms between IPC, Metal encoding and GPU waits.
 - Pictures from the real game: CI checks synthetic pixels; the bench checks bytes and state.
+
+## The invalid-operation NaN was the engine's, and is now the reference's (2026-10-03, `ci/wasm-arm64-parity`)
+
+**Why this and not something else.** `wasm/README.md`, "Next measurements" 2, is the arm64
+comparison, and it was the one measurement still owed that needs neither a Cloudflare
+credential, a phone, nor an operator decision: the peers of a netcode match are WASM engines on
+different machines, and the native-vs-WASM corpus comparison says nothing about them. PR #88
+built that job and its own gate came back red, because the thing it was built to look for was
+there. Nothing else was touched: the renderer thread (PR #70 holds `wasm/render/gx_webgpu.cpp`)
+and the operator's branch (`net/sab-ring`, with `wasm/net/sab_ring_test.c` uncommitted in the
+main checkout) are left alone.
+
+**The measurement.** Run 37097105278: one module, built once on x86, executed by Node v22.23.3
+on x86_64 and on aarch64. **3,040 divergent results out of 8,000,000.** Every one of them is
+class `nan-sign`, every one is an invalid operation with no NaN operand, and the first is
+triple 12:
+
+```
+fmadd a=7ff0000000000000 c=0000000000000000 b=0000000000000000
+      WASM-x86 fff8000000000000   WASM-arm64 7ff8000000000000
+```
+
+By input class, 3,040 of the 23,136 `inf-in` results and 0 of the other 7,976,864. By path,
+228 each for the four double paths and 532 each for the four single ones -- the same class
+arriving through `f25(c)`, which turns a subnormal multiplier into a zero. `0 * inf` and
+`inf - inf` are the invalid operations; x86 answers them with its indefinite NaN and ARM with
+its own default NaN, and the WASM specification leaves that choice to the engine.
+
+**The fix.** `wasm/compat/fma.h` had that case parked as a policy question and said so in its
+own header. It is the option `docs/OPEN_QUESTIONS.md` Q7 already records as chosen -- pin the
+reference's bits -- applied to the case that was still open. `pinned(r)` returns
+`0xFFF8000000000000` whenever an operation that had no NaN operand produces a NaN; with no NaN
+operand a NaN result can only be an invalid operation, so the test is exact. It wraps the
+zero-addend path's `x*y + z` and the `std::fma` call, and it is one compare per call.
+
+| measured in CI | run 37097105278 | run 37101091371 |
+| --- | ---: | ---: |
+| WASM-x86 digest | `6b79b92a…f66afc9` | `6b79b92a…f66afc9` (unmoved) |
+| WASM-arm64 digest | `ddb759d8…b86393e5` | `6b79b92a…f66afc9` (identical) |
+| divergent, WASM-x86 vs WASM-arm64 | 3,040 | **0** |
+| divergent, WASM vs native x86 intrinsics | 0 | 0 |
+
+Both jobs of run 37101091371 print `GATE PASS`, and the x86 job's own table is unchanged
+(`arithmetic parity (native reference): nan-vs-number=0, zero-sign=0, subnormal=0, value=0`) --
+the check that the pin is a no-op where the engine already returned the reference's value.
+`wasm/probe/fma_shim_test.cpp` gains eleven expectations, each set to the value the real module
+produced for that triple, including the boundary this must not cross: the exact product of two
+finite doubles may round to an infinity, and `fmsub(max, max, +inf)` is `-inf`, not a NaN.
+
+**Verified without a compiler.** There is no compiler on this machine and rules 2 and 3 forbid
+building here, so the screen was a model: `wasm/probe/fma_vectors.cpp`'s corpus (the
+integer-only PRNG and the 24 edge values) plus `wasm/compat/fma.h`'s logic, in Python. It
+reproduces the x86 dump **byte for byte** -- 0 mismatches in 8,000,000 results, and the dump's
+sha256 is the published `6b79b92a…f66afc9` -- reproduces the arm64 digest `ddb759d8…b86393e5`
+when the engine's NaN is the ARM default, counts exactly those 3,040 engine-NaN results, and
+predicted `6b79b92a…f66afc9` for arm64 once the NaN is pinned, which is what run 37101091371
+then measured. It also caught the 96-result boundary case above before CI did.
+
+**NOT verified.** What the pin costs on the hot path: `fmadd_ns_per_op` moved 36.82 → 22.90
+(x86) and 23.71 → 25.06 (arm64) across runs and runners, so these numbers resolve no cost and
+none is claimed. Nothing about the phone, the disc, the renderer or the game: this change
+touches a probe and the shim, not the simulation's integer state. The `Phase 0 — WASM core`
+build of the same commit is the check that the real module still builds and runs with the
+pinned shim.
+
+**Next step.** The arm64 question is closed by measurement and PR #88 merges on the green
+runs above. What remains is what needed the operator before this session: O1's legal call,
+O2-O9's credentials, the device rows M1, M2 and M5, and the renderer thread PR #70 holds.
