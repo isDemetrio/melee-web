@@ -2704,3 +2704,62 @@ measurement.
 
 **Next step.** The operator's report from a match. Then the biggest item it names, per the table
 above; if it is inside WebGPU or the GPU, that goes to the renderer's agent with the numbers.
+
+## Transparent pixels stop being drawn: GX alpha test and blending in WebGPU (2026-10-03, `fix/font-alpha`)
+
+**Symptom.** On the phone, magenta blocks behind the memory-card text, a white box around the title
+logo, black boxes behind the copyright lines, and labels on the 1-P character select broken in shape
+("RY EA" for "VERY EASY", LEVEL / STOCK / OPTION cut up).
+
+**Cause, of the three hypotheses: the first, and it covers the shape corruption too.** No WebGPU
+pipeline had blend state and the fragment shader never read alpha (`gxw_draw` in
+`wasm/render/gx_webgpu.cpp`): every fragment was written opaque, including what the game draws to be
+discarded (alpha test) or faint (blend). The texture decoder (hypothesis 2) is not involved: the
+memory-card font is I4, decoded R=G=B=A with a transparent-black background, as GX defines it; the
+magenta is in no texture at all, it is the vertex colour (252,14,253, alpha 68) of an untextured
+quad whose TEV does not even use it (colour from KONST, alpha from register A0).
+
+**How it was shown** (VPS, not CI: it runs the private core against the disc). A CPU replay of the
+web core's WebGPU calls (`~/incoming/phase0/font-alpha/raster.mjs`, not committed, derived from the
+draw-cost bench) executes every submitted clear, copy and draw -- pipeline, uniforms, textures,
+samplers, viewport, scissor, depth -- and writes the XFB as PNG; the shaders are transcribed, not run.
+- With the shipped core it reproduces both phone photos (memory card at retrace 100, title at 600,
+  1-P Classic select at 1700 with `classic.txt`).
+- With this branch's core (run 37108849528) the glyph backgrounds, the logo box and the copyright
+  boxes are gone and every label has its shape (LEVEL, VERY EASY, STOCK, OPTION, HIGH SCORE).
+- The same core with the replay told to ignore only the blend / alpha-test / write-mask state gives
+  frames **byte-identical** to the shipped core's (md5 of retrace 100 and 1700). So the shape
+  corruption has the same cause; the label area is covered by untextured blended draws
+  (SRC_ALPHA / INV_SRC_ALPHA) that were written opaque.
+- The simulation trace is identical across the three runs (1701 retraces of `classic.txt`,
+  `976a31d8…`).
+
+**Change.** `gxw_draw` receives the draw's BP register file. ALPHACOMPARE becomes a `discard` in the
+fragment shader (two comparisons against references in a new uniform row 105, AND/OR/XOR/XNOR, an
+always-passing test generates nothing); BLENDMODE becomes the blend factors, subtract and the
+colour/alpha write mask, with destination alpha read as 1 when the EFB format has none -- Dolphin's
+AlphaTest / BlendingState, as upstream's `gx_shader.cpp` and `gx_d3d12.cpp`. The pipeline key grows
+by those bits. In 4,602 replayed menu draws: 7 use a logic op alone, all COPY (a plain write); none
+uses subtract, colour update off, or early depth with a live alpha test and depth writes -- the
+three things this does not implement (with dither and destination constant alpha).
+
+**Test.** `wasm/render/alpha_blend_check.mjs`, run by `phase0-build.yml` after the spike tests, reads
+back geometry 40-44 of `gx_webgpu_selftest` on CI Chromium's WebGPU: a magenta RGB5A3 texture at
+alpha 0 behind a GREATER 0 test, under SRC_ALPHA blending, at alpha 146 blended once
+([160,55,228,193]), at alpha 146 behind GREATER 200, and opaque with colour update off. A backend that
+ignores alpha draws magenta in all five; geometry 15 (the same texture opaque) must still draw it.
+Run 37108849528: 6/6, and the 42 spike tests pass with the fixtures' new GXInit state (a zeroed BP
+means "alpha test never passes"). The check lives outside `web/` because PR #90 was changing `web/`;
+the cases can move into `render.spec.ts` as they are.
+
+**Still wrong on screen, a separate defect: colour.** The shader is `vertex colour x texture 0`; the
+game's TEV computes colour from KONST and the colour registers (memory-card dialog and text, the
+full-screen quad is KONST black but drawn white, the title's ray background, the faint "Handicap"
+labels). Now that alpha is honoured, the memory-card frame shows a light pink tint where the magenta
+quad blends at alpha 68: on the console that quad's colour is KONST, not magenta. That is the TEV
+(RENDERER_MAP priority, "full TEV remains open"), not this change.
+
+**Not verified by this agent.** The phone; the canvas path on a real GPU (CI reads back an offscreen
+texture only); the trace `c79c53b9cdf81426fa0277e7497a69e55bc5f571` with `parity_vs_onett.txt` (the
+operator runs it; this change touches no simulation code); the character nameplate ("Ma|io") was
+not on screen in the replayed frames. Nothing was built locally.
