@@ -66,6 +66,23 @@ describe('disc reader', () => {
       `/${DISC_DIRECTORY}/${IDENTITY}/${DISC_FILE_NAME}`]);
   });
 
+  it('waits for the store worker\'s handle to be released before opening its own', async () => {
+    const { handle } = fakeHandle(disc);
+    let refusals = 1;
+    const waits: number[] = [];
+    const directory: OpfsDirectory = {
+      getDirectoryHandle: async () => directory,
+      getFileHandle: async () => ({
+        async createSyncAccessHandle() {
+          if (refusals-- > 0) throw Object.assign(new Error('held'), { name: 'InvalidStateError' });
+          return handle;
+        },
+      }),
+    };
+    expect(await openCachedDisc(async () => directory, IDENTITY, async (ms) => { waits.push(ms); })).toBe(handle);
+    expect(waits).toEqual([50]);
+  });
+
   it('refuses an identity that is not one, and passes the platform\'s refusal on', async () => {
     await expect(openCachedDisc(async () => { throw new Error('unreachable'); }, '../x')).rejects.toThrow(/identity/);
     const missing = Object.assign(new Error('no such file'), { name: 'NotFoundError' });

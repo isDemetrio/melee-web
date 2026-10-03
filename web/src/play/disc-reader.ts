@@ -18,6 +18,8 @@
  * `FileReaderSync`, with a note in the report saying so.
  */
 
+import { openSyncHandle, type Wait } from '../spike/sync-handle.js';
+
 /**
  * Where `web/src/spike/opfs-worker.ts` keeps the cached disc. Repeated here because importing that
  * module registers its request handler on whatever worker loads it, which here would be the play
@@ -42,14 +44,16 @@ export interface OpfsDirectory {
 
 /**
  * The cached disc of one cache identity, opened for synchronous reads. Rejects with the platform's
- * own error when the file is missing or another handle holds it (another tab playing, say).
+ * own error when the file is missing; a handle that holds the file is waited for while it may be
+ * one being released, then reported (`openSyncHandle`: another tab playing, say).
  */
-export async function openCachedDisc(root: () => Promise<OpfsDirectory>, identity: string): Promise<SyncReadHandle> {
+export async function openCachedDisc(root: () => Promise<OpfsDirectory>, identity: string,
+  wait?: Wait): Promise<SyncReadHandle> {
   if (!IDENTITY_PATTERN.test(identity)) throw new Error(`not a disc cache identity: ${identity}`);
   const parent = await (await root()).getDirectoryHandle(DISC_DIRECTORY, { create: false });
   const directory = await parent.getDirectoryHandle(identity, { create: false });
   const file = await directory.getFileHandle(DISC_FILE_NAME, { create: false });
-  return file.createSyncAccessHandle();
+  return openSyncHandle(file, wait);
 }
 
 /** What WORKERFS hands `stream_ops.read`: the stream's node holds the mounted `File`. */
