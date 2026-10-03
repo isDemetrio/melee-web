@@ -4,11 +4,13 @@
 // What it does. A persistent EFB texture (gx::EFB_WIDTH x gx::EFB_HEIGHT) and the canvas. Each
 // EfbCopy is replayed in frame order, the way GX executes it: an XFB copy first copies the EFB's
 // source rectangle to the canvas, then a copy with `clear` set clears the EFB to its clear colour.
-// So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console.
+// So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console. A colour
+// copy to RAM is kept as a texture that draws sampling its address read (gxw_copy, as upstream).
 //
-// Geometry uses a baseline shader with snapshot texture-0 MODULATE, then GX's alpha test and blend
-// state (gxw_draw). Lighting, texgen and full TEV remain open. Clears cover the whole EFB;
-// half-scale, Y scale, gamma and copy formats remain open (priorities 2-5).
+// Geometry is drawn with WGSL generated per draw state by gx_wgsl.cpp -- the TEV, texture coordinate
+// generation, colour channels, alpha test and fog -- then GX's blend state (gxw_draw). Lighting and
+// indirect texturing remain open (gx_wgsl.cpp says what each falls back to). Clears cover the whole
+// EFB; half-scale, Y scale, gamma, copy formats and depth copies remain open (priorities 2-5).
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
 // offscreen texture, which is how CI reads the backend's output back without committing a canvas
@@ -26,6 +28,7 @@
 // the simulation runs exactly as it does headless. Every JavaScript call below catches everything;
 // WebGPU validation errors do not throw at all, they are collected by gpu.ts.
 #include "gx_core.h"
+#include "gx_wgsl.h"
 #include "headless.h"
 #include "ppc.h"
 #include <cstdint>
@@ -37,21 +40,26 @@
 #include <climits>
 #include <cmath>
 #include <memory>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <emscripten/emscripten.h>
 
 // The two JavaScript halves stay at file scope, where Emscripten's EM_JS examples put them: the macro
 // emits extern "C" declarations and a marker the linker has to see.
 
+// gxw_draw reads each pipeline's WGSL out of WASM memory.
+EM_JS_DEPS(gxw_wgsl, "$UTF8ToString");
+
 // Creates the EFB texture. 1 when there is a device to render with, 0 when there is not.
-EM_JS(int, gxw_open, (int width, int height), {
+// `max_rows` is the uniform block a shader declares (gxw::MAX_ROWS float4 rows).
+EM_JS(int, gxw_open, (int width, int height, int max_rows), {
   const gpu = Module["gxWebgpu"];
   if (!gpu || !gpu.device || (!gpu.context && !gpu.xfb)) return 0;
-  // Draws per batch, bounded by the uniform arena (UNIFORM_SLOTS x uniformStride bytes), and the
-  // vertex and index arenas' first sizes (they grow by doubling).
-  const UNIFORM_SLOTS = 1024, VERTEX_ARENA_INITIAL = 1 << 20, INDEX_ARENA_INITIAL = 256 << 10;
+  // Draws per batch are bounded by the uniform arena; the vertex and index arenas' first sizes
+  // grow by doubling.
+  const UNIFORM_ARENA = 2 << 20, VERTEX_ARENA_INITIAL = 1 << 20, INDEX_ARENA_INITIAL = 256 << 10;
   try {
-    gpu.uniformSlotLimit = UNIFORM_SLOTS;
     gpu.efb = gpu.device.createTexture({
       size: [width, height], format: gpu.format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
@@ -71,6 +79,7 @@ EM_JS(int, gxw_open, (int width, int height), {
     gpu.textureLayout = gpu.device.createBindGroupLayout({entries});
     gpu.pipelineLayout = gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.textureLayout]});
     gpu.pipelines = new Map();
+    gpu.shaders = new Map();
     gpu.samplers = new Map();
     // Views have no destroy(): one per persistent texture, made here or when its texture is.
     gpu.efbView = gpu.efb.createView();
@@ -79,12 +88,14 @@ EM_JS(int, gxw_open, (int width, int height), {
     // Draw resources are persistent (gxw_bind, gxw_draw). Uniforms, vertices and indices are
     // arenas: each draw of a batch appends its data at its own offset to a staging copy, and the
     // batch writes them with one writeBuffer each just before its single submit (gpu.flush).
-    const align = (gpu.device.limits && gpu.device.limits.minUniformBufferOffsetAlignment) || 256;
-    // 106 float4 rows per draw (draw_segment's `u`).
-    gpu.uniformStride = Math.ceil(106*16/align)*align;
-    gpu.uniforms = gpu.device.createBuffer({size:UNIFORM_SLOTS*gpu.uniformStride,
+    // A draw's uniforms are the rows its shader reads (draw_segment's `u`, gxw::uniform_rows), at an
+    // aligned offset; every binding is the whole block a shader declares, which may run past the
+    // draw's own rows into the next draw's (never read) but never past the arena.
+    gpu.uniformAlign = (gpu.device.limits && gpu.device.limits.minUniformBufferOffsetAlignment) || 256;
+    gpu.uniformBinding = max_rows*16;
+    gpu.uniforms = gpu.device.createBuffer({size:UNIFORM_ARENA,
       usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
-    gpu.uniformStaging = new Uint8Array(UNIFORM_SLOTS*gpu.uniformStride);
+    gpu.uniformStaging = new Uint8Array(UNIFORM_ARENA);
     gpu.uniformWords = new Uint32Array(gpu.uniformStaging.buffer);
     gpu.vertexBuffer = gpu.device.createBuffer({size:VERTEX_ARENA_INITIAL,
       usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
@@ -107,8 +118,11 @@ EM_JS(int, gxw_open, (int width, int height), {
     // whose `batch` is batchSerial may be named by the unsubmitted encoder and is not evicted
     // (gxw_bind). Buffers are replaced only between batches (gxw_draw), so never under an open one.
     gpu.batch = null; gpu.batchSerial = 1; gpu.batchSubmits = 0;
+    // EFB copies to textures (gxw_copy), by guest destination address, and the replaced or dropped
+    // copy textures that wait for the submit of the batch that may still name them.
+    gpu.efbCopies = new Map(); gpu.copySerial = 0; gpu.copyGarbage = [];
     gpu.openBatch = () => gpu.batch || (gpu.batch = {encoder:gpu.device.createCommandEncoder(),
-      pass:null, state:null, vertexBytes:0, indexBytes:0, uniformSlots:0});
+      pass:null, state:null, vertexBytes:0, indexBytes:0, uniformBytes:0, lastUniform:-1, lastRows:0});
     gpu.endPass = (b) => { if (b.pass) { b.pass.end(); b.pass = null; b.state = null; } };
     gpu.flush = () => {
       const b = gpu.batch;
@@ -118,9 +132,11 @@ EM_JS(int, gxw_open, (int width, int height), {
       const q = gpu.device.queue;
       if (b.vertexBytes) q.writeBuffer(gpu.vertexBuffer,0,gpu.vertexStaging,0,b.vertexBytes);
       if (b.indexBytes) q.writeBuffer(gpu.indexBuffer,0,gpu.indexStaging,0,b.indexBytes);
-      if (b.uniformSlots) q.writeBuffer(gpu.uniforms,0,gpu.uniformStaging,0,b.uniformSlots*gpu.uniformStride);
+      if (b.uniformBytes) q.writeBuffer(gpu.uniforms,0,gpu.uniformStaging,0,b.uniformBytes);
       q.submit([b.encoder.finish()]);
       gpu.batchSubmits++;
+      for (const t of gpu.copyGarbage) t.destroy();
+      gpu.copyGarbage = [];
     };
     gpu.backendDevice = gpu.device;
     return 1;
@@ -130,15 +146,46 @@ EM_JS(int, gxw_open, (int width, int height), {
   }
 });
 
-// One EfbCopy: the XFB half (EFB source rectangle to the canvas), then the clear half, recorded
-// into the batch after the draws before it. An XFB copy submits the batch: the canvas texture it
-// wrote is presented once the worker's task ends or transfers it. 1 on success.
-EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, int clear, int argb, int clear_z), {
+// One EfbCopy: the copy half (EFB source rectangle to the canvas, or to a texture), then the clear
+// half, recorded into the batch after the draws before it. An XFB copy submits the batch: the canvas
+// texture it wrote is presented once the worker's task ends or transfers it. 1 on success.
+//
+// A copy to a texture (`copy_to`, the guest destination address; 0 for none) is upstream's
+// execute_copy (gx_d3d12.cpp): the EFB rectangle is kept on the GPU, in a texture that a draw
+// naming that address samples instead of guest RAM (gxw_bind), which this backend never writes. The
+// texture is the EFB's own pixels at full size: the copy format is not converted and a half-scale
+// copy is not downscaled, as upstream (normalised texture coordinates sample the same picture). This
+// is how the game's render-to-texture reaches the TEV -- the fighters' shadows projected onto the
+// stage are such a copy -- and without it those stages read whatever RAM held.
+EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, int clear, int argb, int clear_z, int copy_to), {
   const gpu = Module["gxWebgpu"];
+  const EFB_COPY_LIMIT = 64;
   try {
     const batch = gpu.openBatch();
     gpu.endPass(batch);
     const encoder = batch.encoder;
+    if (copy_to) {
+      const w = Math.min(src_w, gpu.efb.width - src_x), h = Math.min(src_h, gpu.efb.height - src_y);
+      let e = gpu.efbCopies.get(copy_to);
+      if (e) gpu.efbCopies.delete(copy_to);
+      if (w > 0 && h > 0) {
+        // A texture of another size is replaced; one the open batch may name is destroyed only
+        // after that batch is submitted (gpu.flush).
+        if (e && (e.texture.width !== w || e.texture.height !== h)) { gpu.copyGarbage.push(e.texture); e = null; }
+        if (!e) {
+          const texture = gpu.device.createTexture({size:[w,h],format:gpu.format,
+            usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
+          e = {id:-(++gpu.copySerial), texture, view:texture.createView()};
+        }
+        encoder.copyTextureToTexture({texture:gpu.efb, origin:[src_x, src_y]}, {texture:e.texture}, [w, h]);
+        gpu.efbCopies.set(copy_to, e);
+        if (gpu.efbCopies.size > EFB_COPY_LIMIT) {
+          const [oldest, old] = gpu.efbCopies.entries().next().value;
+          gpu.efbCopies.delete(oldest); gpu.copyGarbage.push(old.texture);
+        }
+        gpu.efbCopyTextures = (gpu.efbCopyTextures | 0) + 1;
+      } else if (e) gpu.copyGarbage.push(e.texture);
+    }
     if (to_xfb) {
       const target = gpu.xfb ? gpu.xfb : gpu.context.getCurrentTexture();
       let w = src_w, h = src_h;
@@ -196,7 +243,10 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
 // being bound and every draw recorded since the last submit -- are never evicted: such a batch
 // may exceed the budget rather than destroy what its unsubmitted encoder uses (WebGPU would
 // reject the whole submit). Pool order is least recently used first, so they are its tail.
-EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, int mode0, int mode1), {
+//
+// `copy_addr` names an EFB copy instead (gxw_copy): its texture is bound, or white when there is none
+// at that address (the copy was dropped, or had no pixels).
+EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, int mode0, int mode1, int copy_addr), {
   const gpu = Module["gxWebgpu"];
   const SAMPLER_CACHE_LIMIT = 256;
   const TEXTURE_POOL_LIMIT = 1024, TEXTURE_POOL_BYTES = 64 << 20;
@@ -214,6 +264,12 @@ EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, 
         mipmapFilter:mip===2?"linear":"nearest",lodMinClamp:lo,lodMaxClamp:hi});
       if (gpu.samplers.size >= SAMPLER_CACHE_LIMIT) gpu.samplers.delete(gpu.samplers.keys().next().value);
       gpu.samplers.set(key, sampler);
+    }
+    if (copy_addr) {
+      const e = gpu.efbCopies.get(copy_addr);
+      gpu.slots[slot] = {entry:e || gpu.whiteEntry, sampler, key};
+      gpu.efbCopyBinds = (gpu.efbCopyBinds | 0) + 1;
+      return 1;
     }
     if (!content) { gpu.slots[slot] = {entry:gpu.whiteEntry, sampler, key}; return 1; }
     let entry = gpu.texturePool.get(content), fresh = false;
@@ -279,23 +335,25 @@ EM_JS(int, gxw_texture_count, (), {
 // collection): 1024, above the 817 distinct keys of a measured 2400-frame run (<=164 per frame),
 // where 256 missed 2383 times. The pipeline key keeps only the bits the pipeline descriptor reads.
 //
-// Alpha test and blending. `bp` is the draw's BP register file. Until this was read, no pipeline
-// had blend state and the fragment shader never looked at alpha, so every fragment was written:
-// what the game draws to be invisible -- alpha 0 behind each glyph of a menu font, a quad whose
-// vertex alpha the blend makes faint -- was drawn opaque. Both follow Dolphin's VideoCommon
-// (AlphaTest in PixelShaderGen, BlendingState::Generate), as does upstream's gx_shader.cpp:
-//   - ALPHACOMPARE (0xF3): two comparisons of the fragment alpha, as an 8-bit integer, against two
-//     references, joined by AND/OR/XOR/XNOR; a fragment that fails is discarded, so it writes
-//     neither colour nor depth. A test that always passes generates no code.
+// The shader is gx_wgsl.cpp's, generated in C++ once per shader uid: `shader` names it, and `code`
+// is its WGSL the first time that uid is drawn (0 afterwards). The TEV, texgen, colour channels,
+// alpha test and fog are in it; what stays here is the pipeline state around it.
+//
+// Blending. `bp` is the draw's BP register file. Until this was read, no pipeline had blend state,
+// so every fragment was written: a quad whose vertex alpha the blend makes faint was drawn opaque.
+// It follows Dolphin's VideoCommon (BlendingState::Generate), as does upstream's gx_d3d12.cpp:
 //   - BLENDMODE (0x41): blend enable, factors, subtract (dst - src, factors ignored), colour and
 //     alpha update. Without an alpha channel in the EFB (ZCOMPARE pixel format other than
 //     RGBA6_Z24) destination alpha reads as 1 and alpha is not written.
 // Not here: logic ops (no WebGPU equivalent; a draw with only the logic op enabled is a plain
 // write), dither, destination constant alpha (0x42), and early depth (ZCOMPARE bit 6: GX tests and
 // writes depth before the alpha test, so a discarded fragment still writes depth there).
+//
+// Each pipeline is labelled with its key, which is what WebGPU validation messages name, and what
+// tools that replay these calls read the draw's state from.
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
-                     const float* constants, const float* raster, int lines, int cull, int zmode, int components,
-                     const uint32_t* bp), {
+                     const float* constants, int rows, const float* raster, int lines, int cull, int zmode,
+                     const uint32_t* bp, int shader, const char* code), {
   const gpu = Module["gxWebgpu"];
   const BIND_GROUP_CACHE_LIMIT = 1024, ARENA_GROWTH_LIMIT = 16 << 20;
   // Draws recorded (heartbeat.ts reports it).
@@ -306,26 +364,17 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
   try {
     const d = gpu.device;
     const r = HEAPF32.slice(raster >> 2, (raster >> 2) + 10);
-    components &= 1024 | 8192 | 16384; zmode &= 31;
-    const blendmode = HEAPU32[(bp >> 2) + 0x41], alphaCompare = HEAPU32[(bp >> 2) + 0xF3];
+    zmode &= 31;
+    if (code) gpu.shaders.set(shader, d.createShaderModule({label:"gx shader " + shader, code:UTF8ToString(code)}));
+    const blendmode = HEAPU32[(bp >> 2) + 0x41];
     const efbAlpha = (HEAPU32[(bp >> 2) + 0x43] & 7) === 1 ? 1 : 0;   // RGBA6_Z24
     // Enable, colour/alpha update, and -- only when blending -- the factors and subtract.
     const blendBits = blendmode & 1 ? blendmode & 0xFF9 : blendmode & 0x18;
-    const alphaOps = (alphaCompare >>> 16) & 0xFF;
-    const key = [lines,cull,zmode,components,blendBits,alphaOps,efbAlpha].join(":");
+    const key = [lines,cull,zmode,blendBits,efbAlpha,shader].join(":");
     let pipeline = gpu.pipelines.get(key);
     if (!pipeline) {
-      // AlphaTest::TestResult: whether the two comparisons decide the test whatever the alpha is.
-      const c0 = alphaOps & 7, c1 = (alphaOps >>> 3) & 7, logic = alphaOps >>> 6;
-      const a7 = c0 === 7, b7 = c1 === 7, a0 = c0 === 0, b0 = c1 === 0;
-      const pass = [a7 && b7, a7 || b7, (a7 && b0) || (a0 && b7), (a7 && b7) || (a0 && b0)][logic];
-      const compare = (c, ref) => ["false",`testAlpha < ${ref}`,`testAlpha == ${ref}`,`testAlpha <= ${ref}`,
-        `testAlpha > ${ref}`,`testAlpha != ${ref}`,`testAlpha >= ${ref}`,"true"][c];
-      // The comment is read by tools that replay these pipelines (it names the uniform row too).
-      const alphaTest = pass ? "" : `// alpha test: ${c0} ${logic} ${c1} row 105
-  let testAlpha = i32(round(clamp(color.a, 0.0, 1.0) * 255.0));
-  let testRef = vec2i(u.rows[105].xy);
-  if (!((${compare(c0,"testRef.x")})${[" && "," || "," != "," == "][logic]}(${compare(c1,"testRef.y")}))) { discard; }`;
+      const module = gpu.shaders.get(shader);
+      if (!module) throw new Error("no WGSL for shader " + shader);
       // GX source and destination factors, in BLENDMODE order.
       const src = ["zero","one","dst","one-minus-dst","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
       const dst = ["zero","one","src","one-minus-src","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
@@ -346,46 +395,9 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
       for (let i=0;i<8;i++) attributes.push({shaderLocation:4+i,offset:32+8*i,format:"float32x2"});
       for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
       // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
-      const code = `
-struct Constants { rows: array<vec4f, 106> }
-@group(0) @binding(0) var<uniform> u: Constants;
-${Array.from({length:8}, (_,n) => `@group(0) @binding(${1+2*n}) var tex${n}: texture_2d<f32>;
-@group(0) @binding(${2+2*n}) var samp${n}: sampler;`).join("\n")}
-struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
-  @location(1) normal: vec3f, @location(2) color1: vec4f, @location(3) uv: vec2f, @location(4) clip: vec4f }
-@vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f,
-  @location(2) color: vec4f, @location(3) color1: vec4f, @location(4) uv: vec2f,
-  @location(12) indices: vec4u) -> Out {
-  let m = indices.x;
-  let raw = vec4f(position,1);
-  let p = vec4f(dot(u.rows[6+m],raw),dot(u.rows[7+m],raw),dot(u.rows[8+m],raw),1);
-  var clip = vec4f(dot(u.rows[0],p),dot(u.rows[1],p),dot(u.rows[2],p),dot(u.rows[3],p));
-  clip.z = -clip.z;
-  clip = vec4f(clip.xy * sign(u.rows[4].zw * vec2f(-1,1)) + clip.w * u.rows[4].zw, clip.zw);
-  if (clip.w == 1) { clip = vec4f(round(clip.xy * u.rows[5].xy) * u.rows[5].zw,clip.zw); }
-  let originalClip = clip;
-  // Emulate the D3D viewport in clip space, allowing viewports outside the EFB.
-  clip = vec4f(clip.xy * u.rows[102].xy + clip.w * u.rows[102].zw,clip.zw);
-  var o: Out;
-  o.pos = clip; o.clip = originalClip;
-  o.color = ${components & 8192 ? "color" : "vec4f(1)"};
-  o.color1 = ${components & 16384 ? "color1" : "o.color"};
-  o.normal = vec3f(0);
-  ${components & 1024 ? `let n = select(m,m-32u,m>=32u);
-  o.normal = normalize(vec3f(dot(u.rows[70+n].xyz,normal),dot(u.rows[71+n].xyz,normal),dot(u.rows[72+n].xyz,normal)));` : ""}
-  o.uv = uv;
-  return o;
-}
-@fragment fn fs(i: Out) -> @location(0) vec4f {
-  let color = i.color * textureSampleBias(tex0,samp0,i.uv,u.rows[103].x);
-  if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
-  ${alphaTest}
-  return color;
-}`;
-      const shader = d.createShaderModule({code});
-      pipeline = d.createRenderPipeline({layout:gpu.pipelineLayout,
-        vertex:{module:shader,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
-        fragment:{module:shader,entryPoint:"fs",targets:[blend ? {format:gpu.format,blend,writeMask} : {format:gpu.format,writeMask}]},
+      pipeline = d.createRenderPipeline({label:key,layout:gpu.pipelineLayout,
+        vertex:{module,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
+        fragment:{module,entryPoint:"fs",targets:[blend ? {format:gpu.format,blend,writeMask} : {format:gpu.format,writeMask}]},
         primitive:{topology:lines ? "line-list":"triangle-list",frontFace:"cw",cullMode:["none","back","front","back"][cull]},
         depthStencil:{format:"depth32float",depthWriteEnabled:!!((zmode&1)&&(zmode&16)),
           depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}});
@@ -395,9 +407,9 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     // overwritten. Textures already bound for this draw were marked with the batch just
     // submitted; they move to the next one, which this draw opens. The arena that overflowed
     // grows (up to ARENA_GROWTH_LIMIT), so that the next frame fits in one batch again.
-    const indexBytes = count*4, stride = gpu.uniformStride;
+    const indexBytes = count*4, uniformBytes = Math.ceil(rows*16/gpu.uniformAlign)*gpu.uniformAlign;
     let batch = gpu.batch, vertexNeed = vertex_bytes, indexNeed = indexBytes;
-    if (batch && (batch.uniformSlots >= gpu.uniformSlotLimit ||
+    if (batch && (batch.uniformBytes + gpu.uniformBinding > gpu.uniforms.size ||
         batch.vertexBytes + vertex_bytes > gpu.vertexBuffer.size || batch.indexBytes + indexBytes > gpu.indexBuffer.size)) {
       const v = batch.vertexBytes + vertex_bytes, i = batch.indexBytes + indexBytes;
       if (v > gpu.vertexBuffer.size && v <= ARENA_GROWTH_LIMIT) vertexNeed = v;
@@ -425,7 +437,7 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     let group = gpu.bindGroups.get(groupKey);
     if (group) gpu.bindGroups.delete(groupKey);
     else {
-      const entries = [{binding:0,resource:{buffer:gpu.uniforms,size:106*16}}];
+      const entries = [{binding:0,resource:{buffer:gpu.uniforms,size:gpu.uniformBinding}}];
       for (let i=0;i<8;i++) {
         entries.push({binding:1+2*i,resource:gpu.slots[i].entry.view});
         entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
@@ -444,13 +456,13 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     }
     const pass = batch.pass, state = batch.state;
     // Consecutive segments of one GX draw have the same constants: they share one slot.
-    const words = gpu.uniformWords, base = constants >> 2, n = 106*4;
-    let offset = (batch.uniformSlots - 1)*stride, same = batch.uniformSlots > 0;
+    const words = gpu.uniformWords, base = constants >> 2, n = rows*4;
+    let offset = batch.lastUniform, same = offset >= 0 && batch.lastRows === rows;
     for (let i = 0, at = offset >> 2; same && i < n; i++) same = words[at+i] === HEAPU32[base+i];
     if (!same) {
-      offset = batch.uniformSlots*stride;
-      gpu.uniformStaging.set(HEAPU8.subarray(constants,constants+106*16),offset);
-      batch.uniformSlots++;
+      offset = batch.uniformBytes;
+      gpu.uniformStaging.set(HEAPU8.subarray(constants,constants+rows*16),offset);
+      batch.uniformBytes += uniformBytes; batch.lastUniform = offset; batch.lastRows = rows;
     }
     const baseVertex = batch.vertexBytes/108, firstIndex = batch.indexBytes/4;
     gpu.vertexStaging.set(HEAPU8.subarray(vertices,vertices+vertex_bytes),batch.vertexBytes);
@@ -513,6 +525,10 @@ struct Content { int id; std::shared_ptr<const gx::TextureSnapshot> snapshot; };
 std::unordered_map<ContentKey, Content, ContentKeyHash> g_contents;
 std::unordered_map<int, ContentKey> g_content_keys;
 int g_next_content = 0;
+// Guest addresses an EFB copy has written a texture to (gxw_copy). A draw whose texture is at one of
+// them samples that copy, not the bytes in RAM. As upstream's efb_copies_ the set is keyed by address
+// alone, so it holds as many entries as the game has copy destinations.
+std::unordered_set<uint32_t> g_efb_copy_addrs;
 
 // All source reads are from TextureSnapshot, never host::ram/guest addresses. A snapshot already
 // in the pool is neither decoded nor uploaded again (gxw_bind).
@@ -521,7 +537,11 @@ bool upload_textures(const gx::DrawCall& dc) {
   for (int slot=0; slot<8; ++slot) {
     const auto& t=dc.textures[slot];
     if (!t.used) {
-      if (!gxw_bind(slot,0,0,0,1,0,0)) return false;
+      if (!gxw_bind(slot,0,0,0,1,0,0,0)) return false;
+      continue;
+    }
+    if (g_efb_copy_addrs.count(t.addr)) {
+      if (!gxw_bind(slot,0,0,0,1,t.mode0,t.mode1,int(t.addr))) return false;
       continue;
     }
     const bool supported=t.format<=6 || t.format==8 || t.format==9 || t.format==10 || t.format==14;
@@ -541,7 +561,7 @@ bool upload_textures(const gx::DrawCall& dc) {
       g_content_keys.emplace(found->second.id,key);
     }
     const int content=found->second.id;
-    const int bound=gxw_bind(slot,content,t.width,t.height,t.mip_levels,t.mode0,t.mode1);
+    const int bound=gxw_bind(slot,content,t.width,t.height,t.mip_levels,t.mode0,t.mode1,0);
     if (!bound) return false;
     // Only a miss evicts, and never this draw's textures, so `content` is not among these.
     for (int gone; (gone=gxw_evicted());) {
@@ -562,6 +582,12 @@ bool upload_textures(const gx::DrawCall& dc) {
   return true;
 }
 
+// The shaders gxw_draw has been given: gx_wgsl.cpp's uid of the draw state each was generated from,
+// and the id gxw_draw knows it by. A uid is generated and its WGSL handed over once; every later
+// draw with the same uid names the id alone. Bounded by the shader state the game uses (the
+// pipelines map in gxw_draw holds as many), like the pipelines themselves.
+std::unordered_map<gxw::ShaderUid, int, gxw::ShaderUidHash> g_shaders;
+
 // Baseline projection/viewport rules transcribed from gx_shader.cpp:671-748 and
 // gx_d3d12.cpp:1809-1826. No guest memory or live GX registers are read here.
 bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::DrawSegment& segment) {
@@ -575,7 +601,7 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
   float vp[6], proj[6];
   std::memcpy(vp, dc.xf_regs+0x1A, sizeof vp); std::memcpy(proj, dc.xf_regs+0x20, sizeof proj);
   if (!std::isfinite(vp[0]) || !std::isfinite(vp[1]) || vp[0] == 0 || vp[1] == 0) return true;
-  float u[106][4] = {};
+  float u[gxw::MAX_ROWS][4] = {};
   u[0][0]=proj[0]; u[1][1]=proj[2]; u[2][2]=proj[4]; u[2][3]=proj[5];
   if (dc.xf_regs[0x26] == 0) { u[0][2]=proj[1]; u[1][2]=proj[3]; u[3][2]=-1; }
   else { u[0][3]=proj[1]; u[1][3]=proj[3]; u[3][3]=1; }
@@ -602,12 +628,21 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
     const auto& t=dc.textures[i];
     u[103+i/4][i%4]=t.used ? float(gx::sbits(t.mode0,9,8))/32.0f : 0;
   }
-  // The alpha test's two 8-bit references (gxw_draw reads the comparisons from `bp`).
+  // The alpha test's two 8-bit references (the comparisons are in the shader).
   const uint32_t alpha_compare=dc.bp.alpha_test();
   u[105][0]=float(gx::bits(alpha_compare,0,8)); u[105][1]=float(gx::bits(alpha_compare,8,8));
+  gxw::fill_tev_rows(dc,u);
+  const gxw::ShaderUid uid=gxw::make_uid(dc);
+  auto shader=g_shaders.find(uid);
+  std::string code;
+  if (shader==g_shaders.end()) {
+    shader=g_shaders.emplace(uid,int(g_shaders.size())+1).first;
+    code=gxw::generate_wgsl(uid);
+  }
   if (!upload_textures(dc)) return false;
   return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
-                  &u[0][0],r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),dc.components,dc.bp.reg);
+                  &u[0][0],gxw::uniform_rows(uid),r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),
+                  dc.bp.reg,shader->second,code.empty() ? nullptr : code.c_str());
 }
 
 
@@ -626,8 +661,11 @@ class WebGpuBackend final : public gx::Backend {
         continue;
       }
       const gx::EfbCopy& c = frame.copies[command.index];
+      // A colour copy to RAM becomes a texture (gxw_copy); depth copies are not kept.
+      const bool to_texture = !c.to_xfb && !c.is_depth && c.dest_addr;
+      if (to_texture) g_efb_copy_addrs.insert(c.dest_addr);
       if (!gxw_copy(int(c.src_x), int(c.src_y), int(c.src_w), int(c.src_h), c.to_xfb, c.clear,
-                    int(c.clear_color), int(c.clear_z))) {
+                    int(c.clear_color), int(c.clear_z), to_texture ? int(c.dest_addr) : 0)) {
         // The device is unusable: stop recording frames altogether, back to exactly headless.
         // Return at once; the decoder clears `frame` when this call returns.
         host::gx_set_backend(nullptr);
@@ -656,7 +694,7 @@ WebGpuBackend* g_webgpu = nullptr;
 // 1 when the backend is attached to the decoder; 0 leaves the module exactly headless.
 extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_attach() {
   if (g_webgpu) return 1;
-  if (!gxw_open(gx::EFB_WIDTH, gx::EFB_HEIGHT)) return 0;
+  if (!gxw_open(gx::EFB_WIDTH, gx::EFB_HEIGHT, gxw::MAX_ROWS)) return 0;
   g_webgpu = new WebGpuBackend();
   host::gx_set_backend(g_webgpu);
   return 1;
@@ -741,7 +779,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     // Keep the FIFO copy/clear coverage above; this fixture intentionally bypasses decoding.
     gx::Frame frame;
     gx::DrawCall dc{};
-    dc.primitive=geometry==5 ? 0xB8 : 0x90; dc.vertex_count=3; dc.components=gx::VB_HAS_COL0 | gx::VB_HAS_COL1 | gx::VB_HAS_NRM0;
+    dc.primitive=geometry==5 ? 0xB8 : 0x90; dc.vertex_count=3;
+    dc.components=gx::VB_HAS_COL0 | gx::VB_HAS_COL1 | gx::VB_HAS_NRM0 | gx::VB_HAS_UV0;
     const float vp[6]={320,-240,16777216,662,582,16777216};
     const float proj[6]={1,0,1,0,1,0};
     std::memcpy(dc.xf_regs+0x1A,vp,sizeof vp); std::memcpy(dc.xf_regs+0x20,proj,sizeof proj);
@@ -749,6 +788,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     // Nonzero matrix index and translation: reading position directly misses the probe.
     dc.posMatrices[12]=1; dc.posMatrices[15]=0.5f; dc.posMatrices[17]=1; dc.posMatrices[22]=1;
     dc.normalMatrices[9]=1; dc.normalMatrices[13]=1; dc.normalMatrices[17]=1;
+    // Matrix 60, GX_IDENTITY: the texture matrix of texgen 0 (each vertex names it, as the decoder
+    // does when the stream carries no index).
+    dc.posMatrices[240]=1; dc.posMatrices[245]=1; dc.posMatrices[250]=1;
     dc.bp.reg[gx::BP_SCISSORBR]=(639u<<12)|479u;
     dc.bp.reg[gx::BP_ZMODE]=1|2|16; // GX LESS -> reversed GREATER, writes enabled.
     // What GXInit leaves, which a zeroed BP is not: the alpha test passes (ALWAYS and ALWAYS; zero
@@ -757,6 +799,17 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     dc.bp.reg[gx::BP_ALPHACOMPARE]=(7u<<16)|(7u<<19);
     dc.bp.reg[gx::BP_BLENDMODE]=8|16;
     dc.bp.reg[gx::BP_ZCOMPARE]=1;
+    // And what a draw of a textured, vertex-coloured triangle sets on top of it: one texgen (TEX0
+    // through the identity matrix), one colour channel taking the vertex colour, one TEV stage
+    // MODULATE (GXSetTevOp: colour TEXC x RASC, alpha TEXA x RASA) of texture 0 and channel 0, and
+    // the identity swap tables. A zeroed TEV is a stage whose output is the PREV register: black.
+    dc.bp.reg[gx::BP_GENMODE]=1 | 1u<<4;
+    dc.xf_regs[0x09]=1; dc.xf_regs[0x0E]=1; dc.xf_regs[0x10]=1;
+    dc.xf_regs[0x3F]=1; dc.xf_regs[0x40]=5u<<7;
+    dc.bp.reg[gx::BP_TEV_COLOR_ENV]=15 | 10u<<4 | 8u<<8 | 15u<<12 | 1u<<19;
+    dc.bp.reg[gx::BP_TEV_ALPHA_ENV]=7u<<4 | 5u<<7 | 4u<<10 | 7u<<13 | 1u<<19;
+    dc.bp.reg[gx::BP_TREF]=1u<<6;
+    for (int i=0;i<8;i+=2) { dc.bp.reg[gx::BP_TEV_KSEL+i]=1u<<2; dc.bp.reg[gx::BP_TEV_KSEL+i+1]=2 | 3u<<2; }
     // Alpha test and blending, on a magenta RGB5A3 texture (fixture_texture's `alpha3`). Every
     // expected pixel differs from opaque magenta, which is what a backend ignoring alpha draws.
     //   40: alpha 0, test GREATER 0 -> discarded: the clear colour.
@@ -769,24 +822,149 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     if (geometry==43) dc.bp.reg[gx::BP_ALPHACOMPARE]=(4u<<16)|(7u<<19)|200u;
     if (geometry==44) dc.bp.reg[gx::BP_BLENDMODE]=16;
     if (geometry==2) dc.bp.reg[gx::BP_SCISSORBR]=(159u<<12)|479u;
-    if (geometry==3) dc.bp.reg[gx::BP_GENMODE]=2u<<14; // front cull (clockwise triangle)
+    if (geometry==3) dc.bp.reg[gx::BP_GENMODE]|=2u<<14; // front cull (clockwise triangle)
+    // The TEV (gx_wgsl.cpp), each probe on a state the backend ignored before it, so a shader of
+    // vertex colour x texture 0 draws something else (wasm/render/pixel_pipeline_check.mjs):
+    //   45: the in-match name tag's plate: no texture, colour KONST K0 (242,89,89), alpha the C0
+    //       register (128), blended SRC_ALPHA / INV_SRC_ALPHA over the clear colour.
+    //   46: the name tag's glyphs: KONST K0 x an I8 texture (128), alpha A0 (255) x TEXA, unblended.
+    //   47: two stages. Stage 0 writes C1 = 2 * C0 - lerp(TEXC, RASC, 96) unclamped, with the ras
+    //       swap table 1 (BGRA) and alpha TEXA x (1 - 128/255); stage 1 compares per component
+    //       (KONST K1 > TEXC ? RASC : 0) + C1 and (C1.a > TEXA ? RASA : 0) + 223, clamped, to PREV.
+    //       Its negative intermediate, the swap, the scale, the subtraction's +127 and the compares
+    //       all change the pixel.
+    //   48: MODULATE, then linear fog of constant density 0.5 (A = 0, C = -0.5, perspective):
+    //       halfway to the fog colour. The sign of C is bit 19, as in Dolphin's FogParam3; reading it
+    //       from bit 20 (the projection bit), as upstream's gx_shader.cpp does, gives C = +0.5 and no
+    //       fog.
+    if (geometry==45) {
+      dc.bp.reg[gx::BP_TEV_COLOR_ENV]=14 | 15u<<4 | 15u<<8 | 15u<<12 | 1u<<19;
+      dc.bp.reg[gx::BP_TEV_ALPHA_ENV]=1u<<4 | 7u<<7 | 7u<<10 | 7u<<13 | 1u<<19;
+      dc.bp.reg[gx::BP_TREF]=7u<<7;                                    // no texture, no channel
+      dc.bp.reg[gx::BP_TEV_KSEL]|=12u<<4;                              // K0.rgb
+      dc.bp.reg[gx::BP_BLENDMODE]=1|8|16|(5u<<5)|(4u<<8);
+    }
+    if (geometry==46) {
+      dc.bp.reg[gx::BP_TEV_COLOR_ENV]=15 | 8u<<4 | 14u<<8 | 15u<<12 | 1u<<19;
+      dc.bp.reg[gx::BP_TEV_ALPHA_ENV]=7u<<4 | 4u<<7 | 1u<<10 | 7u<<13 | 1u<<19;
+      dc.bp.reg[gx::BP_TEV_KSEL]|=12u<<4;
+    }
+    if (geometry==45 || geometry==46) {
+      const int32_t k0[4]={242,89,89,0}, c0[4]={0,0,0,geometry==45 ? 128 : 255};
+      std::memcpy(dc.tev_kcolors[0],k0,sizeof k0); std::memcpy(dc.tev_colors[1],c0,sizeof c0);
+    }
+    if (geometry==47) {
+      dc.bp.reg[gx::BP_GENMODE]|=1u<<10;                               // two stages
+      dc.bp.reg[gx::BP_TEV_COLOR_ENV]=2 | 14u<<4 | 10u<<8 | 8u<<12 | 1u<<18 | 1u<<20 | 2u<<22;
+      dc.bp.reg[gx::BP_TEV_ALPHA_ENV]=1 | 7u<<4 | 6u<<7 | 7u<<10 | 4u<<13 | 1u<<19 | 2u<<22;
+      dc.bp.reg[gx::BP_TEV_COLOR_ENV+2]=4 | 10u<<4 | 8u<<8 | 14u<<12 | 3u<<16 | 1u<<19 | 3u<<20;
+      dc.bp.reg[gx::BP_TEV_ALPHA_ENV+2]=6u<<4 | 5u<<7 | 4u<<10 | 2u<<13 | 3u<<16 | 1u<<19 | 3u<<20;
+      dc.bp.reg[gx::BP_TREF]=1u<<6 | 1u<<18;                           // stage 1: texture 0 too
+      // Stage 0: KONST 96 (5), alpha 128 (4); stage 1: K1.rgb (13), alpha 223 (1). Swap table 1 BGRA.
+      dc.bp.reg[gx::BP_TEV_KSEL]|=5u<<4 | 4u<<9 | 13u<<14 | 1u<<19;
+      dc.bp.reg[gx::BP_TEV_KSEL+2]=2 | 1u<<2; dc.bp.reg[gx::BP_TEV_KSEL+3]=3u<<2;
+      const int32_t c0[4]={10,20,30,40}, k1[4]={200,50,40,0};
+      std::memcpy(dc.tev_colors[1],c0,sizeof c0); std::memcpy(dc.tev_kcolors[1],k1,sizeof k1);
+    }
+    if (geometry==48) {
+      dc.bp.reg[gx::BP_FOGPARAM0]=0;                                   // A = 0
+      dc.bp.reg[gx::BP_FOGBMAGNITUDE]=1u<<23; dc.bp.reg[gx::BP_FOGBEXPONENT]=23;
+      dc.bp.reg[gx::BP_FOGPARAM3]=2u<<21 | 1u<<19 | 126u<<11;          // linear, perspective, C = -0.5
+      dc.bp.reg[gx::BP_FOGCOLOR]=0x28F050;
+    }
     const float xy[3][2]={{-0.9f,-0.6f},{-0.5f,0.6f},{-0.1f,-0.6f}};
-    for(int layer=0;layer<3;layer++) {
+    // 49: the generator's grammar, not its values. 48 draws, each with pseudo-random TEV stages,
+    // orders, swap tables, konstant selections, alpha test, fog, colour channels, texgens and vertex
+    // components; each call continues the sequence (`repeats` covers more states). WebGPU rejects a
+    // shader that does not compile, and the error fails the check; the pixel is not asserted.
+    if (geometry==49) {
+      static uint32_t seed=0x2545F491u;
+      auto next=[]() { seed=seed*1664525u+1013904223u; return seed>>8; };
+      dc.textures[0]=fixture_texture(6);
+      for(auto& t:dc.textures) t=dc.textures[0];
+      for(int k=0;k<48;k++) {
+        gx::DrawCall r=dc;
+        const uint32_t stages=1+next()%16;
+        r.bp.reg[gx::BP_GENMODE]=1 | 1u<<4 | (stages-1)<<10;
+        for(uint32_t i=0;i<stages;i++) { r.bp.reg[gx::BP_TEV_COLOR_ENV+2*i]=next(); r.bp.reg[gx::BP_TEV_ALPHA_ENV+2*i]=next(); }
+        for(int i=0;i<8;i++) { r.bp.reg[gx::BP_TREF+i]=next(); r.bp.reg[gx::BP_TEV_KSEL+i]=next(); }
+        r.bp.reg[gx::BP_ALPHACOMPARE]=next();
+        r.bp.reg[gx::BP_FOGPARAM3]=next(); r.bp.reg[gx::BP_FOGRANGE]=next()&0x7FF;
+        r.bp.reg[gx::BP_FOGPARAM0]=next(); r.bp.reg[gx::BP_FOGBMAGNITUDE]=next(); r.bp.reg[gx::BP_FOGBEXPONENT]=next()&31;
+        r.xf_regs[0x09]=next()%3;
+        for(int i=0x0E;i<=0x11;i++) r.xf_regs[i]=next()&0x7FFF;
+        r.xf_regs[0x3F]=next()%9; r.xf_regs[0x12]=next()&1;
+        for(int i=0;i<8;i++) { r.xf_regs[0x40+i]=next()&0x3FFFF; r.xf_regs[0x50+i]=next()&0x13F; }
+        r.components=next()&(gx::VB_HAS_COL0 | gx::VB_HAS_COL1 | gx::VB_HAS_NRM0 | 0xFFu*gx::VB_HAS_UV0 | 0x1FEu);
+        for(auto& c:r.tev_colors) for(auto& v:c) v=int32_t(next()%2048)-1024;
+        for(auto& c:r.tev_kcolors) for(auto& v:c) v=int32_t(next()%256);
+        r.first_vertex=frame.vertices.size(); r.first_segment=frame.segments.size(); r.segment_count=1;
+        for(int i=0;i<3;i++) {
+          gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1]; v.pos[2]=-0.3f; v.posmtx=3; v.nrm[2]=1;
+          for(auto& c:v.col0) c=uint8_t(next());
+          for(auto& c:v.col1) c=uint8_t(next());
+          for(auto& uv:v.uv) { uv[0]=0.5f; uv[1]=0.5f; }
+          for(auto& m:v.texmtx) m=60;
+          frame.vertices.push_back(v);
+        }
+        frame.segments.push_back({r.first_vertex,3,r.primitive});
+        frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
+      }
+    }
+    // 50: an EFB copy to a texture (gxw_copy). A green triangle; a 4x4 copy from inside it to guest
+    // address 0x100000, with a clear; then the triangle again, white, textured from that address.
+    // The probe reads the copied green. A backend that samples guest RAM there draws the snapshot
+    // that address's TextureRef carries instead: the RGBA8 fixture, (128,64,32,192).
+    if (geometry==50) {
+      for(int pass=0;pass<2;pass++) {
+        gx::DrawCall r=dc;
+        if (pass==1) {
+          r.textures[0]=fixture_texture(6); r.textures[0].addr=0x100000; r.textures[0].width=4; r.textures[0].height=4;
+          const gx::EfbCopy copy{0x100000,0,318,238,4,4,6,false,true,false,false,false,argb,0xFFFFFF,1.0f};
+          frame.copies.push_back(copy); frame.commands.push_back({gx::FrameCommand::Copy,uint32_t(frame.copies.size()-1)});
+        }
+        r.first_vertex=frame.vertices.size(); r.first_segment=frame.segments.size(); r.segment_count=1;
+        for(int i=0;i<3;i++) {
+          gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1]; v.pos[2]=-0.3f; v.posmtx=3; v.nrm[2]=1; v.texmtx[0]=60;
+          v.col0[0]=pass ? 255 : 0; v.col0[1]=255; v.col0[2]=pass ? 255 : 0; v.col0[3]=255; v.col1[3]=255;
+          v.uv[0][0]=0.5f; v.uv[0][1]=0.5f;
+          frame.vertices.push_back(v);
+        }
+        frame.segments.push_back({r.first_vertex,3,r.primitive});
+        frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
+      }
+    }
+    // 51: Dolphin's near-plane tolerance (gx_wgsl.cpp). A green triangle whose clip z is the next
+    // float after w (1 + 2^-23): scaled by 1 - 1e-7 it lands on the plane and is drawn; unscaled,
+    // WebGPU clips it and the probe reads the clear colour. The game's shadow backdrop quad is such a
+    // primitive (1.8e-8 beyond the plane).
+    if (geometry==51) {
+      dc.first_vertex=frame.vertices.size(); dc.first_segment=frame.segments.size(); dc.segment_count=1;
+      for(int i=0;i<3;i++) {
+        gx::Vertex v{}; v.pos[0]=xy[i][0]; v.pos[1]=xy[i][1]; v.pos[2]=-std::nextafter(1.0f,2.0f); v.posmtx=3; v.texmtx[0]=60;
+        v.col0[1]=255; v.col0[3]=255; v.col1[3]=255;
+        frame.vertices.push_back(v);
+      }
+      frame.segments.push_back({dc.first_vertex,3,dc.primitive});
+      frame.draws.push_back(dc); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
+    }
+    for(int layer=0;layer<(geometry==49 || geometry==50 || geometry==51 ? 0 : 3);layer++) {
       if (geometry>=10) {
         static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
         const bool alpha_probe=geometry>=40 && geometry<=44;
-        const uint32_t format=alpha_probe?5:geometry<=20?formats[geometry-10]:geometry==32?8:6;
+        const uint32_t format=alpha_probe?5:geometry<=20?formats[geometry-10]:geometry==32?8:geometry==46?1:6;
         const int alpha3=!alpha_probe || geometry==44 ? -1 : geometry==43 || (geometry==42 && layer==1) ? 4 : 0;
         // geometry 39: geometry 16's texture, as a new snapshot every time (the pool evicts).
         const auto texture=fixture_texture(format,layer==1 && (geometry==31 || geometry==32),geometry==33,
                                            geometry>=34 && geometry<=38,geometry==39,alpha3);
-        // Exercise all eight bindings even though the intentionally limited shader uses slot 0.
+        // All eight bindings get the texture, though the fixtures' TEV stages read map 0 only.
         for(auto& t:dc.textures) {
           t=texture;
           if(geometry==35) t.mode0=1; // repeat
           if(geometry==36) t.mode0=2; // mirror
           if(geometry==37) t.mode0=16 | (4u<<5); // linear min/mag, no mip
           if(geometry==38) t.mode0=layer==1 ? 1 : 0; // clamp, repeat, clamp: two sampler keys
+          if(geometry==45) t=gx::TextureRef{};       // untextured
         }
       }
       dc.first_vertex=frame.vertices.size(); dc.first_segment=frame.segments.size(); dc.segment_count=1;
@@ -798,18 +976,20 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         const int k=i<3 ? i : 0;
         gx::Vertex v{}; v.pos[0]=xy[k][0]; v.pos[1]=xy[k][1];
         v.pos[2]=layer==1 ? -0.8f : -0.3f; v.posmtx=3; v.nrm[2]=1;
-        v.col0[layer]=255; v.col0[3]=255; v.col1[3]=255;
+        v.col0[layer]=255; v.col0[3]=255; v.col1[3]=255; v.texmtx[0]=60;
         if(geometry>=10) {
           for(auto& c:v.col0) c=geometry==30?128:255;
+          if(geometry==47) { v.col0[0]=200; v.col0[1]=100; v.col0[2]=50; }
           v.uv[0][0]=((geometry>=34 && geometry<=36) || geometry==38)?1.25f:0.5f; v.uv[0][1]=0.5f;
         }
         frame.vertices.push_back(v);
       }
+      if (geometry==45) dc.tev_colors[1][3]=layer==1 ? 128 : 0;      // one blend: the nearest layer
       frame.segments.push_back({dc.first_vertex,uint32_t(vertices),dc.primitive});
       frame.draws.push_back(dc); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
     }
     gx::EfbCopy copy{}; copy.src_w=640; copy.src_h=480; copy.to_xfb=true;
-    frame.copies.push_back(copy); frame.commands.push_back({gx::FrameCommand::Copy,0});
+    frame.copies.push_back(copy); frame.commands.push_back({gx::FrameCommand::Copy,uint32_t(frame.copies.size()-1)});
     g_webgpu->submit_frame(frame);
   }
   return gx_webgpu_presented();

@@ -83,7 +83,7 @@ if(EMSCRIPTEN)
   target_link_options(melee_core_node PRIVATE -sENVIRONMENT=node -sNODERAWFS=1 -sEXIT_RUNTIME=1)
   # The WebGPU backend exists only in the browser module: Node has no canvas, and the native
   # reference never attaches a backend (native/headless.h, gx_set_backend).
-  target_sources(melee_core_web PRIVATE "${REPO}/wasm/render/gx_webgpu.cpp")
+  target_sources(melee_core_web PRIVATE "${REPO}/wasm/render/gx_webgpu.cpp" "${REPO}/wasm/render/gx_wgsl.cpp")
   # The page's heartbeat (web/src/spike/heartbeat.ts): Node runs have no page to tell.
   target_sources(melee_core_web PRIVATE "${REPO}/wasm/core/heartbeat.cpp" "${REPO}/wasm/core/live_input.cpp")
   target_link_options(melee_core_web PRIVATE -sENVIRONMENT=web,worker -sFORCE_FILESYSTEM=1
