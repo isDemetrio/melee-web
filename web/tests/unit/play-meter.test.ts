@@ -34,7 +34,7 @@ function fakeGpu(costs: Partial<Record<string, number>> = {}) {
   const queue = {
     writeBuffer() { spend('writeBuffer'); throw new Error('buffer destroyed'); },
     writeTexture() { spend('writeTexture'); },
-    submit() { spend('submit'); },
+    submit(_commands: unknown[]) { spend('submit'); },
   };
   const device = {
     queue,
