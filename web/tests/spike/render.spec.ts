@@ -164,7 +164,10 @@ for (const [name, geometry, expected] of [
   ['C8 with RGB565 TLUT', 18, [0, 255, 0, 255]],
   ['C14X2 with RGB565 TLUT', 19, [0, 255, 0, 255]],
   ['CMPR interpolated endpoint', 20, [170, 0, 85, 255]],
-  ['RGBA8 MODULATE including alpha', 30, [64, 32, 16, 96]],
+  // GX's integer MODULATE (gx_wgsl.cpp): a colour of 128 scales by 129/256 and the colour lerp
+  // rounds with +128, so red is (128 * 129 + 128) >> 8 = 65 where a float product gives 64; alpha
+  // has no lerp bias, (192 * 129) >> 8 = 96.
+  ['RGBA8 MODULATE including alpha', 30, [65, 32, 16, 96]],
   ['new image snapshot at the same address/hash', 31, [32, 64, 32, 192]],
   ['new TLUT snapshot at the same address/hash', 32, [255, 0, 0, 255]],
   ['RGBA8 mip 1 with LOD clamps', 33, [128, 192, 32, 192]],

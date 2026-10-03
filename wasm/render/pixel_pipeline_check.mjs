@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// The alpha test and blending of the WebGPU backend (gx_webgpu.cpp, gxw_draw), read back off a real
-// WebGPU device: CI's headless Chromium, the same page, launch flags and readback as
-// web/tests/spike/render.spec.ts. phase0-build.yml runs it after the spike page is built.
+// The pixel pipeline of the WebGPU backend -- the TEV, fog and alpha test gx_wgsl.cpp generates, and
+// the blend state gx_webgpu.cpp sets -- read back off a real WebGPU device: CI's headless Chromium,
+// the same page, launch flags and readback as web/tests/spike/render.spec.ts. phase0-build.yml runs
+// it after the spike page is built. (It was alpha_blend_check.mjs, with probes 15 and 40-44 only.)
 //
 // Why it is not in render.spec.ts: it was written while web/ was being changed by another pull
 // request (#90), and the probes need nothing from web/ but its built page, its static server and its
 // installed Playwright. Moving these cases into render.spec.ts later is a copy, not a rewrite.
 //
-// What it proves. The probes (gx_webgpu_selftest geometry 40-44) draw a magenta RGB5A3 texture
+// What the alpha probes prove. Geometry 40-44 draw a magenta RGB5A3 texture
 // through the real backend; the alpha test, the blend state or the colour write mask must remove it:
 //   - alpha 0 behind a test GREATER 0, or under SRC_ALPHA / INV_SRC_ALPHA blending, and opaque
 //     magenta with colour update off, must leave the clear colour;
@@ -16,7 +17,19 @@
 // A backend that ignores alpha -- the one before this check existed -- draws magenta in every probe;
 // geometry 15 is that magenta texture opaque, with GXInit state, and must still draw it.
 //
-// usage: SPIKE_DIST=<built spike dist> node wasm/render/alpha_blend_check.mjs
+// What the TEV probes prove (geometry 45-48; gx_webgpu_selftest says what each draws). Each is a
+// state the backend drew as vertex colour x texture 0 before the TEV was generated, and each
+// expected pixel is something else: the in-match name tag's plate (KONST colour, alpha from a TEV
+// register, blended) and its glyphs (KONST x an I8 texture), two stages through an unclamped
+// register with a swap table, a scale, a subtraction and per-component compares, and fog. The values
+// are GX's integer arithmetic (gx_wgsl.cpp's transcription of upstream's), computed by hand and by a
+// separate CPU model of the same code.
+//
+// Geometry 49 is not a value: it draws 48 pseudo-random register states per call (192 here), and
+// passes when none of the shaders they generate is rejected. A WGSL generator that emits invalid code
+// for some combination of stages, inputs, compares, swaps, texgens or fog fails it.
+//
+// usage: SPIKE_DIST=<built spike dist> node wasm/render/pixel_pipeline_check.mjs
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +50,14 @@ const PROBES = [
   { geometry: 42, name: 'alpha 146, same blend: one blend over the clear', expected: [160, 55, 228, 193], tolerance: 1 },
   { geometry: 43, name: 'alpha 146, test GREATER 200: discarded', expected: CLEAR },
   { geometry: 44, name: 'opaque magenta, colour update off: not written', expected: CLEAR },
+  // K0 (242,89,89) at alpha 128/255 over (32,128,192,255): 137.4, 108.4, 140.3, alpha 191.3.
+  { geometry: 45, name: 'name tag plate: KONST colour, C0 alpha, blended once', expected: [137, 108, 140, 191], tolerance: 1 },
+  // (242 * 129 + 128) >> 8 = 122, (89 * 129 + 128) >> 8 = 45, alpha (255 * 129) >> 8 = 128.
+  { geometry: 46, name: 'name tag glyphs: KONST x I8 texture, A0 x TEXA', expected: [122, 45, 45, 128] },
+  { geometry: 47, name: 'two stages: unclamped C1, swap, scale, subtract, compares', expected: [23, 0, 0, 223] },
+  // MODULATE (128,64,32,192), then (c * 128 + fog * 128) >> 8 with fog colour (40,240,80).
+  { geometry: 48, name: 'linear fog of density 0.5, C sign at bit 19', expected: [84, 152, 56, 192] },
+  { geometry: 49, name: '192 pseudo-random pixel pipeline states compile', repeats: 4, expected: null },
 ];
 
 const server = spawn(process.execPath, [`${web}scripts/serve.mjs`, '--dir', dist, '--port', String(PORT)],
@@ -51,9 +72,11 @@ const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-
 try {
   const page = await browser.newPage();
   for (const probe of PROBES) {
-    await page.goto(`http://127.0.0.1:${PORT}/spike.html?gx-selftest=ff2080c0&copies=2&target=texture&geometry=${probe.geometry}&sample-x=320`);
+    const repeats = probe.repeats ?? 1;
+    await page.goto(`http://127.0.0.1:${PORT}/spike.html?gx-selftest=ff2080c0&copies=2&target=texture&geometry=${probe.geometry}&sample-x=320&repeats=${repeats}`);
     // Empty, then "running", then the answer: only the answer is JSON.
-    const text = await page.locator('#render').filter({ hasText: /^\{/ }).innerText({ timeout: 110_000 });
+    // The sweep compiles a shader per state on SwiftShader, so it may take minutes, not seconds.
+    const text = await page.locator('#render').filter({ hasText: /^\{/ }).innerText({ timeout: probe.expected ? 110_000 : 420_000 });
     const result = JSON.parse(text);
     const render = result.render ?? {};
     const pixel = render.readback;
@@ -62,9 +85,9 @@ try {
     if (render.attached !== true) problems.push(`not attached (${render.reason})`);
     if (render.failure !== null) problems.push(`backend failure ${render.failure}`);
     if (!Array.isArray(render.errors) || render.errors.length) problems.push(`WebGPU errors ${JSON.stringify(render.errors)}`);
-    if (result.presented !== 3) problems.push(`presented ${result.presented}, want 3`);
+    if (result.presented !== 3 * repeats) problems.push(`presented ${result.presented}, want ${3 * repeats}`);
     const tolerance = probe.tolerance ?? 0;
-    if (!Array.isArray(pixel) || pixel.length !== 4 || pixel.some((v, i) => Math.abs(v - probe.expected[i]) > tolerance)) {
+    if (probe.expected && (!Array.isArray(pixel) || pixel.length !== 4 || pixel.some((v, i) => Math.abs(v - probe.expected[i]) > tolerance))) {
       problems.push(`pixel ${JSON.stringify(pixel)}, want ${JSON.stringify(probe.expected)}${tolerance ? ` +-${tolerance}` : ''}`);
     }
     console.log(`${problems.length ? 'FAIL' : 'ok  '} geometry ${probe.geometry} ${probe.name}: ${JSON.stringify(pixel)}`);
@@ -76,7 +99,7 @@ try {
   server.kill();
 }
 if (failures) {
-  console.error(`${failures} of ${PROBES.length} alpha/blend probes failed`);
+  console.error(`${failures} of ${PROBES.length} pixel pipeline probes failed`);
   process.exit(1);
 }
-console.log(`all ${PROBES.length} alpha/blend probes passed`);
+console.log(`all ${PROBES.length} pixel pipeline probes passed`);
