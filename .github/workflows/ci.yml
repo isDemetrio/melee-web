@@ -14,6 +14,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      checkpoint_build_run:
+        description: 'Optional successful phase0-build run with the private Node artifact; replay 2400 checkpoints using private R2'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -254,3 +259,62 @@ jobs:
           rm -f web/package-lock.json
           git status --porcelain | sed 's/^/  before deploy: /'
           bash scripts/deploy.sh --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+
+  checkpoint-replay:
+    name: 2400-checkpoint replay (private R2, opt-in)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.checkpoint_build_run != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the artifact source matches the code under test
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN: ${{ inputs.checkpoint_build_run }}
+        run: |
+          [[ "$BUILD_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN" > "$RUNNER_TEMP/source-run.json"
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          run = json.loads((Path(os.environ['RUNNER_TEMP']) / 'source-run.json').read_text())
+          assert run['conclusion'] == 'success', 'Source build did not pass'
+          assert run['path'] == '.github/workflows/phase0-build.yml', 'Wrong source workflow'
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              out.write('SOURCE_SHA=' + run['head_sha'] + '\n')
+          PYCODE
+      - name: Check source identity (documentation/workflow-only follow-ups allowed)
+        run: git diff --exit-code "$SOURCE_SHA" HEAD -- native wasm patches upstream web/src
+      - uses: actions/download-artifact@v4
+        with:
+          name: melee-core-wasm-node
+          path: ${{ runner.temp }}/checkpoint-module
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.checkpoint_build_run }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read the existing private disc from R2 (never uploaded as an artifact)
+        working-directory: ${{ runner.temp }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote --file "$RUNNER_TEMP/checkpoint-disc.iso"
+      - name: Replay and verify the full reference digest
+        run: |
+          bash scripts/phase0/run_checkpoints.sh "$RUNNER_TEMP/checkpoint-module/melee_core_node.js" \
+            "$RUNNER_TEMP/checkpoint-disc.iso" "$RUNNER_TEMP/checkpoint-replay" 2400
+          echo "c79c53b9cdf81426fa0277e7497a69e55bc5f571  $RUNNER_TEMP/checkpoint-replay/trace.csv" | sha1sum -c -
+          test "$(wc -l < "$RUNNER_TEMP/checkpoint-replay/trace.csv")" = 2401
+          grep -Fx 'final scene: mode=2 state=2 match_frame=762 (retraces=2400)' "$RUNNER_TEMP/checkpoint-replay/stdout.log"
+          echo "2400 checkpoints: full trace SHA-1 c79c53b9cdf81426fa0277e7497a69e55bc5f571; source $SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove disc and game-derived replay files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/checkpoint-disc.iso" "$RUNNER_TEMP/checkpoint-module" "$RUNNER_TEMP/checkpoint-replay"

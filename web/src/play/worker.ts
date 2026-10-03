@@ -3,7 +3,7 @@ import { openGpu, renderProgress } from '../spike/gpu.js';
 import { heartbeatSender } from '../spike/heartbeat.js';
 import { openCachedDisc, readDiscThrough, type OpfsDirectory, type SyncReadHandle } from './disc-reader.js';
 import { coreSplitOf, CsvTail, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, type FrameRecord,
-  type TailFs } from './frame-meter.js';
+  type TailFs, verifyQueueHooks } from './frame-meter.js';
 import { PRESENTED, readPad } from './shared-pad.js';
 
 interface Core {
@@ -46,6 +46,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     // can and cannot see). The calls themselves are forwarded unchanged.
     const meter = new FrameMeter(new Int32Array(event.data.flight), () => performance.now());
     instrumentGpu(gpu, meter);
+    const queueProbe = await verifyQueueHooks(gpu.device, meter);
     const url = '/spike-core/melee_core_web.js';
     const head = await fetch(url, { method: 'HEAD' });
     if (!head.ok || !head.headers.get('content-type')?.includes('javascript')) {
@@ -99,7 +100,9 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
       printErr: (line: string) => scope.postMessage({ type: 'log', line }),
       gxWebgpu: gpu,
       livePad: () => readPad(shared),
-      heartbeat: (retraces: number) => {
+      heartbeatReturned: (retraces: number) => meter.heartbeatReturned(retraces),
+      heartbeat: (retraces: number, timingRetrace?: number, simMs?: number, csvMs?: number) => {
+        const entered = retraces >= 0 ? performance.now() : 0;
         if (gpu.failure) throw new Error(gpu.failure);
         beat(retraces);
         // The renderer also beats, with -1, before every draw (gx_webgpu.cpp: the spike's stall
@@ -109,7 +112,11 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         let simLines: string[] = [], decoderLines: string[] = [];
         try { simLines = tail(simTail, sim); } catch (error) { tailFailed(simTail!, error); simTail = null; }
         try { decoderLines = tail(decoderTail, decoder); } catch (error) { tailFailed(decoderTail!, error); decoderTail = null; }
-        meter.coreEnd(retraces, matchFrameOf(simLines, retraces), coreSplitOf(decoderLines, retraces));
+        const readDone = performance.now();
+        const coreTiming = timingRetrace === retraces && Number.isFinite(simMs) && Number.isFinite(csvMs)
+          ? { retrace: timingRetrace, simMs: simMs!, csvMs: csvMs! } : null;
+        meter.coreEnd(retraces, matchFrameOf(simLines, retraces), coreSplitOf(decoderLines, retraces),
+          { entered, readDone, core: coreTiming });
         // callMain never yields. Explicit bitmap presentation releases the WebGPU canvas
         // image every retrace, instead of waiting for the worker's task to return.
         const bitmap = canvas.transferToImageBitmap();
@@ -153,7 +160,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         else split = true;
       }
     }
-    scope.postMessage({ type: 'perf-meta', commit, opt, timerResolutionMs: resolution, clockCostNs: clockNs, split, notes,
+    scope.postMessage({ type: 'perf-meta', commit, opt, queueProbe, timerResolutionMs: resolution, clockCostNs: clockNs, split, notes,
       crossOriginIsolated: scope.crossOriginIsolated });
     if (event.data.selftest) {
       if (!core._gx_webgpu_selftest) throw new Error('Core has no renderer selftest');
@@ -162,6 +169,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         // Geometry 1 draws three triangles, so the renderer's per-draw beats run here too.
         core._gx_webgpu_selftest(0xff2080c0, 2, 1);
         options.heartbeat(frame);
+        options.heartbeatReturned(frame);
       }
       flush();
       scope.postMessage({ type: 'ended', exitCode: 0 });

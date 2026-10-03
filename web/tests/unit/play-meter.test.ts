@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COLUMN, coreSplitOf, createFlight, CsvTail, FLIGHT_CALL, FLIGHT_DRAWS, FLIGHT_FRAME, FLIGHT_HIDDEN,
   FLIGHT_MATCH, FLIGHT_PHASE, FRAME_COLUMNS, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, METHODS,
-  PHASES, SLOW_FRAME_MS, type FrameColumn, type FrameRecord, type TailFs } from '../../src/play/frame-meter';
+  PHASES, SLOW_FRAME_MS, verifyQueueHooks, type FrameColumn, type FrameRecord, type TailFs } from '../../src/play/frame-meter';
 
 /** A WebGPU stand-in whose calls take as long as the test says, on the test's clock. */
 function fakeGpu(costs: Partial<Record<string, number>> = {}) {
@@ -233,5 +233,93 @@ describe('core CSV tail', () => {
     const row = ['5', '9', '1', '0', '0', '0', '0', '6.5', '0', '2.5'].join(',');
     expect(coreSplitOf([row], 5)).toEqual({ decodeMs: 6.5, nonDecodeMs: 2.5 });
     expect(coreSplitOf([row], 6)).toBeNull();
+  });
+});
+
+
+describe('retrace reconciliation', () => {
+  it('charges callback tail to the next retrace, leaving unexplained time signed', () => {
+    let now = 0;
+    const meter = new FrameMeter(createFlight(), () => now);
+    meter.start();
+    now = 10;
+    meter.coreEnd(1, 0, null);
+    meter.bitmapDone(); meter.ackDone();
+    const first = meter.cycleEnd();
+    expect(cell(first, 'core_unattributed_ms')).toBeNull();
+    now = 14; // cycleEnd accounting + flush + callback return
+    meter.heartbeatReturned(1);
+    // Next sim=20, CSV=3, uninstrumented native boundaries=2, heartbeat reading=5, finish=1.
+    now = 45;
+    meter.coreEnd(2, 1, null, { entered: 39, readDone: 44, core: { retrace: 2, simMs: 20, csvMs: 3 } });
+    meter.bitmapDone(); meter.ackDone();
+    const second = meter.cycleEnd();
+    expect(cell(second, 'core_ms')).toBe(35);
+    expect(cell(second, 'previous_heartbeat_tail_ms')).toBe(4);
+    expect(cell(second, 'heartbeat_read_ms')).toBe(5);
+    expect(cell(second, 'heartbeat_finish_ms')).toBe(1);
+    expect(cell(second, 'core_unattributed_ms')).toBe(2);
+    now = 46; meter.heartbeatReturned(2);
+    now = 50;
+    meter.coreEnd(3, 2, null, { entered: 49, readDone: 50, core: { retrace: 3, simMs: 4, csvMs: 1 } });
+    meter.bitmapDone(); meter.ackDone();
+    expect(cell(meter.cycleEnd(), 'core_unattributed_ms')).toBe(-2);
+  });
+
+  it('does not assign stale core data or a missing callback return to a retrace', () => {
+    const meter = new FrameMeter(createFlight(), () => 0);
+    meter.start();
+    meter.coreEnd(7, 1, null, { entered: 0, readDone: 0, core: { retrace: 6, simMs: 123, csvMs: 45 } });
+    meter.bitmapDone(); meter.ackDone();
+    const record = meter.cycleEnd();
+    expect(cell(record, 'sim_ms')).toBeNull();
+    expect(cell(record, 'csv_write_ms')).toBeNull();
+    expect(cell(record, 'previous_heartbeat_tail_ms')).toBeNull();
+    expect(cell(record, 'core_unattributed_ms')).toBeNull();
+  });
+});
+
+describe('queue hook verification', () => {
+  function freshQueue() {
+    let now = 0;
+    const meter = new FrameMeter(createFlight(), () => now);
+    class Queue {
+      private brand = true;
+      writeBuffer() { expect(this.brand).toBe(true); now += 2; }
+      writeTexture() { expect(this.brand).toBe(true); now += 3; }
+      submit() { expect(this.brand).toBe(true); now += 4; }
+      async onSubmittedWorkDone() { /* synthetic completion */ }
+    }
+    const device = {
+      get queue() { return new Queue(); },
+      createBuffer() { return { destroy() {} }; },
+      createTexture() { return { destroy() {}, createView() {} }; },
+      createCommandEncoder() { return { finish() { return {}; } }; },
+      pushErrorScope() {},
+      async popErrorScope() { return null; },
+    };
+    return { device, meter };
+  }
+  it('sees every call through a fresh getter and preserves the native receiver', async () => {
+    const { device, meter } = freshQueue();
+    instrumentGpu({ device, context: null }, meter);
+    const probe = await verifyQueueHooks(device, meter);
+    expect(probe.passed).toBe(true);
+    expect(probe.observed).toEqual({
+      'queue.writeBuffer': { calls: 1, ms: 2 },
+      'queue.writeTexture': { calls: 1, ms: 3 },
+      'queue.submit': { calls: 1, ms: 4 },
+    });
+    meter.start();
+    expect(meter.methodSnapshot()['queue.submit']!.calls).toBe(0);
+    device.queue.submit();
+    expect(meter.methodSnapshot()['queue.submit']).toEqual({ calls: 1, ms: 4 });
+  });
+  it('reports a missing hook as failure, not a zero-duration success', async () => {
+    const { device, meter } = freshQueue();
+    const probe = await verifyQueueHooks(device, meter);
+    expect(probe.passed).toBe(false);
+    expect(probe.observed['queue.submit']).toEqual({ calls: 0, ms: 0 });
+    expect(meter.notes.join()).toContain('Queue hook probe failed');
   });
 });

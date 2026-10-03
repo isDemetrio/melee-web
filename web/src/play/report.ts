@@ -14,7 +14,7 @@ import { DECODER_COST_HEADER, decoderCostReport } from '../spike/decoder-cost.js
 import { describeHeartbeat, emptyHeartbeat, LOG_TAIL, receiveBeat, type Beat, type HeartbeatState,
   type StoredHeartbeat } from '../spike/heartbeat.js';
 import { COLUMN, FLIGHT_CALL, FLIGHT_DRAWS, FLIGHT_FRAME, FLIGHT_MATCH, FLIGHT_PHASE, FRAME_COLUMNS, METHODS,
-  PHASES, SLOW_FRAME_MS, type FrameColumn, type FrameRecord, type MethodTotals } from './frame-meter.js';
+  PHASES, SLOW_FRAME_MS, type FrameColumn, type FrameRecord, type MethodTotals, type QueueProbe } from './frame-meter.js';
 
 /** localStorage key of the play page's heartbeat record; the spike's stays apart. */
 export const PLAY_STORAGE_KEY = 'melee-play-heartbeat';
@@ -37,12 +37,15 @@ export const NOT_MEASURED = [
   'Calls shorter than timer_resolution_ms read as 0 or one tick; the per-method totals are sums of such reads.',
   'The meter\'s own cost is inside core_ms: about 2 x webgpu_calls x clock_cost_ns per frame (estimated_meter_ms in the summary).',
   'When a presented frame reaches the screen: ack_ms ends when the page has handed the bitmap to its canvas, not when the compositor shows it.',
+  'Residual timing adds three JS clock reads and one steady_clock read per retrace; their cost is included, not subtracted. estimated_residual_clock_ms estimates only these clock reads using the JS calibration, not wrappers, CSV work, internal profiler reads or scheduling.',
+  'core_ms = sim_ms + previous_heartbeat_tail_ms + csv_write_ms + heartbeat_read_ms + heartbeat_finish_ms + core_unattributed_ms. Signed residual is not clamped; absent/mismatched core telemetry and the first frame have null residual. WebGPU/disc are overlapping submeasurements, not additional phases.',
   'WebGPU calls made before the first frame (the backend attaching) are not counted.',
   'sampled_phases and freezes are read on the page\'s animation frames (about 60 Hz, nearest frame): they can alias with the worker, which is also paced at 60 Hz, and they stop while the page\'s main thread is blocked.',
   'Frames while the page was hidden are kept in frames_csv (hidden = 1) but left out of every summary.',
 ];
 
 export interface PerfMeta {
+  queueProbe?: QueueProbe;
   commit: string | null;
   opt: string | null;
   timerResolutionMs: number;
@@ -133,7 +136,8 @@ export function motive(row: Row, top: FrameRecord['top'] | null, split: boolean)
 }
 
 const TIMING: FrameColumn[] = ['cycle_ms', 'core_ms', 'webgpu_ms', 'resources_ms', 'encode_ms', 'queue_ms', 'present_ms',
-  'disc_ms', 'bitmap_ms', 'ack_ms', 'idle_ms'];
+  'disc_ms', 'bitmap_ms', 'ack_ms', 'idle_ms', 'sim_ms', 'previous_heartbeat_tail_ms', 'csv_write_ms',
+  'heartbeat_read_ms', 'heartbeat_finish_ms', 'core_unattributed_ms'];
 const COUNTS: FrameColumn[] = ['webgpu_calls', 'draws', 'created', 'pipelines_created', 'disc_bytes'];
 const OVER_MS = [20, 33.4, 50, 100, 250, 1000];
 
@@ -155,7 +159,8 @@ export function summarize(rows: Row[], inMatch: boolean, split: boolean, clockCo
   const timing = split ? [...TIMING, 'decode_ms', 'non_decode_ms'] as FrameColumn[] : TIMING;
   const per_frame: Record<string, ReturnType<typeof simTimeStats> | null> = {};
   for (const column of timing) {
-    const measured = selected.filter((row) => row[COLUMN[column]] !== null);
+    const measured = selected.filter((row) => row[COLUMN[column]] != null);
+    if (!measured.length) { per_frame[column] = null; continue; }
     // The spike's statistics, fed the spike's CSV shape: one row per frame, match_frame decides in-match.
     const csv = 'retrace,sim_ms,match_frame\n' + measured.map((row) =>
       `${value(row, 'retrace')},${value(row, column)},${value(row, 'match_frame')}`).join('\n');
@@ -176,13 +181,26 @@ export function summarize(rows: Row[], inMatch: boolean, split: boolean, clockCo
   const webgpu_percent = { resources: share(sum('resources_ms')), encode: share(sum('encode_ms')),
     queue: share(sum('queue_ms')), present: share(sum('present_ms')) };
   const meanCalls = sum('webgpu_calls') / selected.length;
+  const reconciliationColumns: FrameColumn[] = ['cycle_ms', 'core_ms', 'sim_ms', 'previous_heartbeat_tail_ms',
+    'csv_write_ms', 'heartbeat_read_ms', 'heartbeat_finish_ms', 'core_unattributed_ms', 'bitmap_ms', 'ack_ms', 'idle_ms'];
+  const matched = selected.filter((row) => reconciliationColumns.every((column) => row[COLUMN[column]] != null));
+  const absoluteResidual = matched.map((row) => Math.abs(value(row, 'core_unattributed_ms')));
+  const reconciliation = {
+    matched_frames: matched.length, excluded_frames: selected.length - matched.length,
+    mean_ms: matched.length ? Object.fromEntries(reconciliationColumns.map((column) => [column,
+      round(matched.reduce((total, row) => total + value(row, column), 0) / matched.length)])) : null,
+    unattributed_abs_mean_ms: matched.length ? round(absoluteResidual.reduce((a, b) => a + b, 0) / matched.length) : null,
+    unattributed_abs_p95_ms: matched.length ? nearestRank(absoluteResidual, 0.95) : null,
+    unattributed_abs_max_ms: matched.length ? Math.max(...absoluteResidual) : null,
+  };
   return {
     rows: label, frames: selected.length, seconds: round(total / 1000, 1),
     fps: total > 0 ? round(selected.length / (total / 1000), 1) : null,
     percent_of_time: percent, webgpu_percent_of_time: webgpu_percent,
     ...(split ? { core_split_percent_of_time: { decode: share(sum('decode_ms')), non_decode: share(sum('non_decode_ms')) } } : {}),
     frames_over_ms: Object.fromEntries(OVER_MS.map((ms) => [String(ms), selected.filter((row) => value(row, 'cycle_ms') > ms).length])),
-    per_frame, counts,
+    per_frame, counts, reconciliation,
+    estimated_residual_clock_ms: clockCostNs === null ? null : round(4 * clockCostNs / 1e6, 6),
     estimated_meter_ms: clockCostNs === null ? null : round((2 * meanCalls * clockCostNs) / 1e6),
   };
 }
@@ -364,6 +382,7 @@ export class PlayReport {
       core_split: split, core_split_requested: this.requestedSplit,
       frames_total: this.framesTotal, frames_kept: rows.length, slow_frame_ms: SLOW_FRAME_MS, freeze_ms: FREEZE_MS,
       summary: { all: summarize(rows, false, split, clock, errors), in_match: summarize(rows, true, split, clock, errors) },
+      queue_probe: this.meta?.queueProbe ?? null,
       webgpu_methods: this.totals,
       slow_frames: { total: this.slowTotal, kept: this.worstSlow(SLOW_FRAMES_KEPT) },
       freezes: { total: this.freezesTotal, kept: this.freezes },
@@ -398,7 +417,8 @@ export class PlayReport {
         core_split: split, last_600_frames: summarize(this.rows.slice(-600), false, split, this.meta?.clockCostNs ?? null, errors),
         slow_frames: { total: this.slowTotal, worst: this.worstSlow(20) },
         freezes: { total: this.freezesTotal, last: this.freezes.slice(-20) },
-        webgpu_methods: this.totals, notes: this.notes, errors,
+        queue_probe: this.meta?.queueProbe ?? null,
+      webgpu_methods: this.totals, notes: this.notes, errors,
       },
     };
   }

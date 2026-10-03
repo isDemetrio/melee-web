@@ -2942,3 +2942,13 @@ scenarios, not device measurements; no evidence yet for 60 fps with four players
 local builds/tests, game execution, or game data added; the concurrent TEV file was only read.
 Next: review the decision with the operator and choose one experiment. Every implementation must
 retain the 2400-checkpoint trace, verify rendering separately, and win on the operator's phone.
+
+## 2026-10-03 — residual attribution instrumentation
+
+Branch `perf/attribute-residual`: added retrace-tagged native CSV duration, previous
+callback tail and heartbeat read/finish intervals without moving external clocks.
+Reports retain existing fields and explicitly summarize matched signed/absolute
+residuals. Queue prototype coverage and a pre-game known submission expose counts,
+times and validation status. Details: [ATTRIBUTE_RESIDUAL](ATTRIBUTE_RESIDUAL.md).
+No renderer changes or optimizations. Actions/page verification pending; phone live
+residual and the 2400-checkpoint replay need operator evidence / runner disc access.
