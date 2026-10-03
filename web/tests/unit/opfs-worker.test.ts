@@ -270,7 +270,7 @@ describe('OpfsDiscStore', () => {
     expect(waits).toEqual([50, 100]);
     // A game running in another tab holds it for good: reported, not waited out for ever.
     file.heldElsewhere = { name: 'NoModificationAllowedError', attempts: Infinity };
-    await expect(store.length()).rejects.toThrow(/held by another sync access handle, still after 3150 ms/);
+    await expect(store.length()).rejects.toThrow(/held by another sync access handle, still after 10000 ms/);
     expect(file.maxOpen).toBe(1);
   });
 

@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { HANDOFF_WAITS_MS, isHandleHeld, openSyncHandle } from '../../src/spike/sync-handle';
+import { HANDOFF_BUDGET_MS, handoffWait, isHandleHeld, openSyncHandle } from '../../src/spike/sync-handle';
 
 const named = (name: string) => Object.assign(new Error(`${name} from the platform`), { name });
 
-/** A file whose first `refusals` opens fail with the given errors, and a wait that only records. */
-function heldFile(refusals: Error[]) {
+/**
+ * A file whose first opens fail with `refusals` (every open with `forever`), and a wait that only
+ * records.
+ */
+function heldFile(refusals: Error[], forever: Error | null = null) {
   let opens = 0;
   const handle = { id: 'handle' };
   const waits: number[] = [];
   return {
     file: {
       async createSyncAccessHandle() {
-        const refusal = refusals[opens++];
+        const refusal = forever ?? refusals[opens];
+        opens++;
         if (refusal) throw refusal;
         return handle;
       },
@@ -39,20 +43,22 @@ describe('openSyncHandle', () => {
   it('waits out a handle that is being released, longer each time', async () => {
     const held = heldFile([named('InvalidStateError'), named('NoModificationAllowedError'), named('InvalidStateError')]);
     expect(await openSyncHandle(held.file, held.wait)).toBe(held.handle);
-    expect(held.waits).toEqual(HANDOFF_WAITS_MS.slice(0, 3));
+    expect(held.waits).toEqual([50, 100, 200]);
     expect(held.opens()).toBe(4);
+    expect([3, 4, 40].map(handoffWait)).toEqual([250, 250, 250]);
   });
 
-  it('reports a file held for longer than the waits, with the platform\'s error as the cause', async () => {
+  it('reports a file held for longer than the budget, with the platform\'s error as the cause', async () => {
     const refusal = named('InvalidStateError');
-    const held = heldFile(Array.from({ length: HANDOFF_WAITS_MS.length + 1 }, () => refusal));
-    const total = HANDOFF_WAITS_MS.reduce((sum, ms) => sum + ms, 0);
-    expect(total).toBe(3150);
+    const held = heldFile([], refusal);
     const error = await openSyncHandle(held.file, held.wait).then(() => null, (reason: unknown) => reason);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(new RegExp(`held by another sync access handle, still after ${total} ms`));
+    expect((error as Error).message).toMatch(new RegExp(`held by another sync access handle, still after ${HANDOFF_BUDGET_MS} ms`));
     expect((error as Error).cause).toBe(refusal);
-    expect(held.waits).toEqual(HANDOFF_WAITS_MS);
+    expect(held.waits.reduce((sum, ms) => sum + ms, 0)).toBe(HANDOFF_BUDGET_MS);
+    expect(held.waits.slice(0, 4)).toEqual([50, 100, 200, 250]);
+    expect(Math.max(...held.waits)).toBe(250);
+    expect(held.opens()).toBe(held.waits.length + 1);
   });
 
   it('passes any other failure on at once', async () => {
