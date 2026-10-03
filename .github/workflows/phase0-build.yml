@@ -237,6 +237,13 @@ jobs:
           set -euo pipefail
           npx playwright install --with-deps chromium
           npx playwright test -c playwright.spike.config.ts
+      # The backend's alpha test and blending, read back off the same Chromium WebGPU device with
+      # the same page (probes 40-44 of gx_webgpu_selftest). The script says why it is not a case in
+      # render.spec.ts yet.
+      - name: Alpha test and blending in Chromium (no ISO)
+        env:
+          SPIKE_DIST: ${{ runner.temp }}/spike-dist
+        run: node wasm/render/alpha_blend_check.mjs
       - name: Numeric compilation report (also on failure)
         if: always()
         run: |

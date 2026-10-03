@@ -6,8 +6,8 @@
 // source rectangle to the canvas, then a copy with `clear` set clears the EFB to its clear colour.
 // So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console.
 //
-// Geometry uses a baseline shader with snapshot texture-0 MODULATE.
-// Lighting, texgen and full TEV remain open. Clears cover the whole EFB;
+// Geometry uses a baseline shader with snapshot texture-0 MODULATE, then GX's alpha test and blend
+// state (gxw_draw). Lighting, texgen and full TEV remain open. Clears cover the whole EFB;
 // half-scale, Y scale, gamma and copy formats remain open (priorities 2-5).
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
@@ -80,7 +80,8 @@ EM_JS(int, gxw_open, (int width, int height), {
     // arenas: each draw of a batch appends its data at its own offset to a staging copy, and the
     // batch writes them with one writeBuffer each just before its single submit (gpu.flush).
     const align = (gpu.device.limits && gpu.device.limits.minUniformBufferOffsetAlignment) || 256;
-    gpu.uniformStride = Math.ceil(105*16/align)*align;
+    // 106 float4 rows per draw (draw_segment's `u`).
+    gpu.uniformStride = Math.ceil(106*16/align)*align;
     gpu.uniforms = gpu.device.createBuffer({size:UNIFORM_SLOTS*gpu.uniformStride,
       usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
     gpu.uniformStaging = new Uint8Array(UNIFORM_SLOTS*gpu.uniformStride);
@@ -277,8 +278,24 @@ EM_JS(int, gxw_texture_count, (), {
 // group a miss would create. Bounded like the samplers, least recently used dropped (to garbage
 // collection): 1024, above the 817 distinct keys of a measured 2400-frame run (<=164 per frame),
 // where 256 missed 2383 times. The pipeline key keeps only the bits the pipeline descriptor reads.
+//
+// Alpha test and blending. `bp` is the draw's BP register file. Until this was read, no pipeline
+// had blend state and the fragment shader never looked at alpha, so every fragment was written:
+// what the game draws to be invisible -- alpha 0 behind each glyph of a menu font, a quad whose
+// vertex alpha the blend makes faint -- was drawn opaque. Both follow Dolphin's VideoCommon
+// (AlphaTest in PixelShaderGen, BlendingState::Generate), as does upstream's gx_shader.cpp:
+//   - ALPHACOMPARE (0xF3): two comparisons of the fragment alpha, as an 8-bit integer, against two
+//     references, joined by AND/OR/XOR/XNOR; a fragment that fails is discarded, so it writes
+//     neither colour nor depth. A test that always passes generates no code.
+//   - BLENDMODE (0x41): blend enable, factors, subtract (dst - src, factors ignored), colour and
+//     alpha update. Without an alpha channel in the EFB (ZCOMPARE pixel format other than
+//     RGBA6_Z24) destination alpha reads as 1 and alpha is not written.
+// Not here: logic ops (no WebGPU equivalent; a draw with only the logic op enabled is a plain
+// write), dither, destination constant alpha (0x42), and early depth (ZCOMPARE bit 6: GX tests and
+// writes depth before the alpha test, so a discarded fragment still writes depth there).
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
-                     const float* constants, const float* raster, int lines, int cull, int zmode, int components), {
+                     const float* constants, const float* raster, int lines, int cull, int zmode, int components,
+                     const uint32_t* bp), {
   const gpu = Module["gxWebgpu"];
   const BIND_GROUP_CACHE_LIMIT = 1024, ARENA_GROWTH_LIMIT = 16 << 20;
   // Draws recorded (heartbeat.ts reports it).
@@ -290,9 +307,37 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
     const d = gpu.device;
     const r = HEAPF32.slice(raster >> 2, (raster >> 2) + 10);
     components &= 1024 | 8192 | 16384; zmode &= 31;
-    const key = [lines,cull,zmode,components].join(":");
+    const blendmode = HEAPU32[(bp >> 2) + 0x41], alphaCompare = HEAPU32[(bp >> 2) + 0xF3];
+    const efbAlpha = (HEAPU32[(bp >> 2) + 0x43] & 7) === 1 ? 1 : 0;   // RGBA6_Z24
+    // Enable, colour/alpha update, and -- only when blending -- the factors and subtract.
+    const blendBits = blendmode & 1 ? blendmode & 0xFF9 : blendmode & 0x18;
+    const alphaOps = (alphaCompare >>> 16) & 0xFF;
+    const key = [lines,cull,zmode,components,blendBits,alphaOps,efbAlpha].join(":");
     let pipeline = gpu.pipelines.get(key);
     if (!pipeline) {
+      // AlphaTest::TestResult: whether the two comparisons decide the test whatever the alpha is.
+      const c0 = alphaOps & 7, c1 = (alphaOps >>> 3) & 7, logic = alphaOps >>> 6;
+      const a7 = c0 === 7, b7 = c1 === 7, a0 = c0 === 0, b0 = c1 === 0;
+      const pass = [a7 && b7, a7 || b7, (a7 && b0) || (a0 && b7), (a7 && b7) || (a0 && b0)][logic];
+      const compare = (c, ref) => ["false",`testAlpha < ${ref}`,`testAlpha == ${ref}`,`testAlpha <= ${ref}`,
+        `testAlpha > ${ref}`,`testAlpha != ${ref}`,`testAlpha >= ${ref}`,"true"][c];
+      // The comment is read by tools that replay these pipelines (it names the uniform row too).
+      const alphaTest = pass ? "" : `// alpha test: ${c0} ${logic} ${c1} row 105
+  let testAlpha = i32(round(clamp(color.a, 0.0, 1.0) * 255.0));
+  let testRef = vec2i(u.rows[105].xy);
+  if (!((${compare(c0,"testRef.x")})${[" && "," || "," != "," == "][logic]}(${compare(c1,"testRef.y")}))) { discard; }`;
+      // GX source and destination factors, in BLENDMODE order.
+      const src = ["zero","one","dst","one-minus-dst","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
+      const dst = ["zero","one","src","one-minus-src","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
+      const noDstAlpha = (f) => efbAlpha ? f : f === "dst-alpha" ? "one" : f === "one-minus-dst-alpha" ? "zero" : f;
+      let blend;
+      if (blendBits & 1) {
+        const c = blendBits & 0x800 ? {srcFactor:"one",dstFactor:"one",operation:"reverse-subtract"}
+          : {srcFactor:noDstAlpha(src[(blendBits >>> 8) & 7]),dstFactor:noDstAlpha(dst[(blendBits >>> 5) & 7]),operation:"add"};
+        blend = {color:c, alpha:c};
+      }
+      // GPUColorWrite: RED|GREEN|BLUE = 7, ALPHA = 8.
+      const writeMask = (blendBits & 8 ? 7 : 0) | (blendBits & 16 && efbAlpha ? 8 : 0);
       const attributes = [
         {shaderLocation:0,offset:0,format:"float32x3"},
         {shaderLocation:1,offset:12,format:"float32x3"},
@@ -302,7 +347,7 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
       for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
       // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
       const code = `
-struct Constants { rows: array<vec4f, 105> }
+struct Constants { rows: array<vec4f, 106> }
 @group(0) @binding(0) var<uniform> u: Constants;
 ${Array.from({length:8}, (_,n) => `@group(0) @binding(${1+2*n}) var tex${n}: texture_2d<f32>;
 @group(0) @binding(${2+2*n}) var samp${n}: sampler;`).join("\n")}
@@ -334,12 +379,13 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
 @fragment fn fs(i: Out) -> @location(0) vec4f {
   let color = i.color * textureSampleBias(tex0,samp0,i.uv,u.rows[103].x);
   if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
+  ${alphaTest}
   return color;
 }`;
       const shader = d.createShaderModule({code});
       pipeline = d.createRenderPipeline({layout:gpu.pipelineLayout,
         vertex:{module:shader,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
-        fragment:{module:shader,entryPoint:"fs",targets:[{format:gpu.format}]},
+        fragment:{module:shader,entryPoint:"fs",targets:[blend ? {format:gpu.format,blend,writeMask} : {format:gpu.format,writeMask}]},
         primitive:{topology:lines ? "line-list":"triangle-list",frontFace:"cw",cullMode:["none","back","front","back"][cull]},
         depthStencil:{format:"depth32float",depthWriteEnabled:!!((zmode&1)&&(zmode&16)),
           depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}});
@@ -379,7 +425,7 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     let group = gpu.bindGroups.get(groupKey);
     if (group) gpu.bindGroups.delete(groupKey);
     else {
-      const entries = [{binding:0,resource:{buffer:gpu.uniforms,size:105*16}}];
+      const entries = [{binding:0,resource:{buffer:gpu.uniforms,size:106*16}}];
       for (let i=0;i<8;i++) {
         entries.push({binding:1+2*i,resource:gpu.slots[i].entry.view});
         entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
@@ -398,12 +444,12 @@ struct Out { @builtin(position) pos: vec4f, @location(0) color: vec4f,
     }
     const pass = batch.pass, state = batch.state;
     // Consecutive segments of one GX draw have the same constants: they share one slot.
-    const words = gpu.uniformWords, base = constants >> 2, n = 105*4;
+    const words = gpu.uniformWords, base = constants >> 2, n = 106*4;
     let offset = (batch.uniformSlots - 1)*stride, same = batch.uniformSlots > 0;
     for (let i = 0, at = offset >> 2; same && i < n; i++) same = words[at+i] === HEAPU32[base+i];
     if (!same) {
       offset = batch.uniformSlots*stride;
-      gpu.uniformStaging.set(HEAPU8.subarray(constants,constants+105*16),offset);
+      gpu.uniformStaging.set(HEAPU8.subarray(constants,constants+106*16),offset);
       batch.uniformSlots++;
     }
     const baseVertex = batch.vertexBytes/108, firstIndex = batch.indexBytes/4;
@@ -529,7 +575,7 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
   float vp[6], proj[6];
   std::memcpy(vp, dc.xf_regs+0x1A, sizeof vp); std::memcpy(proj, dc.xf_regs+0x20, sizeof proj);
   if (!std::isfinite(vp[0]) || !std::isfinite(vp[1]) || vp[0] == 0 || vp[1] == 0) return true;
-  float u[105][4] = {};
+  float u[106][4] = {};
   u[0][0]=proj[0]; u[1][1]=proj[2]; u[2][2]=proj[4]; u[2][3]=proj[5];
   if (dc.xf_regs[0x26] == 0) { u[0][2]=proj[1]; u[1][2]=proj[3]; u[3][2]=-1; }
   else { u[0][3]=proj[1]; u[1][3]=proj[3]; u[3][3]=1; }
@@ -556,9 +602,12 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
     const auto& t=dc.textures[i];
     u[103+i/4][i%4]=t.used ? float(gx::sbits(t.mode0,9,8))/32.0f : 0;
   }
+  // The alpha test's two 8-bit references (gxw_draw reads the comparisons from `bp`).
+  const uint32_t alpha_compare=dc.bp.alpha_test();
+  u[105][0]=float(gx::bits(alpha_compare,0,8)); u[105][1]=float(gx::bits(alpha_compare,8,8));
   if (!upload_textures(dc)) return false;
   return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
-                  &u[0][0],r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),dc.components);
+                  &u[0][0],r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),dc.components,dc.bp.reg);
 }
 
 
@@ -625,11 +674,15 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_presented() {
 //
 // Like the decoder's TextureSnapshotCache, the same bytes come back as the same snapshot, unless
 // `fresh` asks for a new one (geometry 39: a new snapshot of unchanged bytes is a new content).
-static gx::TextureRef fixture_texture(uint32_t format, bool changed=false, bool mips=false, bool pattern=false, bool fresh=false) {
+//
+// `alpha3` >= 0 makes the RGB5A3 texels magenta with that 3-bit alpha (0 is fully transparent)
+// instead of opaque magenta: the geometry 40-44 probes of the alpha test and blending.
+static gx::TextureRef fixture_texture(uint32_t format, bool changed=false, bool mips=false, bool pattern=false, bool fresh=false,
+                                      int alpha3=-1) {
   gx::TextureRef t; t.used=true; t.addr=0x1000; t.width=8; t.height=8;
   t.format=format; t.tlut_format=1; t.mip_levels=mips?4:1;
   static std::unordered_map<uint32_t, std::shared_ptr<const gx::TextureSnapshot>> made;
-  const uint32_t id=format | uint32_t(changed)<<8 | uint32_t(mips)<<9 | uint32_t(pattern)<<10;
+  const uint32_t id=format | uint32_t(changed)<<8 | uint32_t(mips)<<9 | uint32_t(pattern)<<10 | uint32_t(alpha3+1)<<11;
   if (!fresh) if (const auto found=made.find(id); found!=made.end()) { t.data=found->second; if(mips) { t.mode0=1u<<5; t.mode1=(16u<<8)|16u; } return t; }
   auto data=std::make_shared<gx::TextureSnapshot>();
   const size_t palette_bytes=format==8?32:format==9?512:format==10?32768:0;
@@ -646,7 +699,7 @@ static gx::TextureRef fixture_texture(uint32_t format, bool changed=false, bool 
       if(format==2) p[i]=0xA8;
       if(format==3) p[i]=(i%2)?128:192;
       if(format==4) p[i]=(i%2)?0xE0:0x07;
-      if(format==5) p[i]=(i%2)?0x1F:0xFC;
+      if(format==5) p[i]=alpha3<0 ? ((i%2)?0x1F:0xFC) : ((i%2)?0x0F:uint8_t(alpha3<<4 | 0x0F)); // 0aaaRRRRGGGGBBBB
       if(format==6) {
         // 4x4 tiles: AR plane followed by GB plane.
         const size_t k=i%64;
@@ -698,16 +751,35 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     dc.normalMatrices[9]=1; dc.normalMatrices[13]=1; dc.normalMatrices[17]=1;
     dc.bp.reg[gx::BP_SCISSORBR]=(639u<<12)|479u;
     dc.bp.reg[gx::BP_ZMODE]=1|2|16; // GX LESS -> reversed GREATER, writes enabled.
+    // What GXInit leaves, which a zeroed BP is not: the alpha test passes (ALWAYS and ALWAYS; zero
+    // is NEVER), colour and alpha are written, no blending. The EFB keeps alpha (RGBA6_Z24), so the
+    // probes above read back the alpha they draw.
+    dc.bp.reg[gx::BP_ALPHACOMPARE]=(7u<<16)|(7u<<19);
+    dc.bp.reg[gx::BP_BLENDMODE]=8|16;
+    dc.bp.reg[gx::BP_ZCOMPARE]=1;
+    // Alpha test and blending, on a magenta RGB5A3 texture (fixture_texture's `alpha3`). Every
+    // expected pixel differs from opaque magenta, which is what a backend ignoring alpha draws.
+    //   40: alpha 0, test GREATER 0 -> discarded: the clear colour.
+    //   41: alpha 0, blend SRC_ALPHA / INV_SRC_ALPHA -> the clear colour.
+    //   42: as 41, but the nearest layer (1) has alpha 146 -> one blend of magenta over the clear.
+    //   43: alpha 146, test GREATER 200 -> discarded: the reference is read, not assumed to be 0.
+    //   44: opaque magenta with colour update off (alpha update only) -> the clear colour.
+    if (geometry==40) dc.bp.reg[gx::BP_ALPHACOMPARE]=(4u<<16)|(7u<<19);
+    if (geometry==41 || geometry==42) dc.bp.reg[gx::BP_BLENDMODE]=1|8|16|(5u<<5)|(4u<<8);
+    if (geometry==43) dc.bp.reg[gx::BP_ALPHACOMPARE]=(4u<<16)|(7u<<19)|200u;
+    if (geometry==44) dc.bp.reg[gx::BP_BLENDMODE]=16;
     if (geometry==2) dc.bp.reg[gx::BP_SCISSORBR]=(159u<<12)|479u;
     if (geometry==3) dc.bp.reg[gx::BP_GENMODE]=2u<<14; // front cull (clockwise triangle)
     const float xy[3][2]={{-0.9f,-0.6f},{-0.5f,0.6f},{-0.1f,-0.6f}};
     for(int layer=0;layer<3;layer++) {
       if (geometry>=10) {
         static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
-        const uint32_t format=geometry<=20?formats[geometry-10]:geometry==32?8:6;
+        const bool alpha_probe=geometry>=40 && geometry<=44;
+        const uint32_t format=alpha_probe?5:geometry<=20?formats[geometry-10]:geometry==32?8:6;
+        const int alpha3=!alpha_probe || geometry==44 ? -1 : geometry==43 || (geometry==42 && layer==1) ? 4 : 0;
         // geometry 39: geometry 16's texture, as a new snapshot every time (the pool evicts).
         const auto texture=fixture_texture(format,layer==1 && (geometry==31 || geometry==32),geometry==33,
-                                           geometry>=34 && geometry<=38,geometry==39);
+                                           geometry>=34 && geometry<=38,geometry==39,alpha3);
         // Exercise all eight bindings even though the intentionally limited shader uses slot 0.
         for(auto& t:dc.textures) {
           t=texture;
