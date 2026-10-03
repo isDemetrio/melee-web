@@ -7,6 +7,7 @@ on:
       - 'patches/**'
       - 'EMSDK_VERSION'
       - 'scripts/apply_patches.sh'
+      - 'scripts/phase0/compare_wasm_arch.py'
       - '.github/workflows/wasm-probe.yml'
       - 'docs/UPSTREAM_PIN.md'
       - 'upstream/melee-unlocked'
@@ -95,6 +96,21 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write('Benchmark (no performance threshold):\n```json\n' + output + '```\n')
           PY
+      - name: Publish the module and its x86 digests for the arm64 job
+        shell: bash
+        run: |
+          # The arm64 job runs *this* module rather than building its own: two builds would
+          # differ in the toolchain as well as in the engine, and the engine is the question.
+          cp wasm-probe/wasm.sha256 wasm-probe/out/wasm/x86-wasm.sha256
+          cp wasm-probe/native.sha256 wasm-probe/out/wasm/x86-native.sha256
+          cp wasm-probe/bench.json wasm-probe/out/wasm/x86-bench.json
+          du -sh wasm-probe/out/wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-probe-module
+          path: wasm-probe/out/wasm
+          if-no-files-found: error
+          retention-days: 3
       - name: Classify FMA divergences and gate
         shell: bash
         run: |
@@ -200,4 +216,81 @@ jobs:
             wasm-probe/*-bench.json
             wasm-probe/*.sha256
             wasm-probe/fma-divergence.txt
+          if-no-files-found: warn
+
+  # The browser-to-browser question, which the native-vs-WASM comparison above does not
+  # answer: the peers of a netcode match are WASM engines on different machines, not this
+  # one Node build. The default NaN on ARM is positive where on x86 it is negative, so a
+  # NaN sign difference is the candidate this job exists to look for (wasm/README.md,
+  # "Next measurements" 2; docs/OPEN_QUESTIONS.md Q7).
+  #
+  # It runs the module the x86 job built instead of building its own: two builds would
+  # differ in the toolchain as well as in the engine, and the engine is the question.
+  # ubuntu-24.04-arm is a standard GitHub-hosted runner, listed for public and private
+  # repositories alike (docs.github.com, "GitHub-hosted runners reference"); on this
+  # repository, which is public, a run costs no minutes.
+  probe-arm64:
+    needs: probe
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-probe-module
+          path: wasm-probe/out/wasm
+      - name: Runner and engine version
+        shell: bash
+        run: |
+          uname -m
+          nproc
+          free -m
+          node --version
+      - name: Run the same WASM modules on arm64
+        shell: bash
+        run: |
+          cd wasm-probe/out/wasm
+          # The corpus: the same 8,000,000 results, hashed in the same order and byte order,
+          # so the two digests are comparable by construction.
+          node fma_vectors.js --dump ../arm64.bin > ../arm64-wasm.sha256
+          node bench.js > ../arm64-wasm-bench.json
+          # The upstream tests and the shim test, unchanged, under this engine.
+          for test in fma_shim_test port_load_test ram_watch_test ax_ucode_test texture_snapshot_test; do
+            echo "== ${test}"
+            node "${test}.js"
+          done
+      - name: Compare the two architectures
+        shell: bash
+        run: |
+          # Both engine versions come from the runs, not from here: two Node versions would
+          # make this a comparison between engines rather than between architectures.
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          root = pathlib.Path('wasm-probe')
+          result = {
+              'node': subprocess.check_output(['node', '--version'], text=True).strip(),
+              'wasm': json.loads((root / 'arm64-wasm-bench.json').read_text()),
+          }
+          (root / 'arm64-bench.json').write_text(json.dumps(result, indent=2) + '\n')
+          PY
+          python3 scripts/phase0/compare_wasm_arch.py \
+            --x86-wasm wasm-probe/out/wasm/x86-wasm.sha256 \
+            --x86-native wasm-probe/out/wasm/x86-native.sha256 \
+            --x86-bench wasm-probe/out/wasm/x86-bench.json \
+            --arm64-wasm wasm-probe/arm64-wasm.sha256 \
+            --arm64-bench wasm-probe/arm64-bench.json \
+            --out wasm-probe/arm64-parity.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wasm-probe-arm64
+          path: |
+            wasm-probe/arm64-parity.txt
+            wasm-probe/arm64-bench.json
+            wasm-probe/arm64-wasm.sha256
           if-no-files-found: warn
