@@ -510,7 +510,7 @@ std::string generate_uber_wgsl() {
 }
 // Word k of the draw's ShaderUid (fill_uid_rows).
 fn uid(k: u32) -> u32 { return u32(u.rows[$ROW_UID + k / 4u][k % 4u]); }
-fn field(v: u32, lo: u32, n: u32) -> u32 { return (v >> lo) & ((1u << n) - 1u); }
+fn bitfield(v: u32, lo: u32, n: u32) -> u32 { return (v >> lo) & ((1u << n) - 1u); }
 
 // gen_lighting's `matsource` branch: the vertex's colour j, else colour 0, else white.
 fn vertex_colour(components: u32, j: u32, color0: vec4f, color1: vec4f) -> vec4f {
@@ -563,14 +563,14 @@ fn vertex_colour(components: u32, j: u32, color0: vec4f, color1: vec4f) -> vec4f
   var tc = array<vec3f, 8>();
   for (var i = 0u; i < ntex; i++) {
     let info = uid($U_TEXGEN + i);
-    let row = field(info, 7u, 5u);
-    let kind = field(info, 4u, 3u);
-    let projection = field(info, 1u, 1u) != 0u;
+    let src_row = bitfield(info, 7u, 5u);
+    let kind = bitfield(info, 4u, 3u);
+    let projection = bitfield(info, 1u, 1u) != 0u;
     var coord = vec4f(0.0, 0.0, 1.0, 1.0);
-    if (row == 0u) { coord = vec4f(position, 1.0); }
-    else if (row == 1u) { if ((components & $NRM0) != 0u) { coord = vec4f(normal, 1.0); } }
-    else if (row >= 5u && row <= 12u && (components & ($UV0 << (row - 5u))) != 0u) { coord = vec4f(rawtex[row - 5u], 1.0, 1.0); }
-    if (field(info, 2u, 1u) == 0u) { coord.z = 1.0; }
+    if (src_row == 0u) { coord = vec4f(position, 1.0); }
+    else if (src_row == 1u) { if ((components & $NRM0) != 0u) { coord = vec4f(normal, 1.0); } }
+    else if (src_row >= 5u && src_row <= 12u && (components & ($UV0 << (src_row - 5u))) != 0u) { coord = vec4f(rawtex[src_row - 5u], 1.0, 1.0); }
+    if (bitfield(info, 2u, 1u) == 0u) { coord.z = 1.0; }
     var t: vec3f;
     if (kind == 1u) { t = vec3f(coord.xy, 1.0); }
     else if (kind == 2u) { t = vec3f(o.colors_0.x, o.colors_0.y, 1.0); }
@@ -595,9 +595,9 @@ fn vertex_colour(components: u32, j: u32, color0: vec4f, color1: vec4f) -> vec4f
   return o;
 }
 
-fn sample_map(map: u32, uv: vec2f, bias: f32) -> vec4f {
+fn sample_map(tmap: u32, uv: vec2f, bias: f32) -> vec4f {
   var s: vec4f;
-  switch map {
+  switch tmap {
     case 0u: { s = textureSampleBias(tex0, samp0, uv, bias); }
     case 1u: { s = textureSampleBias(tex1, samp1, uv, bias); }
     case 2u: { s = textureSampleBias(tex2, samp2, uv, bias); }
@@ -618,7 +618,7 @@ var<private> ras_t: vec4i;
 var<private> konst_t: vec4i;
 
 // A swap table (ksel registers 2 * table and 2 * table + 1).
-fn swap(v: vec4i, table: u32) -> vec4i {
+fn swap_table(v: vec4i, table: u32) -> vec4i {
   let a = uid($U_KSEL + 2u * table);
   let b = uid($U_KSEL + 2u * table + 1u);
   return vec4i(v[a & 3u], v[(a >> 2u) & 3u], v[b & 3u], v[(b >> 2u) & 3u]);
@@ -660,7 +660,7 @@ fn alpha_in(i: u32) -> i32 {
   else if (i == 6u) { r = konst_t.a; }
   return r;
 }
-// write_tev_regular's tables: the scale, the bias, and the lerp's rounding (lerpBias[lb]).
+// write_tev_regular's tables: the scale, the bias, and the lerped's rounding (lerpBias[lb]).
 fn tev_scale(shift: u32) -> i32 { var t = array<i32, 4>(1, 2, 4, 1); return t[shift]; }
 fn tev_bias(bias: u32) -> i32 { var t = array<i32, 4>(0, 128, -128, 0); return t[bias]; }
 fn tev_round(op: u32, shift: u32, alpha: bool) -> i32 {
@@ -669,17 +669,17 @@ fn tev_round(op: u32, shift: u32, alpha: bool) -> i32 {
 }
 fn regular_color(a: vec3i, b: vec3i, c: vec3i, d: vec3i, bias: u32, op: u32, shift: u32) -> vec3i {
   let s = tev_scale(shift);
-  let lerp = ((a * 256 + (b - a) * c) * s + tev_round(op, shift, false)) >> vec3u(8u);
+  let lerped = ((a * 256 + (b - a) * c) * s + tev_round(op, shift, false)) >> vec3u(8u);
   let base = (d + tev_bias(bias)) * s;
-  var r = select(base + lerp, base - lerp, op == 1u);
+  var r = select(base + lerped, base - lerped, op == 1u);
   if (shift == 3u) { r = r >> vec3u(1u); }
   return r;
 }
 fn regular_alpha(a: i32, b: i32, c: i32, d: i32, bias: u32, op: u32, shift: u32) -> i32 {
   let s = tev_scale(shift);
-  let lerp = ((a * 256 + (b - a) * c) * s + tev_round(op, shift, true)) >> 8u;
+  let lerped = ((a * 256 + (b - a) * c) * s + tev_round(op, shift, true)) >> 8u;
   let base = (d + tev_bias(bias)) * s;
-  var r = select(base + lerp, base - lerp, op == 1u);
+  var r = select(base + lerped, base - lerped, op == 1u);
   if (shift == 3u) { r = r >> 1u; }
   return r;
 }
@@ -697,7 +697,7 @@ fn compare_alpha(cmp: u32, a: vec4i, b: vec4i, c: vec4i, d: vec4i) -> i32 {
   return d.a + select(0, c.a, select(a.a > b.a, a.a == b.a, cmp == 7u));
 }
 fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
-  var t = array<bool, 8>(false, a < r, a == r, a <= r, a > r, a != r, a >= r, true);
+  var t = array<bool, 8>(false, (a < r), (a == r), (a <= r), (a > r), (a != r), (a >= r), true);
   return t[f];
 }
 
@@ -712,15 +712,15 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
     let ac = uid($U_ALPHA_ENV + n);
     let tref = uid($U_TREF + n / 2u);
     let odd = (n & 1u) != 0u;
-    let uses = field(cc, 12u, 4u) == 8u || field(cc, 8u, 4u) == 8u || field(cc, 4u, 4u) == 8u || field(cc, 0u, 4u) == 8u ||
-               field(cc, 12u, 4u) == 9u || field(cc, 8u, 4u) == 9u || field(cc, 4u, 4u) == 9u || field(cc, 0u, 4u) == 9u ||
-               field(ac, 13u, 3u) == 4u || field(ac, 10u, 3u) == 4u || field(ac, 7u, 3u) == 4u || field(ac, 4u, 3u) == 4u;
-    if (field(tref, select(6u, 18u, odd), 1u) == 0u || !uses) { texv[n] = vec4i(255); continue; }
-    let coord = field(tref, select(3u, 15u, odd), 3u);
-    let map = field(tref, select(0u, 12u, odd), 3u);
+    let uses_tex = bitfield(cc, 12u, 4u) == 8u || bitfield(cc, 8u, 4u) == 8u || bitfield(cc, 4u, 4u) == 8u || bitfield(cc, 0u, 4u) == 8u ||
+               bitfield(cc, 12u, 4u) == 9u || bitfield(cc, 8u, 4u) == 9u || bitfield(cc, 4u, 4u) == 9u || bitfield(cc, 0u, 4u) == 9u ||
+               bitfield(ac, 13u, 3u) == 4u || bitfield(ac, 10u, 3u) == 4u || bitfield(ac, 7u, 3u) == 4u || bitfield(ac, 4u, 3u) == 4u;
+    if (bitfield(tref, select(6u, 18u, odd), 1u) == 0u || !uses_tex) { texv[n] = vec4i(255); continue; }
+    let coord = bitfield(tref, select(3u, 15u, odd), 3u);
+    let tmap = bitfield(tref, select(0u, 12u, odd), 3u);
     var uv = vec2f(0.0);
     if (coord < ntex) { let t = tcs[coord]; uv = t.xy / select(t.z, 2.0, t.z == 0.0); }
-    texv[n] = vec4i(round(sample_map(map, uv, u.rows[103u + map / 4u][map % 4u]) * 255.0));
+    texv[n] = vec4i(round(sample_map(tmap, uv, u.rows[103u + tmap / 4u][tmap % 4u]) * 255.0));
   }
   if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
   for (var k = 0u; k < 4u; k++) {
@@ -733,23 +733,23 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
     let cc = uid($U_COLOR_ENV + n);
     let ac = uid($U_ALPHA_ENV + n);
     let odd = (n & 1u) != 0u;
-    let cd = field(cc, 0u, 4u); let ccc = field(cc, 4u, 4u); let cb = field(cc, 8u, 4u); let ca = field(cc, 12u, 4u);
-    let cbias = field(cc, 16u, 2u); let cop = field(cc, 18u, 1u); let cclamp = field(cc, 19u, 1u);
-    let cshift = field(cc, 20u, 2u); let cdest = field(cc, 22u, 2u);
-    let ad = field(ac, 4u, 3u); let acc = field(ac, 7u, 3u); let ab = field(ac, 10u, 3u); let aa = field(ac, 13u, 3u);
-    let abias = field(ac, 16u, 2u); let aop = field(ac, 18u, 1u); let aclamp = field(ac, 19u, 1u);
-    let ashift = field(ac, 20u, 2u); let adest = field(ac, 22u, 2u);
+    let cd = bitfield(cc, 0u, 4u); let ccc = bitfield(cc, 4u, 4u); let cb = bitfield(cc, 8u, 4u); let ca = bitfield(cc, 12u, 4u);
+    let cbias = bitfield(cc, 16u, 2u); let cop = bitfield(cc, 18u, 1u); let cclamp = bitfield(cc, 19u, 1u);
+    let cshift = bitfield(cc, 20u, 2u); let cdest = bitfield(cc, 22u, 2u);
+    let ad = bitfield(ac, 4u, 3u); let acc = bitfield(ac, 7u, 3u); let ab = bitfield(ac, 10u, 3u); let aa = bitfield(ac, 13u, 3u);
+    let abias = bitfield(ac, 16u, 2u); let aop = bitfield(ac, 18u, 1u); let aclamp = bitfield(ac, 19u, 1u);
+    let ashift = bitfield(ac, 20u, 2u); let adest = bitfield(ac, 22u, 2u);
     if (ca == 10u || cb == 10u || ccc == 10u || cd == 10u || ca == 11u || cb == 11u || ccc == 11u || cd == 11u ||
         aa == 5u || ab == 5u || acc == 5u || ad == 5u) {
-      let chan = field(uid($U_TREF + n / 2u), select(7u, 19u, odd), 3u);
+      let chan = bitfield(uid($U_TREF + n / 2u), select(7u, 19u, odd), 3u);
       ras_t = vec4i(0);
-      if (chan == 0u) { ras_t = swap(col0, field(ac, 0u, 2u)); }
-      if (chan == 1u) { ras_t = swap(col1, field(ac, 0u, 2u)); }
+      if (chan == 0u) { ras_t = swap_table(col0, bitfield(ac, 0u, 2u)); }
+      if (chan == 1u) { ras_t = swap_table(col1, bitfield(ac, 0u, 2u)); }
     }
-    tex_t = swap(texv[n], field(ac, 2u, 2u));
+    tex_t = swap_table(texv[n], bitfield(ac, 2u, 2u));
     if (ca == 14u || cb == 14u || ccc == 14u || cd == 14u || aa == 6u || ab == 6u || acc == 6u || ad == 6u) {
       let ksel = uid($U_KSEL + n / 2u);
-      konst_t = vec4i(konst_color(field(ksel, select(4u, 14u, odd), 5u)), konst_alpha(field(ksel, select(9u, 19u, odd), 5u)));
+      konst_t = vec4i(konst_color(bitfield(ksel, select(4u, 14u, odd), 5u)), konst_alpha(bitfield(ksel, select(9u, 19u, odd), 5u)));
     }
     let tin_a = vec4i(color_in(ca), alpha_in(aa)) & vec4i(255);
     let tin_b = vec4i(color_in(cb), alpha_in(ab)) & vec4i(255);
@@ -769,8 +769,8 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
     regs[adest].w = a;
   }
   var prev = regs[0];
-  let last_c = field(uid($U_COLOR_ENV + stages - 1u), 22u, 2u);
-  let last_a = field(uid($U_ALPHA_ENV + stages - 1u), 22u, 2u);
+  let last_c = bitfield(uid($U_COLOR_ENV + stages - 1u), 22u, 2u);
+  let last_a = bitfield(uid($U_ALPHA_ENV + stages - 1u), 22u, 2u);
   if (last_c != 0u) { prev = vec4i(regs[last_c].rgb, prev.a); }
   if (last_a != 0u) { prev.w = regs[last_a].a; }
   prev = prev & vec4i(255);
@@ -787,13 +787,13 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
   if (!passed) { discard; }
   // Fog: the EFB depth is reversed, as upstream's.
   let fog = uid($U_FOG);
-  let fsel = field(fog, 21u, 3u);
+  let fsel = bitfield(fog, 21u, 3u);
   if (fsel != 0u) {
     let fogcolor = vec4i(u.rows[$ROW_FOG]);
     let fogi = vec4i(u.rows[$ROW_FOG + 1]);
     let zCoord = clamp(i32(round((1.0 - i.pos.z) * 16777216.0)), 0, 16777215);
     var ze: f32;
-    if (field(fog, 20u, 1u) == 0u) { ze = (u.rows[$ROW_FOG + 3].x * 16777216.0) / f32(fogi.y - (zCoord >> u32(fogi.w))); }
+    if (bitfield(fog, 20u, 1u) == 0u) { ze = (u.rows[$ROW_FOG + 3].x * 16777216.0) / f32(fogi.y - (zCoord >> u32(fogi.w))); }
     else { ze = u.rows[$ROW_FOG + 3].x * (f32(zCoord) / 16777216.0); }
     if ((fog & 0x400u) != 0u) {
       var x_adjust = (2.0 * (i.pos.x / u.rows[$ROW_FOG + 2].y)) - 1.0 - u.rows[$ROW_FOG + 2].x;
