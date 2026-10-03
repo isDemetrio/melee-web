@@ -68,7 +68,9 @@ function offscreenCanvas(wanted: boolean): OffscreenCanvas | undefined {
  * gx_webgpu_selftest). `&target=texture` renders into an offscreen texture instead of a canvas, which
  * is what CI can read back (web/src/spike/gpu.ts says why). `&nocanvas` runs the same commands with
  * no GPU at all, which must not fail. The answer is written into #render as JSON for
- * web/tests/spike/render.spec.ts.
+ * web/tests/spike/render.spec.ts. `&shaders=specialized` draws with each draw state's generated
+ * shader instead of the one shader, and `&cells` reads back a hash of every 80x80 cell of the frame
+ * (wasm/render/pixel_pipeline_check.mjs compares the two shaders with them).
  */
 const selftestColour = parameters.get('gx-selftest');
 if (selftestColour !== null) {
@@ -85,7 +87,8 @@ if (selftestColour !== null) {
     worker.terminate();
     renderOut.textContent = JSON.stringify({ presented: data.presented, sentinel: data.sentinel, render: data.render });
   };
-  const selftest = { argb, copies, repeats: Number(parameters.get('repeats') ?? 1), geometry: Number(parameters.get('geometry') ?? 0), sampleX: Number(parameters.get('sample-x') ?? 320), target: parameters.has('nocanvas') ? undefined : target, resolution: Number(parameters.get('resolution') ?? 100) };
+  const selftest = { argb, copies, repeats: Number(parameters.get('repeats') ?? 1), geometry: Number(parameters.get('geometry') ?? 0), sampleX: Number(parameters.get('sample-x') ?? 320), target: parameters.has('nocanvas') ? undefined : target, resolution: Number(parameters.get('resolution') ?? 100),
+    specializedShaders: parameters.get('shaders') === 'specialized', cells: parameters.has('cells') };
   worker.postMessage({ selftest, canvas }, canvas ? [canvas] : []);
 }
 /**
