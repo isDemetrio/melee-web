@@ -254,15 +254,18 @@ jobs:
       - name: Run the same WASM modules on arm64
         shell: bash
         run: |
-          cd wasm-probe/out/wasm
           # The corpus: the same 8,000,000 results, hashed in the same order and byte order,
-          # so the two digests are comparable by construction.
-          node fma_vectors.js --dump ../arm64.bin > ../arm64-wasm.sha256
-          node bench.js > ../arm64-wasm-bench.json
-          # The upstream tests and the shim test, unchanged, under this engine.
+          # so the two digests are comparable by construction. Every path is written from the
+          # repository root, exactly as the x86 job writes its own: run 37093421011 had them
+          # relative to the module directory and wrote into wasm-probe/out/ instead.
+          node wasm-probe/out/wasm/fma_vectors.js --dump wasm-probe/arm64.bin \
+            > wasm-probe/arm64-wasm.sha256
+          node wasm-probe/out/wasm/bench.js > wasm-probe/arm64-wasm-bench.json
+          # The upstream tests and the shim test, unchanged, under this engine, from their own
+          # directory, as ctest runs them in the x86 job.
           for test in fma_shim_test port_load_test ram_watch_test ax_ucode_test texture_snapshot_test; do
             echo "== ${test}"
-            node "${test}.js"
+            (cd wasm-probe/out/wasm && node "${test}.js")
           done
       - name: Compare the two architectures
         shell: bash
