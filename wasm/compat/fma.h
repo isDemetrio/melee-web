@@ -40,13 +40,24 @@
 // rounded `fma` (CPython `math.fma`, see the test); the probe then measures the whole
 // corpus against the native x86 intrinsics, which is the reference that counts.
 //
-// What this does NOT do: `fma.c:54-55` also short-circuits every non-finite operand to
-// ordinary arithmetic, and the WASM specification leaves the sign and payload of a NaN
-// produced by arithmetic to the engine, so a NaN *result* of an operation that has no NaN
-// operand (`0 * inf`) stays the platform's rather than the reference's. NaN operands are a
-// different case and are handled below: the hardware returns the operand itself. The
-// no-NaN-operand difference is measured by the probe and is parked as a policy question
-// (`wasm/README.md`, `docs/OPEN_QUESTIONS.md` Q7); it is not papered over here.
+// What this does NOT do, and what `pinned` below does instead: `fma.c:54-55` also
+// short-circuits every non-finite operand to ordinary arithmetic, and the WASM
+// specification leaves the sign and payload of a NaN produced by arithmetic to the engine,
+// so a NaN *result* of an operation that has no NaN operand (`0 * inf`) was the platform's
+// rather than the reference's. NaN operands are a different case and are handled below:
+// the hardware returns the operand itself.
+//
+// That residual stopped being a policy question when it was measured across engines. The
+// arm64 job of the WASM probe (run 37097105278) runs this same module -- built once on
+// x86 -- under Node on aarch64, and the two architectures disagreed on 3,040 of the
+// 8,000,000 corpus results: every one of them `nan-sign`, every one of them an invalid
+// operation with no NaN operand, the first at triple 12, `fmadd a=7ff0000000000000
+// c=0000000000000000 b=0000000000000000`, x86 `fff8000000000000` against arm64
+// `7ff8000000000000`. The peers of a netcode match are engines on different machines, so
+// that difference is a desync waiting for a frame that feeds `0 * inf` into an FMA, and
+// `pinned` removes it by returning the reference's own indefinite NaN whatever the engine
+// would have produced. It is the option `docs/OPEN_QUESTIONS.md` Q7 already recorded as
+// chosen, applied to the case that was still open.
 namespace wasm_compat {
 
 // The quiet bit: x86 quiets a signalling NaN operand and keeps its payload.
@@ -68,6 +79,28 @@ inline bool nan_operand(double x, double y, double z, double& out) {
   return false;
 }
 
+// The "indefinite" NaN an x86 FMA returns for an invalid operation: quiet, payload 0,
+// sign set, 0xFFF8000000000000. Confirmed against the native reference build, not assumed:
+// the probe's corpus comparison runs the unpatched upstream `ppc.h` with the x86
+// `_mm_fmadd_sd` intrinsics and the WASM shim side by side and reports no differing line
+// in 8,000,000 results (run 36677219860), and the arm64 job's classification table
+// (run 37097105278) prints this value for all eight paths at its first divergent triple.
+inline double invalid_nan() {
+  uint64_t u = 0xfff8000000000000ull;
+  double v;
+  std::memcpy(&v, &u, 8);
+  return v;
+}
+
+// Pin the result of an operation that had no NaN operand. With no NaN operand the only way
+// to a NaN result is an invalid operation (`0 * inf`, `inf - inf`), so this test is exact.
+// It is one compare per call and it can only fire when an operand is infinite or zero. On
+// x86 the engine already returns `invalid_nan()`, so
+// this changes nothing there -- the corpus digest of the x86 build is the same before and
+// after (6b79b92a3bc1fb1699853e1c8c671d37aaf64f82378bcb9d393387480f66afc9) -- while on
+// arm64 it turns 3,040 divergent results into 0.
+inline double pinned(double r) { return r != r ? invalid_nan() : r; }
+
 inline double fma(double x, double y, double z) {
   // x86's FMA does not compute with a NaN operand: the result is the first NaN operand,
   // quieted and unnegated. musl's `fma.c:54-55` diverts every non-finite operand to
@@ -88,25 +121,26 @@ inline double fma(double x, double y, double z) {
   // b=0000000000000000`, native `fff8000000000000` against wasm `7ff8000000000000`: two
   // NaN operands, and `NaN * NaN` lost the multiplicand's sign.
   //
-  // This removes a divergence the shim invented. It is not the Q7 decision: what stays
-  // with Q7 is the NaN bit pattern the platform's *own* arithmetic produces when no
-  // operand is a NaN (`0 * inf` and the like), which this guard deliberately leaves alone.
+  // This removes a divergence the shim invented. The other NaN case -- the bit pattern the
+  // platform's *own* arithmetic produces when no operand is a NaN (`0 * inf` and the like)
+  // -- is what `pinned` below replaces with the reference's.
   double nan;
   if (nan_operand(x, y, z, nan)) return nan;
   // `z == 0.0` is true for -0.0 as well. With a nonzero addend the call is libc's fma,
-  // so the hot path pays this one compare and nothing else.
+  // so the hot path pays this compare and the result check in `pinned` and nothing else.
   if (z == 0.0) {
     // A zero factor makes the exact product a signed zero: the exact sum is the IEEE
     // sum of that zero and z, and ordinary addition already gives it the right sign.
-    // `x == 0.0` is false for NaN, so an infinite factor keeps taking this path and is
-    // propagated by the arithmetic itself.
-    if (x == 0.0 || y == 0.0) return x * y + z;
+    // `x == 0.0` is false for NaN, so an infinite factor keeps taking this path: with the
+    // other factor zero that product is an invalid operation, and `pinned` is what makes
+    // its result the reference's on every engine.
+    if (x == 0.0 || y == 0.0) return pinned(x * y + z);
     // Otherwise the exact product is nonzero, so the exact sum is that product and the
     // correctly rounded product is the correctly rounded fused result, sign of an
     // underflow to -0 included.
     return x * y;
   }
-  return std::fma(x, y, z);
+  return pinned(std::fma(x, y, z));
 }
 
 // ---- the sign of a NaN operand, in the three wrappers that negate one ----
