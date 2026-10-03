@@ -34,6 +34,10 @@ static FILE* g_state_trace = nullptr;
 static FILE* g_state_digest = nullptr;
 static FILE* g_sim_times = nullptr;
 static std::chrono::steady_clock::time_point g_sim_resume;
+// Host-only telemetry, consumed by the browser heartbeat; never guest state.
+uint32_t timing_retrace = 0;
+double timing_sim_ms = 0;
+double timing_csv_ms = 0;
 static uint32_t g_fst_offset, g_fst_size, g_fst_max;
 static std::deque<Completion> g_completions;
 static bool g_pe_finish_pending = false;
@@ -611,6 +615,10 @@ static void record_sim_time() {
   record_decoder_cost(sim_ms, match_frame);
 #endif
   std::fflush(g_sim_times);
+  timing_csv_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - now).count();
+  timing_sim_ms = sim_ms;
+  timing_retrace = g_retraces;
 }
 
 // Same virtual-time and interrupt order as Windows retrace(), without UI/network/profiling.

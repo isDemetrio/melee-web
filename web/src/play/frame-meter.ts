@@ -79,7 +79,9 @@ const PIPELINE = METHOD_ID.get('device.createRenderPipeline')!;
 /** One row per frame, in this order. `null` is "not measured in this session" (the core split). */
 export const FRAME_COLUMNS = ['retrace', 'match_frame', 'cycle_ms', 'core_ms', 'webgpu_ms', 'webgpu_calls', 'draws',
   'resources_ms', 'encode_ms', 'queue_ms', 'present_ms', 'created', 'pipelines_created', 'disc_ms', 'disc_bytes',
-  'bitmap_ms', 'ack_ms', 'idle_ms', 'hidden', 'decode_ms', 'non_decode_ms'] as const;
+  'bitmap_ms', 'ack_ms', 'idle_ms', 'hidden', 'decode_ms', 'non_decode_ms',
+  'sim_ms', 'previous_heartbeat_tail_ms', 'csv_write_ms', 'heartbeat_read_ms', 'heartbeat_finish_ms',
+  'core_unattributed_ms'] as const;
 export type FrameColumn = (typeof FRAME_COLUMNS)[number];
 export const COLUMN = Object.fromEntries(FRAME_COLUMNS.map((name, index) => [name, index])) as Record<FrameColumn, number>;
 
@@ -101,6 +103,9 @@ export interface MethodTotals {
 }
 
 /** The core profiler's split of `core_ms` for one retrace (decoder_cost.csv, patch 0008). */
+export interface CoreTiming { retrace: number; simMs: number; csvMs: number }
+export interface HeartbeatTiming { entered: number; readDone: number; core: CoreTiming | null }
+
 export interface CoreSplit { decodeMs: number; nonDecodeMs: number }
 
 const round = (value: number): number => Math.round(value * 1000) / 1000;
@@ -129,6 +134,19 @@ export class FrameMeter {
   private matchFrame: number | null = null;
   private split: CoreSplit | null = null;
   private hidden = false;
+  private heartbeatTiming: HeartbeatTiming | null = null;
+  private returnedAt: number | null = null;
+  private returnedRetrace = 0;
+
+  /** Called by the WASM bridge AFTER heartbeat returns; charged to the next cycle. */
+  heartbeatReturned(retrace: number): void {
+    this.returnedAt = this.now();
+    this.returnedRetrace = retrace;
+  }
+
+  methodSnapshot(): Record<string, MethodTotal> {
+    return Object.fromEntries(METHODS.map((name, i) => [name, { calls: this.calls[i]!, ms: this.ms[i]! }]));
+  }
 
   constructor(private readonly flight: Int32Array, private readonly now: () => number) {
     this.cycleStart = now();
@@ -184,11 +202,12 @@ export class FrameMeter {
   }
 
   /** The retrace beat: the core part of the frame ends; presentation starts. */
-  coreEnd(retrace: number, matchFrame: number | null, split: CoreSplit | null): void {
+  coreEnd(retrace: number, matchFrame: number | null, split: CoreSplit | null, timing: HeartbeatTiming | null = null): void {
     this.coreEndAt = this.now();
     this.retrace = retrace;
     this.matchFrame = matchFrame;
     this.split = split;
+    this.heartbeatTiming = timing;
     this.hidden = this.flight[FLIGHT_HIDDEN] !== 0;
     this.flight[FLIGHT_FRAME] = retrace;
     this.flight[FLIGHT_MATCH] = matchFrame !== null && matchFrame > 0 ? 1 : 0;
@@ -229,7 +248,21 @@ export class FrameMeter {
       }
     }
     const cycle = end - this.cycleStart;
+    const timing = this.heartbeatTiming;
+    const core = timing?.core?.retrace === this.retrace ? timing.core : null;
+    const tail = this.returnedAt !== null && this.returnedRetrace === this.retrace - 1
+      ? this.returnedAt - this.cycleStart : null;
+    const read = timing ? timing.readDone - timing.entered : null;
+    const finish = timing ? this.coreEndAt - timing.readDone : null;
+    const residual = core && tail !== null && read !== null && finish !== null
+      ? this.coreEndAt - this.cycleStart - core.simMs - core.csvMs - tail - read - finish : null;
     const values: Record<FrameColumn, number | null> = {
+      sim_ms: core ? round(core.simMs) : null,
+      previous_heartbeat_tail_ms: tail === null ? null : round(tail),
+      csv_write_ms: core ? round(core.csvMs) : null,
+      heartbeat_read_ms: read === null ? null : round(read),
+      heartbeat_finish_ms: finish === null ? null : round(finish),
+      core_unattributed_ms: residual === null ? null : round(residual),
       retrace: this.retrace, match_frame: this.matchFrame, cycle_ms: round(cycle),
       core_ms: round(this.coreEndAt - this.cycleStart), webgpu_ms: round(webgpuMs), webgpu_calls: calls,
       draws: this.draws, resources_ms: round(category.resources), encode_ms: round(category.encode),
@@ -283,12 +316,12 @@ function meterMethod(target: object, name: string, method: string, meter: FrameM
   const id = METHOD_ID.get(method);
   if (id === undefined) throw new Error(`${method} is not in METHODS`);
   const call = original as Function;
-  api[name] = function metered(): unknown {
+  api[name] = function metered(this: unknown): unknown {
     const started = meter.enter(id);
     let result: unknown;
     // No catch: an exception is the renderer's to handle (gx_webgpu.cpp records it); the meter only
     // makes sure its own state is put back.
-    try { result = call.apply(target, arguments); } finally { meter.leave(id, started); }
+    try { result = call.apply(this, arguments); } finally { meter.leave(id, started); }
     if (wrap && typeof result === 'object' && result !== null) wrap(result);
     return result;
   };
@@ -318,7 +351,14 @@ export function instrumentGpu(gpu: { device: object; context: object | null }, m
   };
   for (const name of DEVICE_METHODS) meterMethod(gpu.device, name, `device.${name}`, meter, results[name]);
   const queue = (gpu.device as { queue?: object }).queue;
-  if (queue) for (const name of QUEUE_METHODS) meterMethod(queue, name, `queue.${name}`, meter);
+  if (queue) for (const name of QUEUE_METHODS) {
+    // A WebIDL getter may return a fresh JS wrapper. Cover the native prototype, preserving
+    // the receiver, rather than relying on the identity of one device.queue read.
+    const prototype = Object.getPrototypeOf(queue) as Methods | null;
+    const target = prototype && typeof prototype[name] === 'function' ? prototype : queue;
+    try { meterMethod(target, name, `queue.${name}`, meter); }
+    catch (error) { meter.notes.push(`queue.${name} hook failed: ${error}`); }
+  }
   else meter.notes.push('device.queue absent: queue calls not metered');
   if (gpu.context) meterMethod(gpu.context, 'getCurrentTexture', 'context.getCurrentTexture', meter);
 }
@@ -397,4 +437,60 @@ export function coreSplitOf(lines: readonly string[], retrace: number): CoreSpli
     return Number.isFinite(decodeMs) && Number.isFinite(nonDecodeMs) ? { decodeMs, nonDecodeMs } : null;
   }
   return null;
+}
+
+export interface QueueProbe {
+  expected: Record<string, number>;
+  observed: Record<string, MethodTotal>;
+  passed: boolean;
+  error: string | null;
+}
+
+/** Real, pre-game submission. Every operation rereads device.queue, like the renderer does.
+ * Counts/times are reported separately; start() discards this work from gameplay totals.
+ */
+export async function verifyQueueHooks(device: object, meter: FrameMeter): Promise<QueueProbe> {
+  const expected = { 'queue.writeBuffer': 1, 'queue.writeTexture': 1, 'queue.submit': 1 };
+  const before = meter.methodSnapshot();
+  const api = device as {
+    createBuffer(desc: object): { destroy(): void };
+    createTexture(desc: object): { destroy(): void };
+    createCommandEncoder(): { finish(): unknown };
+    queue: {
+      writeBuffer(buffer: object, offset: number, data: Uint8Array): void;
+      writeTexture(destination: object, data: Uint8Array, layout: object, size: number[]): void;
+      submit(commands: unknown[]): void;
+      onSubmittedWorkDone(): Promise<void>;
+    };
+    pushErrorScope(filter: string): void;
+    popErrorScope(): Promise<{ message: string } | null>;
+  };
+  let buffer: { destroy(): void } | undefined, texture: { destroy(): void } | undefined;
+  let error: string | null = null;
+  let scoped = false;
+  try {
+    api.pushErrorScope('validation');
+    scoped = true;
+    buffer = api.createBuffer({ size: 4, usage: 8 }); // COPY_DST
+    texture = api.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: 2 }); // COPY_DST
+    api.queue.writeBuffer(buffer, 0, new Uint8Array(4));
+    api.queue.writeTexture({ texture }, new Uint8Array(4), {}, [1, 1]);
+    api.queue.submit([api.createCommandEncoder().finish()]);
+    await api.queue.onSubmittedWorkDone();
+  } catch (cause) { error = String(cause); }
+  finally {
+    if (scoped) {
+      try { const validation = await api.popErrorScope(); if (validation) error = validation.message; }
+      catch (cause) { error = String(cause); }
+    }
+    buffer?.destroy();
+    texture?.destroy();
+  }
+  const after = meter.methodSnapshot();
+  const observed = Object.fromEntries(Object.keys(expected).map((name) => [name, {
+    calls: after[name]!.calls - before[name]!.calls, ms: after[name]!.ms - before[name]!.ms,
+  }]));
+  const passed = error === null && Object.entries(expected).every(([name, count]) => observed[name]!.calls === count);
+  if (!passed) meter.notes.push(`Queue hook probe failed: ${error ?? 'unexpected call counts'}; queue timings are incomplete`);
+  return { expected, observed, passed, error };
 }
