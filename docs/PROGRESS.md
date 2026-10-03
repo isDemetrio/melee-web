@@ -2927,3 +2927,18 @@ if the release takes more than half the budget. Unit tests: `sync-handle.test.ts
 the browser test is Chromium only. If it is over 10 s, Play again fails with the message above
 instead of starting. A game in a second tab still holds the file: that tab's Play now fails after
 10 s with that message (before this branch both tabs could play).
+## 2026-10-03 — Core budget decision, no implementation
+
+Analysis on `perf/core-budget`, base `029f41d`, in [CORE_BUDGET_DECISION.md](CORE_BUDGET_DECISION.md).
+Recomputed the three operator play reports from their raw CSVs: all in-match means agree with
+summaries. The internal split excludes a measured 15.991–23.950 ms/frame residual included in the
+page's core timer. Backend submission belongs to decode/end-frame (14.648 ms in the split report),
+not non-decode. Queue calls are absent from all method tables despite submissions in the code;
+API totals therefore need coverage verification before a GPU conclusion.
+
+Decision: first propose attribution of the timer residual and queue coverage; first renderer
+candidate is preparing state once per DrawCall instead of per segment. Savings are conditional
+scenarios, not device measurements; no evidence yet for 60 fps with four players. No source edits,
+local builds/tests, game execution, or game data added; the concurrent TEV file was only read.
+Next: review the decision with the operator and choose one experiment. Every implementation must
+retain the 2400-checkpoint trace, verify rendering separately, and win on the operator's phone.
