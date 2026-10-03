@@ -120,6 +120,45 @@ int main() {
          ppc::fmadd(1.0, from_bits(kSNanB), 1.0), kQNanA);
   expect("fmadd(NaN, NaN, 1) returns the first operand",
          ppc::fmadd(from_bits(kQNanA), from_bits(kQNanB), 1.0), kQNanA);
+  // An invalid operation with no NaN operand. x86's FMA answers it with its indefinite NaN,
+  // 0xfff8000000000000; the WASM specification leaves the same result to the engine, and
+  // arm64 gives 0x7ff8000000000000 instead -- measured on the arm64 job (run 37097105278):
+  // 3 040 of the 8 000 000 corpus results, every one of them this class and this operand
+  // pair. The shim pins the reference's value (wasm/compat/fma.h), because the peers of a
+  // netcode match are engines on different architectures.
+  constexpr uint64_t kNegInf = 0xfff0000000000000ull;
+  constexpr uint64_t kIndefinite = 0xfff8000000000000ull;
+  constexpr uint64_t kMaxDouble = 0x7fefffffffffffffull;
+  expect("fmadd(inf, 0, +0) is the indefinite NaN",
+         ppc::fmadd(from_bits(kPosInf), 0.0, 0.0), kIndefinite);
+  expect("fmadd(0, inf, +0) is the indefinite NaN",
+         ppc::fmadd(0.0, from_bits(kPosInf), 0.0), kIndefinite);
+  expect("fmadd(-inf, 0, +0) is the indefinite NaN",
+         ppc::fmadd(from_bits(kNegInf), 0.0, 0.0), kIndefinite);
+  expect("fmadd(inf, 0, 5) is the indefinite NaN",
+         ppc::fmadd(from_bits(kPosInf), 0.0, 5.0), kIndefinite);
+  expect("fmadd(inf, 1, -inf) is the indefinite NaN",
+         ppc::fmadd(from_bits(kPosInf), 1.0, from_bits(kNegInf)), kIndefinite);
+  expect("fmsub(inf, 0, +0) is the indefinite NaN",
+         ppc::fmsub(from_bits(kPosInf), 0.0, 0.0), kIndefinite);
+  expect("fnmadd(inf, 0, +0) is the indefinite NaN",
+         ppc::fnmadd(from_bits(kPosInf), 0.0, 0.0), kIndefinite);
+  expect("fnmsub(inf, 0, +0) is the indefinite NaN",
+         ppc::fnmsub(from_bits(kPosInf), 0.0, 0.0), kIndefinite);
+  expect("the single path: fs(fmadd(inf, 0, +0)) is the indefinite NaN",
+         ppc::fs(ppc::fmadd(from_bits(kPosInf), 0.0, 0.0)), kIndefinite);
+  // The boundary of that rule, and the case the corpus caught while this was being written:
+  // the exact product of two finite doubles may round to an infinity, and that is an
+  // overflow, not an invalid operation -- `fmsub(max, max, +inf)` is `max*max - inf`, and
+  // the exact product is finite, so the answer is -inf. Pinning a *rounded* product and
+  // then adding the infinity would answer with a NaN.
+  expect("fmsub(max, max, +inf) is -inf",
+         ppc::fmsub(from_bits(kMaxDouble), from_bits(kMaxDouble), from_bits(kPosInf)), kNegInf);
+  expect("fmadd(max, max, -inf) is -inf",
+         ppc::fmadd(from_bits(kMaxDouble), from_bits(kMaxDouble), from_bits(kNegInf)), kNegInf);
+  expect("fmadd(max, max, +inf) is +inf",
+         ppc::fmadd(from_bits(kMaxDouble), from_bits(kMaxDouble), from_bits(kPosInf)), kPosInf);
+
   // What is deliberately not asserted here: what `ppc::fs` does to a NaN's payload. The
   // double->single step is the engine's, not the shim's, and the probe's per-path table is
   // what measures it (all four single paths, against the native reference).
