@@ -1,0 +1,80 @@
+name: Texture SIMD — game oracle and per-frame decode cost
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'wasm/render/texture_decode.h'
+      - 'experiments/texture-simd/**'
+      - '.github/workflows/texture-simd.yml'
+permissions:
+  contents: read
+concurrency:
+  group: texture-simd-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+      - name: Generate guest outside checkout
+        env:
+          GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
+        run: scripts/phase0/fetch_and_recompile.sh offline "$RUNNER_TEMP/generated"
+      - name: Build baseline (reference decoder) and candidate (shipped decoder)
+        run: |
+          set -euo pipefail
+          # The oracle is spliced into the runner's checkout only; native/ is not changed in git.
+          python3 experiments/texture-simd/install_oracle.py
+          npm install -g binaryen@132.0.0
+          mkdir -p "$RUNNER_TEMP/results"
+          lscpu > "$RUNNER_TEMP/results/machine.txt"
+          for label in baseline candidate; do
+            flags=''
+            if [ "$label" = baseline ]; then flags='-DGXW_TEXTURE_DECODE_REFERENCE'; fi
+            rm -rf "$RUNNER_TEMP/build"
+            emcmake cmake -S wasm/core -B "$RUNNER_TEMP/build" -G Ninja \
+              -DMELEE_GEN="$RUNNER_TEMP/generated" -DCMAKE_CXX_FLAGS="$flags"
+            cmake --build "$RUNNER_TEMP/build" --target melee_core_node --parallel 3
+            mkdir -p "$RUNNER_TEMP/$label"
+            cp "$RUNNER_TEMP/build/melee_core_node.js" "$RUNNER_TEMP/$label/"
+            # Same post-processing as phase0-build.yml, plus SIMD for the candidate's kernel.
+            wasm-opt --enable-bulk-memory --enable-mutable-globals \
+              --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
+              --enable-simd -O2 "$RUNNER_TEMP/build/melee_core_node.wasm" \
+              -o "$RUNNER_TEMP/$label/melee_core_node.wasm"
+          done
+          # The candidate must really contain the kernel: count v128 shuffles in each module.
+          for label in baseline candidate; do
+            n=$(wasm-dis "$RUNNER_TEMP/$label/melee_core_node.wasm" | grep -c 'i8x16.shuffle' || true)
+            echo "$label i8x16.shuffle: $n" | tee -a "$RUNNER_TEMP/results/machine.txt" "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Read private disc
+        working-directory: ${{ runner.temp }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote --file "$RUNNER_TEMP/disc.iso"
+      - name: Replays, trace gate, graphics oracle, per-frame decode cost
+        run: python3 experiments/texture-simd/replay.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: texture-simd
+          path: |
+            ${{ runner.temp }}/results/texture-simd.json
+            ${{ runner.temp }}/results/machine.txt
+          retention-days: 7
+      - name: Remove private data
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/build" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/replay" "$RUNNER_TEMP"/*-graphics.csv "$RUNNER_TEMP"/*-times.csv

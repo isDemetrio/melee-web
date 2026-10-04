@@ -29,6 +29,7 @@
 // WebGPU validation errors do not throw at all, they are collected by gpu.ts.
 #include "gx_core.h"
 #include "gx_wgsl.h"
+#include "texture_decode.h"
 #include "headless.h"
 #include "ppc.h"
 #include <cstdint>
@@ -591,7 +592,7 @@ bool upload_textures(const gx::DrawCall& dc) {
     if (bound==1) continue;
     uint32_t w=t.width,h=t.height; size_t offset=0;
     for (uint32_t level=0;level<t.mip_levels;++level) {
-      gx::decode_texture(t.data->image.data()+offset,w,h,t.format,t.data->palette.data(),t.tlut_format,rgba);
+      gxw::decode_texture_level(t.data->image.data()+offset,w,h,t.format,t.data->palette.data(),t.tlut_format,rgba);
       if (!gxw_upload(slot,level,w,h,rgba.data(),rgba.size())) return false;
       offset+=gx::texture_level_bytes(w,h,t.format);
       w=std::max(1u,w/2); h=std::max(1u,h/2);
