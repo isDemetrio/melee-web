@@ -61,6 +61,8 @@ const QUERY = `gx-selftest=${COLOUR.toString(16)}`;
 
 /** Open the self-test page and wait for the JSON the worker answers with. */
 async function selftest(page: Page, query: string): Promise<SelftestResult> {
+  page.on('console', message => console.log(query, message.type(), message.text()));
+  page.on('pageerror', error => console.log(query, String(error)));
   await page.goto(`/spike.html?${query}`);
   // Empty, then "running", then the answer: only the answer is JSON.
   const output = page.locator('#render');

@@ -129,6 +129,7 @@ const realmName = (): string => (globalThis as { constructor?: { name?: string }
 
 /** Record a stage on the timeline. */
 export function mark(gpu: SpikeGpu, event: string): void {
+  console.log("[gpu-stage]", performance.now(), event);
   gpu.diagnostic.timeline.push({ atMs: Math.round((performance.now() - loadedMs) * 10) / 10, event });
 }
 

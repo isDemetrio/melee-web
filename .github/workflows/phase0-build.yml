@@ -236,7 +236,7 @@ jobs:
         run: |
           set -euo pipefail
           npx playwright install --with-deps chromium
-          npx playwright test -c playwright.spike.config.ts
+          npx playwright test -c playwright.spike.config.ts --max-failures=1
       - name: Upload synthetic page report (no game data)
         if: always()
         uses: actions/upload-artifact@v4
