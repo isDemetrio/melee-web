@@ -3294,3 +3294,52 @@ it does not obtain it. On the VPS: `python3 -m unittest discover -s scripts/test
 (skipped=1)`) and `python3 scripts/check_no_game_data.py --all` (264 tracked files, clean).
 `scripts/check_docs.py` still cannot run here (no upstream submodule in this worktree). CI decides
 the rest.
+
+## 2026-10-04 — the consultation main cites is not in the repository (cron, `cron/fix-consult-citation`)
+
+**Why this and not something else.** Every autonomous step of the Phase 0 plan is done or held by
+the branches that own its files: the deploy plan's own PR 6 closed with Q3 narrowed (PR #108), and
+the renderer — the plan's only autonomous work left — is in flight on the operator's own branches
+(PR #109 `fix/renderer-direction` today, plus #100, #101, #104, #70), whose file set is
+`wasm/render/gx_webgpu.cpp`, `gx_wgsl.{cpp,h}`, `pixel_pipeline_check.mjs` and `web/src/{play,spike}/*`.
+What was left is a claim in shipped build files that a reader cannot follow: three places in `main`
+cite `docs/FRAME_TIME_CONSULT.md`, and that document is not in this repository.
+
+**Verified 2026-10-04, each fact with the check that produced it.** `git ls-files docs/FRAME_TIME_CONSULT.md`
+is empty, and `git log --all --diff-filter=A --name-status -- docs/FRAME_TIME_CONSULT.md` shows the
+file was added by `94b22f9` ("docs: assess frame-time bottlenecks and next optimisation experiment")
+on branch `astra/opt-consult`, which is **not merged** and has no pull request. A sweep of every
+tracked file for backticked or bare `docs|scripts|wasm|web|functions|native|patches|tests` paths
+found this document as the only path cited by a shipped build file that does not exist: the other
+hits are plan documents naming files the repository is supposed to grow (the exemption
+`scripts/check_docs.py` already records), fixtures the guard tests create, or upstream submodule
+paths such as `port/scripts/parity_vs_onett.txt`. Two of the three citations are in files CI reads:
+`.github/workflows/phase0-build.yml` line 135 and `wasm/core/CMakeLists.txt` line 61; the third is
+`docs/WASM_OPT_EXPERIMENT.md`.
+
+**Changed.** The three citations now point at documents that exist and hold the same content:
+`docs/PROGRESS.md` ("Three levers, measured: two merge, one is closed by size" for the two PowerPC
+units; "the decoder cost measured, and two cheap fixes that paid for it" for the three GX files) and
+`docs/CORE_BUDGET_DECISION.md` section 2 for the ranked levers. Two stale statements in the same
+sentences are corrected with the evidence next to them: the workflow comment said "the two hot
+translation units" where `MELEE_HOT_SOURCES` and `scripts/phase0/assert_hot_opt.sh` both carry five
+(the run summary of dispatch `37169669256` prints all five at `-O2`), and `docs/WASM_OPT_EXPERIMENT.md`
+called the 13.94–16.06 ms device "a 2016 phone" where `docs/PROGRESS.md` had already corrected that
+row — the two result JSONs carry `Mozilla/5.0 (X11; Linux x86_64 …)`, which is Android with
+"Request desktop site" on, and the operator reports a 2025 OnePlus tablet. No number, no build flag,
+no source file and no workflow behaviour changes: the edits are comments and documentation.
+
+**Not done, and why.** The consultation itself is **not** added: it is another session's unmerged
+draft on `astra/opt-consult`, its §1 still names the device the row above corrects and its §3 still
+presents the two-PPC-unit `-O2` experiment as "one next optimisation experiment" although PR #41 ran
+it and measured −10.9%, so landing it would publish claims that are now false. Repointing the
+citations is the smaller, verifiable fix. Also observed while looking, and recorded here rather than
+in a file because it is a datum about a deployment and not a change: the spike preview at
+`https://phase0-spike.melee-web.pages.dev/spike.html` is **live and protected by Cloudflare Access**
+today — an anonymous fetch of that address and of `/spike-core/core.json` returns the
+`jolly-frost-8cc9.cloudflareaccess.com` sign-in page, not the page and not the module. That is the
+deploy plan §3 row "Accesso protetto" answered for the preview address from outside; every other row
+of that table still needs the Access service token (O9), and the 403-after-login defect
+`docs/DEPLOY.md` records is **not** re-tested by this, because Access answers before the middleware
+runs. On the VPS: `python3 -m unittest discover -s scripts/tests` and
+`python3 scripts/check_no_game_data.py --all`. CI decides the rest.

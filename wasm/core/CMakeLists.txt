@@ -58,12 +58,15 @@ if(EMSCRIPTEN)
   add_library(offline_core OBJECT ${MELEE_HEADLESS_SOURCES} ${MELEE_SIM_SOURCES})
   target_link_libraries(offline_core PUBLIC core_options)
   target_compile_definitions(offline_core PRIVATE MELEE_HEADLESS=1)
-  # Per-file optimisation experiment (docs/FRAME_TIME_CONSULT.md). The PowerPC runtime and its
-  # interpreter fallback are the likeliest hot translation units in the simulation boundary, and
-  # the shipped executables are built from THIS target: runtime_core above is a compile gate and
-  # contributes no shipped byte, so a flag changed there would move nothing that runs. Only these
-  # listed hot files move to -O2; the rest of the boundary, the generated guest code and the final link
-  # stay at ${MELEE_OPT}, which bounds the size cost to them.
+  # Per-file optimisation experiment. The list is the two PowerPC runtime units and the three GX
+  # files the decoder-cost profile put on the simulation boundary; the measured result for the
+  # PowerPC pair is in docs/PROGRESS.md, "Three levers, measured: two merge, one is closed by size"
+  # (-7.0% size, -10.9% in-match time on the Node proxy), and the three GX files were added by
+  # "the decoder cost measured, and two cheap fixes that paid for it". The shipped executables are
+  # built from THIS target: runtime_core above is a compile gate and contributes no shipped byte,
+  # so a flag changed there would move nothing that runs. Only the listed hot files move to -O2;
+  # the rest of the boundary, the generated guest code and the final link stay at ${MELEE_OPT},
+  # which bounds the size cost to them.
   #
   # A source property is appended after the target's own and interface options, so -O2 is the last
   # -O flag in these compile commands and wins. That order is an assumption about CMake, and if
