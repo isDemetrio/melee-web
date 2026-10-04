@@ -27,12 +27,14 @@ jobs:
         run: |
           scripts/apply_patches.sh
           mkdir -p "$RUNNER_TEMP/results"
+          em++ upstream/melee-unlocked/port/runtime/gx/gx_texture.cpp -std=c++17 -O2 \
+            -ffp-contract=off -fno-fast-math -fwasm-exceptions -c -o "$RUNNER_TEMP/texture.o"
           for label in baseline candidate; do
             opt=-Oz
             if [ "$label" = candidate ]; then opt=-O2; fi
             em++ wasm/render/gx_webgpu.cpp wasm/render/gx_wgsl.cpp \
-              upstream/melee-unlocked/port/runtime/gx/gx_texture.cpp experiments/renderer/host.cpp \
-              -Inative -I. -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
+              "$RUNNER_TEMP/texture.o" experiments/renderer/host.cpp \
+              -Inative -I. -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/host -Iupstream/melee-unlocked/port/runtime/ppc \
               -Iupstream/melee-unlocked/port/runtime/gx -Iupstream/melee-unlocked/native \
               -std=c++17 "$opt" -ffp-contract=off -fno-fast-math -fwasm-exceptions \
               -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web -sALLOW_MEMORY_GROWTH=1 \

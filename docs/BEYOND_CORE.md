@@ -99,3 +99,9 @@ sui blocchi incompleti; per i thread servono snapshot immutabili, output disgiun
 join prima del primo upload/draw dipendente, backpressure e limite memoria. Non
 spostare FIFO/interrupt né leggere RAM live da un worker. Il costo di questi ultimi
 requisiti sul browser di destinazione non è misurato dal pool Node.
+
+Lo script `scripts/phase0/evaluate_residual.py <report.json>` applica il contratto al
+prossimo report: un solo cohort completo, segni preservati, errore di riconciliazione,
+media/p95/max dei valori assoluti. `closed` significa attribuzione temporale, **non**
+che la componente grande sia lavoro eliminabile. I test includono +15/−15 ms che
+si cancellano nella media firmata e un vecchio report privo dei nuovi campi.

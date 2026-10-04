@@ -24,7 +24,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/results"
           scripts/apply_patches.sh
           for opt in Oz O2; do
-            em++ experiments/kernels/memory.cpp -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
+            em++ experiments/kernels/memory.cpp -I. -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
               -std=c++17 "-$opt" -ffp-contract=off -fno-fast-math -sENVIRONMENT=node \
               -o "$RUNNER_TEMP/memory.js"
             node "$RUNNER_TEMP/memory.js" | tee "$RUNNER_TEMP/results/memory-$opt.json"
