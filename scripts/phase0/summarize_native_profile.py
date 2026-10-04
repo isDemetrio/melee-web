@@ -29,7 +29,7 @@ def classify(stack):
             return 'observer/pose'
         if 'record_draw' in name:
             return 'GX draw recording'
-        if 'decode_vertex' in name or 'read_component' in name:
+        if 'decode_vertices' in name or 'read_component' in name:
             return 'GX vertex decode'
         if 'gx::' in name:
             return 'GX other'
