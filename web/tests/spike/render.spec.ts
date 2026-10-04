@@ -214,7 +214,9 @@ for (const repeats of [128, 800]) {
     // is decoded and written once: the per-draw rewrite was 117 MB per in-match frame (9b08acf).
     expect(resources.sampler.created).toBe(1);
     expect(resources.bindGroup.created).toBe(1);
-    expect(resources.pipeline.created).toBe(1);
+    // This draw state's pipeline, and the one gxw_prepare makes when the backend attaches (the one
+    // shader's most drawn state, gx_webgpu.cpp): neither depends on the draw count.
+    expect(resources.pipeline.created).toBe(2);
     expect(result.render?.textureUploads).toBe(1);
     expect(resources.texture.created).toBe(1 + 4); // the one content; XFB, EFB, depth, white
     expect(resources.texture.destroyed).toBe(0);

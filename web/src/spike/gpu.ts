@@ -82,6 +82,11 @@ export interface SpikeGpu {
   recordFailure(operation: string, error: unknown): void;
   /** Where the readback dies, for the CI log: see `Diagnostic`. */
   diagnostic: Diagnostic;
+  /**
+   * Read by gx_webgpu.cpp when it attaches: each draw state's own generated shader instead of the one
+   * shader (`?shaders=specialized`, for wasm/render/pixel_pipeline_check.mjs, which compares the two).
+   */
+  specializedShaders?: boolean;
   /** Written by gx_webgpu.cpp's gxw_open/gxw_copy: the device object it rendered with, and how often. */
   backendDevice?: GpuDevice | null;
   backendCopies?: number;
@@ -299,6 +304,52 @@ export async function readPixel(gpu: SpikeGpu, x = 0, y = 0): Promise<number[] |
     gpu.recordFailure('readback', error);
     gpu.errors.push(`readback: ${error}`);
     mark(gpu, `readback failed: ${error}`);
+    return null;
+  } finally {
+    if (buffer) { live.mapping.delete(buffer); buffer.destroy(); }
+  }
+}
+
+/**
+ * One FNV-1a hash (8 hex digits) per 80x80 cell of the 640x480 XFB target, row by row, and how many
+ * cells hold a pixel that is not `clear` (RGBA). The same constraints as `readPixel`. This is how
+ * wasm/render/pixel_pipeline_check.mjs compares every pixel of two renderings of the same states.
+ */
+export async function readCells(gpu: SpikeGpu, clear: readonly number[]): Promise<{ cells: string[]; drawn: number } | null> {
+  const WIDTH = 640, HEIGHT = 480, CELL = 80, ROW_BYTES = WIDTH * 4;
+  let buffer: GpuBuffer | null = null;
+  try {
+    buffer = gpu.device.createBuffer({ size: ROW_BYTES * HEIGHT, usage: BUFFER_COPY_DST | BUFFER_MAP_READ });
+    live.mapping.add(buffer);
+    const encoder = gpu.device.createCommandEncoder();
+    encoder.copyTextureToBuffer({ texture: target(gpu), origin: [0, 0] },
+      { buffer, bytesPerRow: ROW_BYTES }, [WIDTH, HEIGHT]);
+    gpu.device.queue.submit([encoder.finish()]);
+    await buffer.mapAsync(MAP_READ);
+    const bytes = new Uint8Array(buffer.getMappedRange().slice(0));
+    buffer.unmap();
+    const cells: string[] = [];
+    let drawn = 0;
+    for (let cy = 0; cy < HEIGHT; cy += CELL) {
+      for (let cx = 0; cx < WIDTH; cx += CELL) {
+        let hash = 0x811c9dc5, other = false;
+        for (let y = cy; y < cy + CELL; y++) {
+          for (let x = cx; x < cx + CELL; x++) {
+            for (let c = 0; c < 4; c++) {
+              const v = bytes[y * ROW_BYTES + x * 4 + c]!;
+              hash = Math.imul(hash ^ v, 0x01000193) >>> 0;
+              if (v !== clear[c]) other = true;
+            }
+          }
+        }
+        cells.push(hash.toString(16).padStart(8, '0'));
+        if (other) drawn++;
+      }
+    }
+    return { cells, drawn };
+  } catch (error) {
+    gpu.recordFailure('readback', error);
+    gpu.errors.push(`readback: ${error}`);
     return null;
   } finally {
     if (buffer) { live.mapping.delete(buffer); buffer.destroy(); }

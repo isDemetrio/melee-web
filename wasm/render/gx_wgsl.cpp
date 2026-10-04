@@ -13,23 +13,25 @@
 //   - Texture coordinate generation (generate_vertex_shader, gx_shader.cpp:256-307): source row,
 //     input form, regular / emboss / colour texgens, ST or STQ projection, the dual post-transform
 //     with its normalisation; and the projective divide of the pixel shader (:443-446).
-//   - Colour channels without lights (gen_lighting, gx_shader.cpp:102-153): the material colour from
-//     the vertex or from the XF register, per channel and separately for alpha.
+//   - Colour channels (gen_lighting and gen_light, gx_shader.cpp:70-153): the material colour from the
+//     vertex or from the XF register, per channel and separately for alpha, times the light
+//     accumulator: the ambient colour plus each light in the channel's mask, with its attenuation
+//     (none, spot or specular) and diffuse function, on the vertex normal through the normal matrix.
 //
 // What is not, and what happens instead (each is stated where it is generated):
-//   - Lighting. A channel with lighting enabled is given its material colour, which is what the
-//     channel computes when its lights add up to full intensity. The lit draws measured in the menus
-//     and in a match all have a white material, so this is the colour the backend drew before. The
-//     lights themselves are PR #70's (render/webgpu-lighting).
 //   - Indirect texturing (no draw in the measured menu and match frames uses an indirect stage), and
 //     the texture coordinate scale registers (SU_SSIZE): coordinates are sampled normalised, which is
 //     what GX does when it sets that scale to the texture's size itself.
 //   - Z textures (ZTEX), the zfreeze slope and dither.
 #include "gx_wgsl.h"
+#include <cctype>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <tuple>
+#include <utility>
 
 namespace gxw {
 namespace {
@@ -164,10 +166,12 @@ ShaderUid make_uid(const gx::DrawCall& dc) {
   const bool dual = dc.xf_regs[0x12] & 1;
   uint32_t components = dc.components & (gx::VB_HAS_COL0 | gx::VB_HAS_COL1 | gx::VB_HAS_NRM0);
   u.w[U_NUMCHANS] = nchan;
-  // Only the bit the channels are generated from (no lights here; see the top of the file).
+  // The channel controls the colour channels read (upstream's lighting_uid): the material source,
+  // and for a lit channel its ambient source, lights, diffuse and attenuation functions too.
   for (uint32_t j = 0; j < nchan && j < 2; ++j) {
-    u.w[U_CHANS + j] = dc.xf_regs[0x0E + j] & 1;
-    u.w[U_CHANS + 2 + j] = dc.xf_regs[0x10 + j] & 1;
+    const uint32_t color = dc.xf_regs[0x0E + j], alpha = dc.xf_regs[0x10 + j];
+    u.w[U_CHANS + j] = color & 2 ? color & 0x7FFF : color & 1;
+    u.w[U_CHANS + 2 + j] = alpha & 2 ? alpha & 0x7FFF : alpha & 1;
   }
   u.w[U_NUMTEXGENS] = ntex;
   u.w[U_DUALTEX] = dual;
@@ -197,7 +201,54 @@ ShaderUid make_uid(const gx::DrawCall& dc) {
   return u;
 }
 
-int uniform_rows(const ShaderUid& uid) { return ROW_TEXGEN + 3 * int(uid.w[U_NUMTEXGENS]); }
+namespace {
+// Whether a colour channel the draw uses has lighting enabled (bit 1 of a channel control).
+bool lit(const ShaderUid& uid) {
+  bool any = false;
+  for (uint32_t j = 0; j < uid.w[U_NUMCHANS] && j < 2; ++j) any = any || ((uid.w[U_CHANS + j] | uid.w[U_CHANS + 2 + j]) & 2);
+  return any;
+}
+
+// gen_light (gx_shader.cpp:70-100) as one function of the light, its channel's attenuation and diffuse
+// functions, the vertex position and its normal: the factor the light's colour is scaled by before
+// it is rounded into the accumulator. Both shaders call it, so both do the same arithmetic.
+std::string light_function() {
+  std::string s = R"WGSL(fn light_factor(i: u32, attn_fn: u32, diffuse_fn: u32, pos: vec3f, n: vec3f) -> f32 {
+  let l = $ROW_LIGHTSu + 5u * i;
+  var ldir = u.rows[l + 3u].xyz - pos;
+  var attn = 1.0;
+  if (attn_fn == 1u) {
+    ldir = normalize(ldir);
+    attn = select(0.0, max(0.0, dot(n, u.rows[l + 4u].xyz)), dot(n, ldir) >= 0.0);
+    let q = vec3f(1.0, attn, attn * attn);
+    var d = u.rows[l + 2u].xyz;
+    if (diffuse_fn != 0u) { d = normalize(d); }
+    attn = max(0.0, dot(u.rows[l + 1u].xyz, q)) / dot(d, q);
+  } else if (attn_fn == 3u) {
+    let dist2 = dot(ldir, ldir);
+    let dist = sqrt(dist2);
+    ldir = ldir / dist;
+    attn = max(0.0, dot(ldir, u.rows[l + 4u].xyz));
+    attn = max(0.0, dot(u.rows[l + 1u].xyz, vec3f(1.0, attn, attn * attn))) / dot(u.rows[l + 2u].xyz, vec3f(1.0, dist, dist2));
+  } else {
+    ldir = normalize(ldir);
+    if (length(ldir) == 0.0) { ldir = n; }
+  }
+  if (diffuse_fn == 0u) { return attn; }
+  if (diffuse_fn == 1u) { return attn * dot(ldir, n); }
+  return attn * max(0.0, dot(ldir, n));
+}
+)WGSL";
+  s.replace(s.find("$ROW_LIGHTS"), 11, std::to_string(ROW_LIGHTS));
+  return s;
+}
+
+// The light mask of a channel control: lights 0-3 in bits 2-5, 4-7 in bits 11-14.
+uint32_t light_mask(uint32_t control) { return ((control >> 2) & 15) | (((control >> 11) & 15) << 4); }
+}  // namespace
+
+// A lit draw reads the light rows, which come last.
+int uniform_rows(const ShaderUid& uid) { return lit(uid) ? MAX_ROWS : ROW_TEXGEN + 3 * int(uid.w[U_NUMTEXGENS]); }
 
 std::string generate_wgsl(const ShaderUid& uid) {
   const Uid g{uid};
@@ -212,6 +263,8 @@ std::string generate_wgsl(const ShaderUid& uid) {
   o.w("struct Out {\n  @builtin(position) pos: vec4f,\n  @location(0) clip: vec4f,\n  @location(1) colors_0: vec4f,\n  @location(2) colors_1: vec4f,\n");
   for (uint32_t i = 0; i < ntex; ++i) o.w("  @location(%u) tex%u: vec3f,\n", 3 + i, i);
   o.w("}\n");
+  const bool lighting = lit(uid);
+  if (lighting) o.s += light_function();
 
   // ---- vertex: position and clip (the baseline transcription, gx_shader.cpp:671-748) -------------
   o.w("@vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f,\n"
@@ -234,23 +287,53 @@ std::string generate_wgsl(const ShaderUid& uid) {
       "  o.clip = clip;\n"
       // Emulate the D3D viewport in clip space, allowing viewports outside the EFB.
       "  o.pos = vec4f(clip.xy * u.rows[102].xy + clip.w * u.rows[102].zw, clip.zw);\n");
-  // ---- vertex: colour channels (gen_lighting without lights) ---------------------------------------
+  // ---- vertex: colour channels (gen_lighting) -------------------------------------------------------
   if (nchan == 0) {
     o.w("  o.colors_0 = %s;\n", components & gx::VB_HAS_COL0 ? "color0" : "vec4f(1.0)");
     o.w("  o.colors_1 = %s;\n", components & gx::VB_HAS_COL1 ? "color1" : "o.colors_0");
   } else {
     o.w("  var mtl = vec4f(0.0);\n");
+    if (lighting) {
+      // The normal through the normal matrix of the position matrix (Dolphin: index & 31).
+      o.w("  var lacc = vec4f(255.0);\n  let ni = select(m, m - 32u, m >= 32u);\n");
+      if (components & gx::VB_HAS_NRM0)
+        o.w("  let n0 = normalize(vec3f(dot(u.rows[70u + ni].xyz, normal), dot(u.rows[71u + ni].xyz, normal), dot(u.rows[72u + ni].xyz, normal)));\n");
+      else o.w("  let n0 = vec3f(0.0);\n");
+    }
     for (uint32_t j = 0; j < nchan && j < 2; ++j) {
-      const bool color_vertex = uid.w[U_CHANS + j], alpha_vertex = uid.w[U_CHANS + 2 + j];
+      const uint32_t color = uid.w[U_CHANS + j], alpha = uid.w[U_CHANS + 2 + j];
+      const bool color_vertex = color & 1, alpha_vertex = alpha & 1;
       if (color_vertex) vertex_colour(o, components, int(j), false, "  mtl");
       else o.w("  mtl = u.rows[%d];\n", ROW_MATERIALS + 2 + int(j));
       if (alpha_vertex != color_vertex) {
         if (alpha_vertex) vertex_colour(o, components, int(j), true, "  mtl.w");
         else o.w("  mtl.w = u.rows[%d].a;\n", ROW_MATERIALS + 2 + int(j));
       }
-      // Lighting disabled: the light accumulator is 255, and (mtl * 256) >> 8 is the material. A lit
-      // channel is given the same: its lights are not generated here (see the top of the file).
-      o.w("  o.colors_%u = mtl / 255.0;\n", j);
+      if (!((color | alpha) & 2)) {
+        // Lighting disabled: the light accumulator is 255, and (mtl * 256) >> 8 is the material.
+        o.w("  o.colors_%u = mtl / 255.0;\n", j);
+        continue;
+      }
+      // The accumulator starts at the ambient colour (from the vertex or the XF register) of a lit
+      // channel, 255 for an unlit one; each light in the mask adds its rounded contribution.
+      if (color & 2) {
+        if (color & 64) vertex_colour(o, components, int(j), false, "  lacc");
+        else o.w("  lacc = u.rows[%d];\n", ROW_MATERIALS + int(j));
+      } else o.w("  lacc = vec4f(255.0);\n");
+      if (alpha & 2) {
+        if (alpha & 64) vertex_colour(o, components, int(j), true, "  lacc.w");
+        else o.w("  lacc.w = u.rows[%d].a;\n", ROW_MATERIALS + int(j));
+      } else o.w("  lacc.w = 255.0;\n");
+      for (int i = 0; i < 8; ++i) {
+        if ((color & 2) && (light_mask(color) & (1u << i)))
+          o.w("  lacc = vec4f(lacc.rgb + round(light_factor(%du, %uu, %uu, p.xyz, n0) * u.rows[%d].rgb), lacc.a);\n",
+              i, (color >> 9) & 3, (color >> 7) & 3, ROW_LIGHTS + 5 * i);
+        if ((alpha & 2) && (light_mask(alpha) & (1u << i)))
+          o.w("  lacc.w = lacc.w + round(light_factor(%du, %uu, %uu, p.xyz, n0) * u.rows[%d].a);\n",
+              i, (alpha >> 9) & 3, (alpha >> 7) & 3, ROW_LIGHTS + 5 * i);
+      }
+      o.w("  { let il = clamp(vec4i(lacc), vec4i(0), vec4i(255));\n"
+          "    o.colors_%u = vec4f((vec4i(mtl) * (il + (il >> vec4u(7u)))) >> vec4u(8u)) / 255.0; }\n", j);
     }
     if (nchan < 2) o.w("  o.colors_1 = %s;\n", components & gx::VB_HAS_COL1 ? "color1" : "o.colors_0");
   }
@@ -401,6 +484,410 @@ std::string generate_wgsl(const ShaderUid& uid) {
   return o.s;
 }
 
+// ---- the one shader ---------------------------------------------------------------------------------
+//
+// generate_wgsl, with every decision it takes from the uid taken at run time from the uid's words in
+// uniform rows 122-140 instead. Why: WebKit compiles every new WGSL text to a Metal library inside
+// the GPU process, synchronously, ~450 ms each on the operator's iPhone, and the next
+// transferToImageBitmap waits for it (docs/PROGRESS.md); a new pipeline whose WGSL text was seen
+// before costs ~1-8 ms. With one text the game's 72-122 distinct shaders are one compile, made when
+// the backend attaches. This is what Dolphin's ubershaders are for.
+//
+// The arithmetic is generate_wgsl's, step for step, and wasm/render/pixel_pipeline_check.mjs renders
+// the same pseudo-random states through both and requires identical pixels. Where generate_wgsl
+// specialises, this one computes the general form, which is the same integer:
+//   - a lerp's special forms (a == b, c == 0, c == 255, a == 0, b == 0) are the general
+//     a * 256 + (b - a) * c with those values;
+//   - an input is always masked to 8 bits (CHK_O_U8). generate_wgsl masks only the inputs whose
+//     register may be outside 0-255 (RegState); every other one is within 0-255, where the mask is
+//     the identity. The same holds for the final PREV;
+//   - the alpha test is always evaluated; the states generate_wgsl omits it for always pass.
+std::string generate_uber_wgsl() {
+  Code o;
+  o.w("struct Constants { rows: array<vec4f, %d> }\n@group(0) @binding(0) var<uniform> u: Constants;\n", MAX_ROWS);
+  for (int n = 0; n < 8; ++n)
+    o.w("@group(0) @binding(%d) var tex%d: texture_2d<f32>;\n@group(0) @binding(%d) var samp%d: sampler;\n", 1 + 2 * n, n, 2 + 2 * n, n);
+  std::string s = o.s + light_function() + R"WGSL(struct Out {
+  @builtin(position) pos: vec4f,
+  @location(0) clip: vec4f,
+  @location(1) colors_0: vec4f,
+  @location(2) colors_1: vec4f,
+  @location(3) tex0: vec3f, @location(4) tex1: vec3f, @location(5) tex2: vec3f, @location(6) tex3: vec3f,
+  @location(7) tex4: vec3f, @location(8) tex5: vec3f, @location(9) tex6: vec3f, @location(10) tex7: vec3f,
+}
+// Word k of the draw's ShaderUid (fill_uid_rows).
+fn uid(k: u32) -> u32 { return u32(u.rows[$ROW_UID + k / 4u][k % 4u]); }
+fn bitfield(v: u32, lo: u32, n: u32) -> u32 { return (v >> lo) & ((1u << n) - 1u); }
+
+// The light mask of a channel control: lights 0-3 in bits 2-5, 4-7 in bits 11-14.
+fn light_mask(c: u32) -> u32 { return ((c >> 2u) & 15u) | (((c >> 11u) & 15u) << 4u); }
+
+// gen_lighting's `matsource` branch: the vertex's colour j, else colour 0, else white.
+fn vertex_colour(components: u32, j: u32, color0: vec4f, color1: vec4f) -> vec4f {
+  if ((components & ($COL0 << j)) != 0u) { return round(select(color0, color1, j == 1u) * 255.0); }
+  if ((components & $COL0) != 0u) { return round(color0 * 255.0); }
+  return vec4f(255.0);
+}
+
+@vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f,
+  @location(2) color0: vec4f, @location(3) color1: vec4f,
+  @location(4) rawtex0: vec2f, @location(5) rawtex1: vec2f, @location(6) rawtex2: vec2f, @location(7) rawtex3: vec2f,
+  @location(8) rawtex4: vec2f, @location(9) rawtex5: vec2f, @location(10) rawtex6: vec2f, @location(11) rawtex7: vec2f,
+  @location(12) indices: vec4u, @location(13) indices2: vec4u, @location(14) indices3: vec4u) -> Out {
+  let m = indices.x;
+  let raw = vec4f(position, 1.0);
+  let p = vec4f(dot(u.rows[6u + m], raw), dot(u.rows[7u + m], raw), dot(u.rows[8u + m], raw), 1.0);
+  var clip = vec4f(dot(u.rows[0], p), dot(u.rows[1], p), dot(u.rows[2], p), dot(u.rows[3], p));
+  clip.z = -clip.z;
+  clip.z = clip.z * (1.0 - 1e-7);
+  clip = vec4f(clip.xy * sign(u.rows[4].zw * vec2f(-1.0, 1.0)) + clip.w * u.rows[4].zw, clip.zw);
+  if (clip.w == 1.0) { clip = vec4f(round(clip.xy * u.rows[5].xy) * u.rows[5].zw, clip.zw); }
+  var o: Out;
+  o.clip = clip;
+  o.pos = vec4f(clip.xy * u.rows[102].xy + clip.w * u.rows[102].zw, clip.zw);
+  // Colour channels (gen_lighting without lights).
+  let components = uid($U_COMPONENTS);
+  let nchan = uid($U_NUMCHANS);
+  if (nchan == 0u) {
+    o.colors_0 = select(vec4f(1.0), color0, (components & $COL0) != 0u);
+    o.colors_1 = select(o.colors_0, color1, (components & $COL1) != 0u);
+  } else {
+    var colors = array<vec4f, 2>(vec4f(0.0), vec4f(0.0));
+    // The normal through the normal matrix of the position matrix (Dolphin: index & 31).
+    let ni = select(m, m - 32u, m >= 32u);
+    var n0 = vec3f(0.0);
+    if ((components & $NRM0) != 0u) {
+      n0 = normalize(vec3f(dot(u.rows[70u + ni].xyz, normal), dot(u.rows[71u + ni].xyz, normal), dot(u.rows[72u + ni].xyz, normal)));
+    }
+    for (var j = 0u; j < min(nchan, 2u); j++) {
+      let color = uid($U_CHANS + j);
+      let alpha = uid($U_CHANS + 2u + j);
+      let color_vertex = (color & 1u) != 0u;
+      let alpha_vertex = (alpha & 1u) != 0u;
+      let material = u.rows[$ROW_MATERIALS + 2u + j];
+      let vcolor = vertex_colour(components, j, color0, color1);
+      var mtl = select(material, vcolor, color_vertex);
+      if (alpha_vertex != color_vertex) { mtl.w = select(material.a, vcolor.w, alpha_vertex); }
+      if (((color | alpha) & 2u) == 0u) { colors[j] = mtl / 255.0; continue; }
+      // The light accumulator: the ambient colour of a lit channel (255 for an unlit one), plus each
+      // light in its mask.
+      var lacc = vec4f(255.0);
+      if ((color & 2u) != 0u) { lacc = select(u.rows[$ROW_MATERIALS + j], vcolor, (color & 64u) != 0u); }
+      lacc.w = 255.0;
+      if ((alpha & 2u) != 0u) { lacc.w = select(u.rows[$ROW_MATERIALS + j].a, vcolor.w, (alpha & 64u) != 0u); }
+      for (var i = 0u; i < 8u; i++) {
+        if ((color & 2u) != 0u && (light_mask(color) & (1u << i)) != 0u) {
+          lacc = vec4f(lacc.rgb + round(light_factor(i, (color >> 9u) & 3u, (color >> 7u) & 3u, p.xyz, n0) * u.rows[$ROW_LIGHTS + 5u * i].rgb), lacc.a);
+        }
+        if ((alpha & 2u) != 0u && (light_mask(alpha) & (1u << i)) != 0u) {
+          lacc.w = lacc.w + round(light_factor(i, (alpha >> 9u) & 3u, (alpha >> 7u) & 3u, p.xyz, n0) * u.rows[$ROW_LIGHTS + 5u * i].a);
+        }
+      }
+      let il = clamp(vec4i(lacc), vec4i(0), vec4i(255));
+      colors[j] = vec4f((vec4i(mtl) * (il + (il >> vec4u(7u)))) >> vec4u(8u)) / 255.0;
+    }
+    o.colors_0 = colors[0];
+    o.colors_1 = select(select(o.colors_0, color1, (components & $COL1) != 0u), colors[1], nchan >= 2u);
+  }
+  // Texture coordinate generation.
+  let ntex = min(uid($U_NUMTEXGENS), 8u);
+  let dual = uid($U_DUALTEX) != 0u;
+  var rawtex = array<vec2f, 8>(rawtex0, rawtex1, rawtex2, rawtex3, rawtex4, rawtex5, rawtex6, rawtex7);
+  var tm_index = array<u32, 8>(indices.y, indices.z, indices.w, indices2.x, indices2.y, indices2.z, indices2.w, indices3.x);
+  var tc = array<vec3f, 8>();
+  for (var i = 0u; i < ntex; i++) {
+    let info = uid($U_TEXGEN + i);
+    let src_row = bitfield(info, 7u, 5u);
+    let kind = bitfield(info, 4u, 3u);
+    let projection = bitfield(info, 1u, 1u) != 0u;
+    var coord = vec4f(0.0, 0.0, 1.0, 1.0);
+    if (src_row == 0u) { coord = vec4f(position, 1.0); }
+    else if (src_row == 1u) { if ((components & $NRM0) != 0u) { coord = vec4f(normal, 1.0); } }
+    else if (src_row >= 5u && src_row <= 12u && (components & ($UV0 << (src_row - 5u))) != 0u) { coord = vec4f(rawtex[src_row - 5u], 1.0, 1.0); }
+    if (bitfield(info, 2u, 1u) == 0u) { coord.z = 1.0; }
+    var t: vec3f;
+    if (kind == 1u) { t = vec3f(coord.xy, 1.0); }
+    else if (kind == 2u) { t = vec3f(o.colors_0.x, o.colors_0.y, 1.0); }
+    else if (kind == 3u) { t = vec3f(o.colors_1.x, o.colors_1.y, 1.0); }
+    else {
+      let tm = tm_index[i];
+      t = vec3f(dot(coord, u.rows[6u + tm]), dot(coord, u.rows[7u + tm]), 1.0);
+      if (projection) { t.z = dot(coord, u.rows[8u + tm]); }
+    }
+    if (kind == 0u) {
+      if (projection && t.z == 0.0) { t = vec3f(clamp(t.xy, vec2f(-2.0), vec2f(2.0)), t.z); }
+      if (dual) {
+        let r = $ROW_TEXGEN + 3u * i;
+        if ((uid($U_POSTINFO + i) & 0x100u) != 0u) { t = normalize(t); }
+        t = vec3f(dot(u.rows[r].xyz, t) + u.rows[r].w, dot(u.rows[r + 1u].xyz, t) + u.rows[r + 1u].w, dot(u.rows[r + 2u].xyz, t) + u.rows[r + 2u].w);
+      }
+    }
+    tc[i] = t;
+  }
+  o.tex0 = tc[0]; o.tex1 = tc[1]; o.tex2 = tc[2]; o.tex3 = tc[3];
+  o.tex4 = tc[4]; o.tex5 = tc[5]; o.tex6 = tc[6]; o.tex7 = tc[7];
+  return o;
+}
+
+fn sample_map(tmap: u32, uv: vec2f, bias: f32) -> vec4f {
+  var s: vec4f;
+  switch tmap {
+    case 0u: { s = textureSampleBias(tex0, samp0, uv, bias); }
+    case 1u: { s = textureSampleBias(tex1, samp1, uv, bias); }
+    case 2u: { s = textureSampleBias(tex2, samp2, uv, bias); }
+    case 3u: { s = textureSampleBias(tex3, samp3, uv, bias); }
+    case 4u: { s = textureSampleBias(tex4, samp4, uv, bias); }
+    case 5u: { s = textureSampleBias(tex5, samp5, uv, bias); }
+    case 6u: { s = textureSampleBias(tex6, samp6, uv, bias); }
+    default: { s = textureSampleBias(tex7, samp7, uv, bias); }
+  }
+  return s;
+}
+
+// The TEV's registers PREV, C0, C1, C2 and K0-K3, and the current stage's texture, ras and konst
+// colours. Separate variables and select chains, not arrays: an array indexed at run time is
+// scratch memory on a GPU (and on SwiftShader), and the TEV indexes them in every stage.
+var<private> r0: vec4i;
+var<private> r1: vec4i;
+var<private> r2: vec4i;
+var<private> r3: vec4i;
+var<private> k0: vec4i;
+var<private> k1: vec4i;
+var<private> k2: vec4i;
+var<private> k3: vec4i;
+var<private> tex_t: vec4i;
+var<private> ras_t: vec4i;
+var<private> konst_t: vec4i;
+
+fn reg(i: u32) -> vec4i { return select(select(r3, r2, i == 2u), select(r1, r0, i == 0u), i < 2u); }
+fn kreg(i: u32) -> vec4i { return select(select(k3, k2, i == 2u), select(k1, k0, i == 0u), i < 2u); }
+fn set_rgb(i: u32, v: vec3i) {
+  if (i == 0u) { r0 = vec4i(v, r0.a); } else if (i == 1u) { r1 = vec4i(v, r1.a); }
+  else if (i == 2u) { r2 = vec4i(v, r2.a); } else { r3 = vec4i(v, r3.a); }
+}
+fn set_alpha(i: u32, v: i32) {
+  if (i == 0u) { r0.w = v; } else if (i == 1u) { r1.w = v; } else if (i == 2u) { r2.w = v; } else { r3.w = v; }
+}
+// A swap table (ksel registers 2 * table and 2 * table + 1).
+fn swap_table(v: vec4i, table: u32) -> vec4i {
+  let a = uid($U_KSEL + 2u * table);
+  let b = uid($U_KSEL + 2u * table + 1u);
+  return vec4i(v[a & 3u], v[(a >> 2u) & 3u], v[b & 3u], v[(b >> 2u) & 3u]);
+}
+// kselC / kselA. Selections 0-7 are 255, 223, 191, 159, 128, 96, 64, 32.
+fn konst_value(k: u32) -> i32 { return select(256, 255, k < 4u) - 32 * i32(k); }
+fn konst_color(kc: u32) -> vec3i {
+  if (kc < 8u) { return vec3i(konst_value(kc)); }
+  if (kc < 12u) { return vec3i(0); }
+  if (kc < 16u) { return kreg(kc - 12u).rgb; }
+  return vec3i(kreg((kc - 16u) % 4u)[(kc - 16u) / 4u]);
+}
+fn konst_alpha(ka: u32) -> i32 {
+  if (ka < 8u) { return konst_value(ka); }
+  if (ka < 16u) { return 0; }
+  return kreg((ka - 16u) % 4u)[(ka - 16u) / 4u];
+}
+// cInput / aInput.
+fn color_in(i: u32) -> vec3i {
+  var r = vec3i(0);
+  if (i < 8u) { let v = reg(i >> 1u); r = select(v.rgb, vec3i(v.a), (i & 1u) != 0u); }
+  else if (i == 8u) { r = tex_t.rgb; }
+  else if (i == 9u) { r = vec3i(tex_t.a); }
+  else if (i == 10u) { r = ras_t.rgb; }
+  else if (i == 11u) { r = vec3i(ras_t.a); }
+  else if (i == 12u) { r = vec3i(255); }
+  else if (i == 13u) { r = vec3i(128); }
+  else if (i == 14u) { r = konst_t.rgb; }
+  return r;
+}
+fn alpha_in(i: u32) -> i32 {
+  var r = 0;
+  if (i < 4u) { r = reg(i).a; }
+  else if (i == 4u) { r = tex_t.a; }
+  else if (i == 5u) { r = ras_t.a; }
+  else if (i == 6u) { r = konst_t.a; }
+  return r;
+}
+// write_tev_regular's tables: the scale (1, 2, 4, 1/2 by the final shift), the bias (0, +128, -128),
+// and the lerp's rounding lerpBias[2 * op + ((shift == 3) == alpha)]: 0, +128, 0, +127.
+fn tev_scale(shift: u32) -> i32 { return select(1, 1 << shift, shift < 3u); }
+fn tev_bias(bias: u32) -> i32 { return select(select(0, -128, bias == 2u), 128, bias == 1u); }
+fn tev_round(op: u32, shift: u32, alpha: bool) -> i32 {
+  return select(0, select(128, 127, op == 1u), (shift == 3u) == alpha);
+}
+fn regular_color(a: vec3i, b: vec3i, c: vec3i, d: vec3i, bias: u32, op: u32, shift: u32) -> vec3i {
+  let s = tev_scale(shift);
+  let lerped = ((a * 256 + (b - a) * c) * s + tev_round(op, shift, false)) >> vec3u(8u);
+  let base = (d + tev_bias(bias)) * s;
+  var r = select(base + lerped, base - lerped, op == 1u);
+  if (shift == 3u) { r = r >> vec3u(1u); }
+  return r;
+}
+fn regular_alpha(a: i32, b: i32, c: i32, d: i32, bias: u32, op: u32, shift: u32) -> i32 {
+  let s = tev_scale(shift);
+  let lerped = ((a * 256 + (b - a) * c) * s + tev_round(op, shift, true)) >> 8u;
+  let base = (d + tev_bias(bias)) * s;
+  var r = select(base + lerped, base - lerped, op == 1u);
+  if (shift == 3u) { r = r >> 1u; }
+  return r;
+}
+// write_tev_compare: R8, GR16, BGR24 (on the colour inputs, for either combiner), else per component.
+fn compare_wide(cmp: u32, a: vec3i, b: vec3i) -> bool {
+  let k = select(select(vec3i(1, 0, 0), vec3i(1, 256, 0), cmp >= 2u), vec3i(1, 256, 65536), cmp >= 4u);
+  return select(dot(a, k) > dot(b, k), dot(a, k) == dot(b, k), (cmp & 1u) != 0u);
+}
+fn compare_color(cmp: u32, a: vec4i, b: vec4i, c: vec4i, d: vec4i) -> vec3i {
+  if (cmp < 6u) { return d.rgb + select(vec3i(0), c.rgb, compare_wide(cmp, a.rgb, b.rgb)); }
+  return d.rgb + select(vec3i(0), c.rgb, select(a.rgb > b.rgb, a.rgb == b.rgb, cmp == 7u));
+}
+fn compare_alpha(cmp: u32, a: vec4i, b: vec4i, c: vec4i, d: vec4i) -> i32 {
+  if (cmp < 6u) { return d.a + select(0, c.a, compare_wide(cmp, a.rgb, b.rgb)); }
+  return d.a + select(0, c.a, select(a.a > b.a, a.a == b.a, cmp == 7u));
+}
+// GX compare functions: bit 0 less, bit 1 equal, bit 2 greater (NEVER 0 ... ALWAYS 7).
+fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
+  return ((f & 1u) != 0u && a < r) || ((f & 2u) != 0u && a == r) || ((f & 4u) != 0u && a > r);
+}
+
+@fragment fn fs(i: Out) -> @location(0) vec4f {
+  let ntex = uid($U_NUMTEXGENS);
+  let stages = uid($U_STAGES);
+  r0 = vec4i(u.rows[$ROW_TEV_COLORS]); r1 = vec4i(u.rows[$ROW_TEV_COLORS + 1]);
+  r2 = vec4i(u.rows[$ROW_TEV_COLORS + 2]); r3 = vec4i(u.rows[$ROW_TEV_COLORS + 3]);
+  k0 = vec4i(u.rows[$ROW_KCOLORS]); k1 = vec4i(u.rows[$ROW_KCOLORS + 1]);
+  k2 = vec4i(u.rows[$ROW_KCOLORS + 2]); k3 = vec4i(u.rows[$ROW_KCOLORS + 3]);
+  let col0 = vec4i(round(i.colors_0 * 255.0));
+  let col1 = vec4i(round(i.colors_1 * 255.0));
+  // Each stage samples its texture in the stage, in uniform control flow; the clip test's discard
+  // comes after the last stage, so that no sample follows a discard.
+  for (var n = 0u; n < stages; n++) {
+    let cc = uid($U_COLOR_ENV + n);
+    let ac = uid($U_ALPHA_ENV + n);
+    let tref = uid($U_TREF + n / 2u);
+    let odd = (n & 1u) != 0u;
+    let cd = bitfield(cc, 0u, 4u); let ccc = bitfield(cc, 4u, 4u); let cb = bitfield(cc, 8u, 4u); let ca = bitfield(cc, 12u, 4u);
+    let cbias = bitfield(cc, 16u, 2u); let cop = bitfield(cc, 18u, 1u); let cclamp = bitfield(cc, 19u, 1u);
+    let cshift = bitfield(cc, 20u, 2u); let cdest = bitfield(cc, 22u, 2u);
+    let ad = bitfield(ac, 4u, 3u); let acc = bitfield(ac, 7u, 3u); let ab = bitfield(ac, 10u, 3u); let aa = bitfield(ac, 13u, 3u);
+    let abias = bitfield(ac, 16u, 2u); let aop = bitfield(ac, 18u, 1u); let aclamp = bitfield(ac, 19u, 1u);
+    let ashift = bitfield(ac, 20u, 2u); let adest = bitfield(ac, 22u, 2u);
+    var texel = vec4i(255);
+    let uses_tex = ca == 8u || cb == 8u || ccc == 8u || cd == 8u || ca == 9u || cb == 9u || ccc == 9u || cd == 9u ||
+                   aa == 4u || ab == 4u || acc == 4u || ad == 4u;
+    if (bitfield(tref, select(6u, 18u, odd), 1u) != 0u && uses_tex) {
+      let coord = bitfield(tref, select(3u, 15u, odd), 3u);
+      let tmap = bitfield(tref, select(0u, 12u, odd), 3u);
+      var uv = vec2f(0.0);
+      if (coord < ntex) {
+        var t = i.tex0;
+        if (coord == 1u) { t = i.tex1; } else if (coord == 2u) { t = i.tex2; } else if (coord == 3u) { t = i.tex3; }
+        else if (coord == 4u) { t = i.tex4; } else if (coord == 5u) { t = i.tex5; } else if (coord == 6u) { t = i.tex6; }
+        else if (coord == 7u) { t = i.tex7; }
+        uv = t.xy / select(t.z, 2.0, t.z == 0.0);
+      }
+      texel = vec4i(round(sample_map(tmap, uv, u.rows[103u + tmap / 4u][tmap % 4u]) * 255.0));
+    }
+    if (ca == 10u || cb == 10u || ccc == 10u || cd == 10u || ca == 11u || cb == 11u || ccc == 11u || cd == 11u ||
+        aa == 5u || ab == 5u || acc == 5u || ad == 5u) {
+      let chan = bitfield(tref, select(7u, 19u, odd), 3u);
+      ras_t = vec4i(0);
+      if (chan == 0u) { ras_t = swap_table(col0, bitfield(ac, 0u, 2u)); }
+      if (chan == 1u) { ras_t = swap_table(col1, bitfield(ac, 0u, 2u)); }
+    }
+    tex_t = swap_table(texel, bitfield(ac, 2u, 2u));
+    if (ca == 14u || cb == 14u || ccc == 14u || cd == 14u || aa == 6u || ab == 6u || acc == 6u || ad == 6u) {
+      let ksel = uid($U_KSEL + n / 2u);
+      konst_t = vec4i(konst_color(bitfield(ksel, select(4u, 14u, odd), 5u)), konst_alpha(bitfield(ksel, select(9u, 19u, odd), 5u)));
+    }
+    let tin_a = vec4i(color_in(ca), alpha_in(aa)) & vec4i(255);
+    let tin_b = vec4i(color_in(cb), alpha_in(ab)) & vec4i(255);
+    var tin_c = vec4i(color_in(ccc), alpha_in(acc)) & vec4i(255);
+    if (ccc != 15u && cbias != 3u) { tin_c = vec4i(tin_c.rgb + (tin_c.rgb >> vec3u(7u)), tin_c.a); }
+    if (acc != 7u && abias != 3u) { tin_c.w = tin_c.a + (tin_c.a >> 7u); }
+    let tin_d = vec4i(color_in(cd), alpha_in(ad));
+    var c: vec3i;
+    if (cbias != 3u) { c = regular_color(tin_a.rgb, tin_b.rgb, tin_c.rgb, tin_d.rgb, cbias, cop, cshift); }
+    else { c = compare_color((cshift << 1u) | cop, tin_a, tin_b, tin_c, tin_d); }
+    var a: i32;
+    if (abias != 3u) { a = regular_alpha(tin_a.a, tin_b.a, tin_c.a, tin_d.a, abias, aop, ashift); }
+    else { a = compare_alpha((ashift << 1u) | aop, tin_a, tin_b, tin_c, tin_d); }
+    if (cclamp != 0u) { c = clamp(c, vec3i(0), vec3i(255)); } else { c = clamp(c, vec3i(-1024), vec3i(1023)); }
+    if (aclamp != 0u) { a = clamp(a, 0, 255); } else { a = clamp(a, -1024, 1023); }
+    set_rgb(cdest, c);
+    set_alpha(adest, a);
+  }
+  if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
+  var prev = r0;
+  let last_c = bitfield(uid($U_COLOR_ENV + stages - 1u), 22u, 2u);
+  let last_a = bitfield(uid($U_ALPHA_ENV + stages - 1u), 22u, 2u);
+  prev = vec4i(reg(last_c).rgb, reg(last_a).a) & vec4i(255);
+  // Alpha test.
+  let ops = uid($U_ALPHA_OPS);
+  let alpharef = vec2i(u.rows[105].xy);
+  let pass0 = alpha_compare(ops & 7u, prev.a, alpharef.x);
+  let pass1 = alpha_compare((ops >> 3u) & 7u, prev.a, alpharef.y);
+  let logic = ops >> 6u;
+  var passed = pass0 == pass1;
+  if (logic == 0u) { passed = pass0 && pass1; }
+  if (logic == 1u) { passed = pass0 || pass1; }
+  if (logic == 2u) { passed = pass0 != pass1; }
+  if (!passed) { discard; }
+  // Fog: the EFB depth is reversed, as upstream's.
+  let fog = uid($U_FOG);
+  let fsel = bitfield(fog, 21u, 3u);
+  if (fsel != 0u) {
+    let fogcolor = vec4i(u.rows[$ROW_FOG]);
+    let fogi = vec4i(u.rows[$ROW_FOG + 1]);
+    let zCoord = clamp(i32(round((1.0 - i.pos.z) * 16777216.0)), 0, 16777215);
+    var ze: f32;
+    if (bitfield(fog, 20u, 1u) == 0u) { ze = (u.rows[$ROW_FOG + 3].x * 16777216.0) / f32(fogi.y - (zCoord >> u32(fogi.w))); }
+    else { ze = u.rows[$ROW_FOG + 3].x * (f32(zCoord) / 16777216.0); }
+    if ((fog & 0x400u) != 0u) {
+      var x_adjust = (2.0 * (i.pos.x / u.rows[$ROW_FOG + 2].y)) - 1.0 - u.rows[$ROW_FOG + 2].x;
+      x_adjust = sqrt(x_adjust * x_adjust + u.rows[$ROW_FOG + 2].z * u.rows[$ROW_FOG + 2].z) / u.rows[$ROW_FOG + 2].z;
+      ze = ze * x_adjust;
+    }
+    var fogv = clamp(ze - u.rows[$ROW_FOG + 3].z, 0.0, 1.0);
+    if (fsel == 4u) { fogv = 1.0 - exp2(-8.0 * fogv); }
+    if (fsel == 5u) { fogv = 1.0 - exp2(-8.0 * fogv * fogv); }
+    if (fsel == 6u) { fogv = exp2(-8.0 * (1.0 - fogv)); }
+    if (fsel == 7u) { fogv = 1.0 - fogv; fogv = exp2(-8.0 * fogv * fogv); }
+    let ifog = i32(round(fogv * 256.0));
+    prev = vec4i((prev.rgb * (256 - ifog) + fogcolor.rgb * ifog) >> vec3u(8u), prev.a);
+  }
+  return vec4f(prev) / 255.0;
+}
+)WGSL";
+  const std::pair<const char*, int> tokens[] = {
+    {"$ROW_UID", ROW_UID}, {"$ROW_TEV_COLORS", ROW_TEV_COLORS}, {"$ROW_KCOLORS", ROW_KCOLORS},
+    {"$ROW_MATERIALS", ROW_MATERIALS}, {"$ROW_FOG", ROW_FOG}, {"$ROW_TEXGEN", ROW_TEXGEN}, {"$ROW_LIGHTS", ROW_LIGHTS},
+    {"$U_COMPONENTS", U_COMPONENTS}, {"$U_NUMCHANS", U_NUMCHANS}, {"$U_CHANS", U_CHANS},
+    {"$U_NUMTEXGENS", U_NUMTEXGENS}, {"$U_DUALTEX", U_DUALTEX}, {"$U_TEXGEN", U_TEXGEN},
+    {"$U_POSTINFO", U_POSTINFO}, {"$U_STAGES", U_STAGES}, {"$U_COLOR_ENV", U_COLOR_ENV},
+    {"$U_ALPHA_ENV", U_ALPHA_ENV}, {"$U_TREF", U_TREF}, {"$U_KSEL", U_KSEL},
+    {"$U_ALPHA_OPS", U_ALPHA_OPS}, {"$U_FOG", U_FOG},
+    {"$COL0", int(gx::VB_HAS_COL0)}, {"$COL1", int(gx::VB_HAS_COL1)}, {"$NRM0", int(gx::VB_HAS_NRM0)},
+    {"$UV0", int(gx::VB_HAS_UV0)},
+  };
+  for (const auto& [token, value] : tokens) {
+    const std::string name(token), number = std::to_string(value) + "u";
+    for (size_t at; (at = s.find(name)) != std::string::npos;) {
+      // A token is followed by neither a letter, a digit nor '_' ($U_CHANS is not $U_CHANSX).
+      const size_t end = at + name.size();
+      if (end < s.size() && (std::isalnum(static_cast<unsigned char>(s[end])) || s[end] == '_')) {
+        std::fprintf(stderr, "gx_wgsl: token %s is a prefix of another\n", token);
+        std::abort();
+      }
+      s.replace(at, name.size(), number);
+    }
+  }
+  return s;
+}
+
+void fill_uid_rows(const ShaderUid& uid, float (*u)[4]) {
+  for (size_t k = 0; k < uid.w.size(); ++k) u[ROW_UID + k / 4][k % 4] = float(uid.w[k]);
+}
+
 void fill_tev_rows(const gx::DrawCall& dc, float (*u)[4]) {
   const gx::BPMemory& bp = dc.bp;
   for (int i = 0; i < 4; ++i)
@@ -436,6 +923,26 @@ void fill_tev_rows(const gx::DrawCall& dc, float (*u)[4]) {
     f0[0] = ssc; f0[1] = 2.0f * vp[0]; f0[2] = float((bp.fogrange(5) >> 12) & 0xFFF) / 256.0f; f0[3] = 0;
   } else {
     f0[0] = 0; f0[1] = 1; f0[2] = 1; f0[3] = 0;
+  }
+  // The lights, for a draw with a lit channel (fill_vs_constants, gx_shader.cpp:756-779). A light
+  // block is XF 0x600 + 16i as xf_load stored it: three unused words, the colour (R in the high
+  // byte), then cosine and distance attenuation, position and direction, three floats each.
+  bool lit = false;
+  for (uint32_t j = 0; j < (dc.xf_regs[0x09] & 3) && j < 2; ++j) lit = lit || ((dc.xf_regs[0x0E + j] | dc.xf_regs[0x10 + j]) & 2);
+  for (int i = 0; lit && i < 8; ++i) {
+    const uint8_t* L = dc.lights[i];
+    float* row = u[ROW_LIGHTS + 5 * i];
+    uint32_t colour; std::memcpy(&colour, L + 12, 4);
+    for (int c = 0; c < 4; ++c) row[c] = float((colour >> (24 - 8 * c)) & 0xFF);
+    float f[9]; std::memcpy(f, L + 16, sizeof f);
+    for (int k = 0; k < 3; ++k) { u[ROW_LIGHTS + 5 * i + 1][k] = f[k]; u[ROW_LIGHTS + 5 * i + 2][k] = f[3 + k]; u[ROW_LIGHTS + 5 * i + 3][k] = f[6 + k]; }
+    // A distance attenuation of zero divides by zero: upstream's (and Dolphin's) small constant.
+    if (std::fabs(f[3]) < 0.00001f && std::fabs(f[4]) < 0.00001f && std::fabs(f[5]) < 0.00001f) u[ROW_LIGHTS + 5 * i + 2][0] = 0.00001f;
+    float d[3]; std::memcpy(d, L + 52, sizeof d);
+    const double norm = double(d[0]) * d[0] + double(d[1]) * d[1] + double(d[2]) * d[2];
+    const float nf = norm > 0 ? float(1.0 / std::sqrt(norm)) : 0.0f;
+    for (int k = 0; k < 3; ++k) u[ROW_LIGHTS + 5 * i + 4][k] = d[k] * nf;
+    for (int r = 1; r <= 4; ++r) u[ROW_LIGHTS + 5 * i + r][3] = 0.0f;
   }
   // Each texgen's post-transform matrix (XF 0x500 + 4 * index), three rows.
   const uint32_t ntex = dc.xf_regs[0x3F] & 15;
