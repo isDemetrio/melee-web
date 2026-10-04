@@ -352,13 +352,26 @@ manual `workflow_dispatch` with `upload_binary: true`, retention 3 days, and it 
 any pull request. The reason it is needed at all: the machine that edits this repository
 cannot compile, and CI has no disc image, so an executable built in CI and run on the
 operator's own machine against the operator's own disc is the only route to a native
-checkpoint trace before D1 is answered. Nothing is committed, nothing is public, and the
-switch is one input. **Reversal: set the input back to false, or delete the artifact** — no
-other part of the repository depends on it. The full disc image is *not* uploaded by this
-decision; that remains D1 and stays the operator's call. **Extended the same day to the WASM
-Node module** (`phase0-build.yml`, input `upload_module`, same off-by-default, three-day,
-private-only shape), for exactly the same reason: now that the core links, the module is the
-only route by which the operator's own disc can produce a WASM checkpoint trace for P0-09.
+checkpoint trace before D1 is answered. Nothing is committed and the switch is one input.
+**Reversal: set the input back to false, or delete the artifact** — no other part of the
+repository depends on it. The full disc image is *not* uploaded by this decision; that
+remains D1 and stays the operator's call. **Extended the same day to the WASM
+Node module** (`phase0-build.yml`, input `upload_module`, same off-by-default, three-day
+shape, with the limits of "private" recorded in the correction below), for exactly the same
+reason: now that the core links, the module is the only route by which the operator's own
+disc can produce a WASM checkpoint trace for P0-09.
+
+**Corrected 2026-10-04 by measurement: "private" here means off by default and not anonymous,
+not collaborators-only.** This repository is public (`docs/OPEN_QUESTIONS.md` Q11), and on it
+the artifact *list* answers `200` **with no credential at all**: the names, sizes, expiry dates
+and workflow runs of `melee-core-headless`, `melee-core-wasm-node` and `melee-spike-dist` are
+world-readable, while the archive itself answers `401 Requires authentication` without one.
+GitHub's REST documentation for these endpoints says "Anyone with read access to the
+repository can use this endpoint", and every GitHub account has read access to a public
+repository; GitHub staff call the authentication requirement deliberate
+(`github.com/actions/upload-artifact/issues/51`). The off-by-default switch and the three-day
+retention are real, and they are the whole of the protection. The measurement, and the one step
+it does not cover, are in `docs/OPEN_QUESTIONS.md` Q11.
 
 **D4 — How devices reach the spike page.** Options: a Cloudflare Pages preview behind Access
 (needs `docs/OPEN_QUESTIONS.md` Q3 credentials, and means deploying game-derived `.wasm` to

@@ -399,8 +399,9 @@ session while looking for the next autonomous step; nothing has failed because o
 
 **What is not in question.** `isDemetrio/melee-orig-dol` is private (checked the same day, Q2), no
 game data is tracked here (`python3 scripts/check_no_game_data.py --all`: 264 tracked files, clean),
-and the compiled core stays in private artifacts (D3). Nothing found so far looks like an
-unintended exposure of Nintendo's data.
+and the compiled core stays in Actions artifacts that are off by default and expire after
+three days (D3; what that protects is measured at the end of this entry). Nothing found so far
+looks like an unintended exposure of Nintendo's data.
 
 **What needs an answer.**
 
@@ -415,3 +416,34 @@ unintended exposure of Nintendo's data.
   the spike page. The repository's source is published already, so the exposure O1 reasons about is
   wider than the deploy it was written for. That does not answer O1 and it is not a legal opinion;
   it is a fact the decision should be taken with.
+
+**What a "private" artifact protects here — measured 2026-10-04.** D3 calls the uploaded build
+products private and this entry repeated it. On a public repository that word needs its measured
+limits, because those artifacts carry game-derived code (`melee-core-headless`,
+`melee-core-wasm-node`, `melee-spike-dist`).
+
+- **World-readable, with no credential at all**: `curl
+  https://api.github.com/repos/isDemetrio/melee-web/actions/artifacts` answers `200` without a
+  token, and so does the single-artifact endpoint — the name, size, expiry date and the workflow
+  run behind every artifact, `total_count` 601 at that moment, the three above included. The run
+  page (`https://github.com/isDemetrio/melee-web/actions/runs/37169339350`) answers `200` too.
+- **Not world-readable**: the archive. The same request with `/zip` appended answers `401` with
+  `{"message": "Requires authentication"}`, and the run-log API answers `403`. No anonymous
+  visitor can download anything.
+- **What that leaves**: a credential. GitHub's REST documentation for the artifact endpoints says
+  "Anyone with read access to the repository can use this endpoint"
+  (`docs.github.com/en/rest/actions/artifacts`, read 2026-10-04; the download endpoint's own
+  revision carries the same sentence,
+  `docs.github.com/en/enterprise-server@3.4/rest/actions/artifacts`), and read access to a public
+  repository is held by every GitHub account. GitHub staff state the authentication requirement is
+  deliberate (`github.com/actions/upload-artifact/issues/51`, "Currently it's by design"), and
+  that thread has a non-collaborator downloading a public repository's artifact with a token that
+  grants it nothing else. **Not measured from here**: a download with a credential that is not a
+  collaborator's — this VPS holds only the operator's own token, so that last step is
+  documentation and a third-party report, not this session's measurement.
+
+**What follows from it.** The three-day retention and the off-by-default switch are unchanged and
+are the only bounds these artifacts have. What they are not is an access control: here, "private
+artifact" means "not anonymous", not "collaborators only". That is a fact O1 should be taken
+with, and it is why Q8's "private artifact exception" is worth re-reading — an exception granted
+for a private repository's artifact is weaker on this one than it was when it was granted.
