@@ -255,11 +255,18 @@ Three things this cannot settle on its own:
 - **The decision (O1).** The dist contains the game-derived module. Publishing it, even behind
   Access, is a step the operator decides: the dispatch input and the credentials are the two locks,
   not a permission. Do not set those credentials before O1 is answered.
-- **The header rules.** Whether Pages merges two matching `_headers` rules or lets the later one win
-  is unverified. After the first deploy, check
+- **The header rules.** Read from the documentation on 2026-10-04
+  (`developers.cloudflare.com/pages/configuration/headers/`, no account): matching rules are
+  **merged** — "If a header is applied twice in the `_headers` file, the values are joined with a
+  comma separator" — and detaching a header is documented, which is what the appended
+  `/spike-core/*` rule uses ("prepending the header name with an exclamation mark and space"). So
+  without the `!` line the module would be served `public, max-age=31536000, immutable, no-store`.
+  What that page does not say, and only the first deploy can show, is whether a `!` inside the same
+  rule that then re-sets the header is applied in order. After the first deploy, check
   `curl -sI https://phase0-spike.<project>.pages.dev/spike-core/melee_core_web.wasm`: it must not
   show `immutable`. Same for `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` on
-  `spike.html`, and `Content-Type: application/wasm` on the module.
+  `spike.html`, and `Content-Type: application/wasm` on the module. A Function response is not a
+  static asset, so `_headers` does not apply to `/phase0/disc` at all (same page).
 - **The address format.** Verified 2026-10-04: `https://phase0-spike.melee-web.pages.dev/spike.html`
   answers `200` (the Access *Sign in* page), so the `<branch>.<project>.pages.dev` form this
   bullet expected is the one the project uses. What the module is actually served with is still
