@@ -97,3 +97,53 @@ supply a factor three. Inclusive guest display call `HSD_JObjDisp` (`803749B0`) 
 70%; `SetupEnvelopeModelMtx` (`8036E4C4`) about 16%. These include callees and must not
 be added to GX or to each other. Names come from the pinned `port/recomp/GALE01_symbols.txt`.
 No optimization has been implemented on this evidence.
+
+The inclusive display result is stable: `HSD_JObjDisp` **70.514/71.462/71.365%**.
+Even subtracting *every* GX sample in each run (including those outside that call), at least
+**37.679/37.798/39.019%** of total time remains below this guest display function. That is
+**56.1–57.7% of non-GX time** in the native replay. The dominant "simulation" area is therefore
+guest scene preparation, with its matrix/memory operations, not demonstrably fighter physics.
+`SetupEnvelopeModelMtx` alone is **13.889–16.275% inclusive** (overlaps other rows).
+
+## What can and cannot be removed without changing behavior
+
+These are opportunity ceilings from sampled CPU cost, **not measured speedups**. A new
+implementation must show an A/B improvement before it earns a positive savings estimate.
+There has been no such successful A/B optimization in this task, so the demonstrated
+production saving is currently **0 ms**.
+
+- **Guest memory helpers:** `st32` + `ld32` account for 13.4–15.0% self in the first
+  native sample. Reducing call/dispatch/range-check overhead is a candidate; required loads,
+  stores, endian conversion, MMIO side effects and RAM invalidation cannot be discarded.
+  Eliminating even the whole sampled self cost would save only about 1.1–1.2 native ms/frame.
+  The existing WASM optimization policy differs, so this is not an iPhone estimate.
+- **Guest scene/matrices:** joint traversal and envelope matrix setup dominate the guest
+  display path. Specialization or reuse needs proof of unchanged matrix inputs, writes and
+  rounding. Skipping traversal/animation, using approximate math, or replacing emulated PPC
+  arithmetic with host math is not an admissible saving. The profile does not demonstrate
+  how much of this implementation is redundant.
+- **FIFO storage:** byte-vector append self cost 3.20–3.71% (about 0.25–0.30 native ms).
+  `write_fifo` resizes/initializes then overwrites each appended byte; avoiding redundant
+  initialization is a candidate, but retaining byte order and exactly the same drain/interrupt
+  boundaries is mandatory. This ceiling includes necessary append work; it is not all removable.
+- **Draw recording and texture snapshots:** state copies/cache lookups could be reduced only
+  while preserving immutable snapshots, texture/palette versions, owners and order. Existing
+  code already merges compatible consecutive primitives, hoists vertex format work per call,
+  caches snapshots and skips unused matrix/light copies. "Add a cache" is not a measured gain.
+  Phone E/F exclusive record+texture costs total **1.498/1.478 ms**, an upper ceiling if both
+  vanished, before accounting for the work they must still perform.
+- **Observer metadata:** phone game+draw observers total **0.315 ms** in both E/F; deleting
+  all of them cannot supply a meaningful factor-three contribution. Existing readers prevent
+  simply turning them off (`PORT_CHANGES.md`, patch 0009).
+- **Exact FMA:** 2.04–2.63% self native, about 0.16–0.21 ms/frame. The particular software
+  algorithm is not proven optimal, but its PPC rounding/NaN behavior is required. Approximate
+  or fast-math replacements violate the task. Even an impossible zero-cost replacement is small.
+
+"Required semantics" is not a lower bound on milliseconds. These samples do **not** prove
+that a function is already maximally optimized, and no honest numerical irreducible floor
+for a different recompiler/architecture can be derived from them. The proven negative is the
+Amdahl limit of this intervention scope, not a theorem that Melee in a browser is impossible.
+
+The checkpoint digest proves equality of the entire CPU/RAM/ARAM/event trace in this replay.
+A future GX optimization additionally needs identical decoded vertices/state/texture snapshots
+(or an equivalent rendering oracle): a visually wrong decoder can preserve CPU checkpoints.
