@@ -156,3 +156,42 @@ python3 scripts/analysis/cpuprofile_split.py run-attached/inmatch.cpuprofile --f
 ```
 
 Lo script di analisi legge solo nomi di funzione e scrive aggregati.
+
+## 4. Prototipo misurato: niente FMA software quando il prodotto è esatto (PR #121)
+
+Una sola modifica, in `wasm/compat/fma.h`: se `x*y` è esatto in double (≤ 53 bit significativi fra
+i due fattori, esponenti in [-300, 300]) il risultato è `pinned(x*y + z)`, che arrotonda una volta
+sola sulla somma esatta, cioè **è** la FMA. Altrimenti si passa dal percorso generale di prima,
+invariato.
+
+**Il comportamento non cambia — verificato:**
+
+| prova | esito |
+| --- | --- |
+| traccia 2400 checkpoint, modulo web con renderer attaccato (run CI `37239610932`) | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` |
+| traccia 2400 checkpoint, modulo Node (`run_checkpoints.sh`) | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` |
+| corpus del probe contro le intrinseche x86 native, 8.000.000 risultati | 0 divergenti (x86 e arm64) |
+| nuovo blocco di `fma_shim_test` in WebAssembly: forma fmadds/ps_madd, cancellazioni esatte, addendi a ±32 ulp | 16.000.000 risultati, 0 diversi, scorciatoia presa 8.000.000/8.000.000 |
+| stesso controllo nativo contro la `fma` di glibc, 20.000.000 terne | 0 diversi, scorciatoia presa sempre |
+
+**Misura (V8, VPS, `sim_ms` medio in partita, coppie alternate, stesso build con nomi):**
+
+| coppia | prototipo | base | rapporto |
+| --- | ---: | ---: | ---: |
+| headless 1 | 30,488 | 35,322 | 0,863 |
+| headless 2 | 33,201 | 35,203 | 0,943 |
+| headless 3 | 33,514 | 35,647 | 0,940 |
+| attaccato 1 | 51,723 | 58,178 | 0,889 |
+| attaccato 2 | 56,454 | 60,219 | 0,937 |
+
+Cinque coppie su cinque a favore, rapporto medio **0,915 headless** e **0,913 attaccato**. Il rumore
+della VPS è grande (la base è salita da 31,1 a 35,6 ms durante la serie): il segno è solido, la
+grandezza ±3 punti. Il profilo del prototipo conferma dove: `fma`+`normalize` della libm scendono da
+**10,0%** a **2,3%** del fotogramma headless; l'aritmetica emulata da 4,70 a 1,70 ms/fotogramma.
+
+**Non misurato:** il telefono (JSC). Il guadagno lì dipende da quanto costa la `fma` software su JSC
+rispetto al resto, ed è la prossima misura dell'operatore: stessa partita, build di #121 contro `main`.
+
+**Il residuo**, 2,3%, viene ancora da `PSMTXConcat`. Ipotesi **non verificata**: fattori zero (le
+matrici ne sono piene, e lo zero non passa il test dell'esponente). Per un fattore zero e un addendo
+non zero `x*y + z` è ancora esatto; sarebbe il passo successivo, con la stessa batteria di prove.
