@@ -1,6 +1,12 @@
 name: Beyond core — actual renderer compiler A-B
 on:
   workflow_dispatch:
+    inputs:
+      kind:
+        description: 'compiler (Oz/O2), or hoist (pure per-draw preparation)'
+        type: choice
+        options: [compiler, hoist]
+        default: compiler
 permissions:
   contents: read
 jobs:
@@ -19,18 +25,25 @@ jobs:
       - uses: mymindstorm/setup-emsdk@v14
         with:
           version: ${{ env.EMSDK_VERSION }}
-      - name: Build unchanged renderer at Oz and O2
+      - name: Build renderer experiment outside shared sources
+        env:
+          KIND: ${{ inputs.kind }}
         run: |
+          set -euo pipefail
           scripts/apply_patches.sh
           mkdir -p "$RUNNER_TEMP/results"
           em++ upstream/melee-unlocked/port/runtime/gx/gx_texture.cpp -std=c++17 -O2 \
             -ffp-contract=off -fno-fast-math -fwasm-exceptions -c -o "$RUNNER_TEMP/texture.o"
           for label in baseline candidate; do
             opt=-Oz
-            if [ "$label" = candidate ]; then opt=-O2; fi
-            em++ wasm/render/gx_webgpu.cpp wasm/render/gx_wgsl.cpp \
+            source=wasm/render/gx_webgpu.cpp
+            if [ "$KIND" = hoist ]; then
+              python3 experiments/renderer/prepare.py "$label"
+              source="$RUNNER_TEMP/$label-renderer.cpp"
+            elif [ "$label" = candidate ]; then opt=-O2; fi
+            em++ "$source" wasm/render/gx_wgsl.cpp \
               "$RUNNER_TEMP/texture.o" experiments/renderer/host.cpp \
-              -Inative -I. -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/host -Iupstream/melee-unlocked/port/runtime/ppc \
+              -Inative -I. -Iwasm/render -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/host -Iupstream/melee-unlocked/port/runtime/ppc \
               -Iupstream/melee-unlocked/port/runtime/gx -Iupstream/melee-unlocked/native \
               -std=c++17 "$opt" -ffp-contract=off -fno-fast-math -fwasm-exceptions \
               -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web -sALLOW_MEMORY_GROWTH=1 \

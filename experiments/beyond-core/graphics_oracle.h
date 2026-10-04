@@ -11,7 +11,9 @@
 namespace experiment {
 class GraphicsOracle {
   FILE* file=nullptr;
-  double decode_ms=0;uint64_t decode_bytes=0,frames=0,match_frames=0,four_hud_frames=0;
+  double decode_ms=0,match_decode_ms=0,max_frame_decode_ms=0;
+  uint64_t decode_bytes=0,frames=0,match_frames=0,four_hud_frames=0,match_keys=0,match_zero_keys=0,max_frame_keys=0;
+  std::array<uint64_t,16> format_bytes{};std::array<double,16> format_ms{};
   std::vector<uint8_t> bytes;
   using TextureKey=std::tuple<std::shared_ptr<const gx::TextureSnapshot>,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t>;
   std::map<TextureKey,std::array<uint8_t,20>> cache;
@@ -21,10 +23,20 @@ class GraphicsOracle {
   void blob(const std::vector<uint8_t>& v) {add(uint64_t(v.size()));bytes.insert(bytes.end(),v.begin(),v.end());}
 public:
   GraphicsOracle() {if(auto* p=std::getenv("MELEE_GFX_ORACLE")){file=std::fopen(p,"w");if(!file)std::abort();}}
-  ~GraphicsOracle() {if(file){std::fclose(file);std::printf("graphics decode: {\"decode_ms\":%.6f,\"decoded_bytes\":%llu,\"unique_keys\":%zu,\"frames\":%llu,\"match_frames\":%llu,\"four_hud_frames\":%llu}\n",decode_ms,(unsigned long long)decode_bytes,cache.size(),(unsigned long long)frames,(unsigned long long)match_frames,(unsigned long long)four_hud_frames);}}
+  ~GraphicsOracle() {
+    if(!file)return;std::fclose(file);
+    std::printf("graphics decode: {\"decode_ms\":%.6f,\"decoded_bytes\":%llu,\"unique_keys\":%zu,\"frames\":%llu,\"match_frames\":%llu,\"four_hud_frames\":%llu,\"match_decode_ms\":%.6f,\"match_keys\":%llu,\"match_zero_keys\":%llu,\"max_frame_keys\":%llu,\"max_frame_decode_ms\":%.6f,\"formats\":[",
+      decode_ms,(unsigned long long)decode_bytes,cache.size(),(unsigned long long)frames,
+      (unsigned long long)match_frames,(unsigned long long)four_hud_frames,match_decode_ms,
+      (unsigned long long)match_keys,(unsigned long long)match_zero_keys,(unsigned long long)max_frame_keys,max_frame_decode_ms);
+    for(int i=0;i<16;++i)std::printf("%s{\"format\":%d,\"bytes\":%llu,\"ms\":%.6f}",i?",":"",i,(unsigned long long)format_bytes[i],format_ms[i]);
+    std::printf("]}\n");
+  }
   void frame(const gx::Frame& f) {
     if(!file)return;
-    ++frames;if(f.scene_major==2 && f.scene_minor==2)++match_frames;
+    const bool in_match=f.scene_major==2 && f.scene_minor==2;
+    const double before_ms=decode_ms;const size_t before_keys=cache.size();
+    ++frames;if(in_match)++match_frames;
     if(f.scene_major==2 && f.scene_minor==2 && std::all_of(f.hud_players.begin(),f.hud_players.end(),[](const auto& h){return h.present;}))++four_hud_frames;
     bytes.clear();add(f.sequence);add(f.scene_major);add(f.scene_minor);add(f.discontinuous);
     add(uint64_t(f.vertices.size()));
@@ -64,7 +76,8 @@ public:
           std::vector<uint8_t> rgba;
           auto start=std::chrono::steady_clock::now();
           gx::decode_texture(t.data->image.data()+offset,w,h,t.format,t.data->palette.data(),t.tlut_format,rgba);
-          decode_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+          const double dt=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+          decode_ms+=dt;if(t.format<16){format_ms[t.format]+=dt;format_bytes[t.format]+=rgba.size();}
           decode_bytes+=rgba.size();
           blob(rgba);offset+=n;w=std::max(1u,w/2);h=std::max(1u,h/2);
         }
@@ -74,6 +87,9 @@ public:
     }
     for(auto& h:f.hud_players){add(h.damage);add(h.stocks);add(h.tag_x);add(h.tag_y);add(h.present);add(h.tag_visible);}
     for(auto& s:f.player_names){add(uint64_t(s.size()));bytes.insert(bytes.end(),s.begin(),s.end());}
+    const double frame_ms=decode_ms-before_ms;const size_t frame_keys=cache.size()-before_keys;
+    max_frame_keys=std::max<uint64_t>(max_frame_keys,frame_keys);max_frame_decode_ms=std::max(max_frame_decode_ms,frame_ms);
+    if(in_match){match_decode_ms+=frame_ms;match_keys+=frame_keys;if(!frame_keys)++match_zero_keys;}
     const auto hash=wasm_compat::sha1(bytes.data(),bytes.size());
     std::fprintf(file,"%llu,",(unsigned long long)f.sequence);for(auto b:hash)std::fprintf(file,"%02x",b);std::fputc('\n',file);std::fflush(file);
   }
