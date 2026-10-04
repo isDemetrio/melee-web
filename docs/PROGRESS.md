@@ -3265,7 +3265,32 @@ discover -s scripts/tests` (207 tests, `OK (skipped=1)`), `python3 scripts/check
 --all` (264 tracked files, clean), `bash scripts/tests/test_deploy_guard.sh` (all guards hold),
 `bash scripts/tests/test_device_test_serve.sh` (6 cases passed). `python3 scripts/check_docs.py`
 could not run here — it needs the upstream submodule checkout, which this worktree does not have —
-so the citations gate is CI's to decide. The remaining undone item of the plan's own PR 6 is small
-and still open: `docs/PHASE0_DEPLOY_PLAN.md` section 5 asks for Q3 to be narrowed to the Phase 0
-subset (the O1–O10 table of its section 3), and Q3 still reads as the full Cloudflare/Supabase/TURN
-ask.
+so the citations gate is CI's to decide. The last non-blocked item of the plan's own PR 6 was
+still open when this entry was written — `docs/PHASE0_DEPLOY_PLAN.md` section 5 asks for Q3 to
+be narrowed to the Phase 0 subset (the O1–O10 table of its section 3), while Q3 read as the
+full Cloudflare/Supabase/TURN ask — and was closed in the same session, in the entry below.
+
+## 2026-10-04 — Q3 is narrowed to what Phase 0 actually asks for (cron, `docs/q3-phase0-subset`)
+
+**Why this and not something else.** It is the last non-blocked remainder of the plan's own PR 6:
+`docs/PHASE0_DEPLOY_PLAN.md` section 5 lists, among PR 6's edits, "`docs/OPEN_QUESTIONS.md` (Q3
+ristretta alla Fase 0, Q8 estesa o chiusa)". Q8 was extended on 2026-09-30 in its own status block
+(run `36753728272`), so only Q3 was left, and its section 3 already says why: "Q3 chiede molto di
+più (TURN, Supabase, un dominio): per la Fase 0 basta questo sottoinsieme". The rest of the plan is
+the operator's (O1, O2–O9, M1/M2/M5, Q10(a), Q10(b)) and the renderer is held by the branches that
+own its files. Q3 is the entry the operator is reading to answer O1 and O2–O9 now, and it asked for
+a Cloudflare token with TURN permissions, an account ID, a domain and a Supabase project — three
+things Phase 0 never touches.
+
+**Changed.** `docs/OPEN_QUESTIONS.md` Q3 opens by naming the Phase 0 ask: the ten rows O1–O10 of
+`docs/PHASE0_DEPLOY_PLAN.md` section 3, with the two things that are deliberately not in it (no
+domain, no TURN, no Supabase — those are the product's online play). The wider text stays below it
+unchanged, because it is still true of the product. No credential, no deploy, no workflow and no
+renderer file is involved. `docs/PROGRESS.md` is this entry, and the artifact entry above no longer
+says this item is open.
+
+**Not done, and why.** Nothing was deployed and nothing was asked for: this says what Phase 0 needs,
+it does not obtain it. On the VPS: `python3 -m unittest discover -s scripts/tests` (207 tests, `OK
+(skipped=1)`) and `python3 scripts/check_no_game_data.py --all` (264 tracked files, clean).
+`scripts/check_docs.py` still cannot run here (no upstream submodule in this worktree). CI decides
+the rest.
