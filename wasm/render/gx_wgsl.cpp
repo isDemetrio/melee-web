@@ -789,8 +789,14 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
   let col1 = vec4i(round(i.colors_1 * 255.0));
   // Each stage samples its texture in the stage, in uniform control flow; the clip test's discard
   // comes after the last stage, so that no sample follows a discard.
-  for (var n = 0u; n < stages; n++) {
-    let cc = uid($U_COLOR_ENV + n);
+)WGSL";
+  // Emit the GX maximum once, with a uniform guard for each stage. The old WGSL for-loop
+  // was finite (make_uid supplies 1..16). Avoid its back edge on the stalled CI SwiftShader
+  // path, keeping the arithmetic and runtime state. See docs/LIT_TEV_FLOW.md for evidence.
+  // This expansion is independent of the draw uid: still one shader compiled at attach.
+  for (unsigned stage = 0; stage < 16; ++stage) {
+    s += "  if (stages > " + std::to_string(stage) + "u) {\n    let n = " + std::to_string(stage) + "u;\n";
+    s += R"WGSL(    let cc = uid($U_COLOR_ENV + n);
     let ac = uid($U_ALPHA_ENV + n);
     let tref = uid($U_TREF + n / 2u);
     let odd = (n & 1u) != 0u;
@@ -845,7 +851,9 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
     set_rgb(cdest, c);
     set_alpha(adest, a);
   }
-  if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
+)WGSL";
+  }
+  s += R"WGSL(  if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
   var prev = r0;
   let last_c = bitfield(uid($U_COLOR_ENV + stages - 1u), 22u, 2u);
   let last_a = bitfield(uid($U_ALPHA_ENV + stages - 1u), 22u, 2u);
