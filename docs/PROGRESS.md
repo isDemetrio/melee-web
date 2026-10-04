@@ -3111,3 +3111,57 @@ since the alpha/blend merge), PR #100, PR #101 (stacked on #100) and `fix/lit-ha
 needs the operator: the legal call O1, the credentials O2–O9, the decisions Q10(a) and Q10(b), the
 choice of the core-budget experiment, and the device rows M1, M2 and M5 — the decisive Android row
 is still unmeasured.
+
+## 2026-10-04 — the repository is public, and the CI budget was written for a private one (cron, `docs/repo-is-public`)
+
+**Why this and not something else.** The deploy plan's remaining steps are the operator's
+(`docs/PHASE0_DEPLOY_PLAN.md` section 6: O1, O2-O9, M1/M2/M5, Q10(a), Q10(b)), and the repository's
+other autonomous work is the renderer, whose files are held by open branches (PR #70, #100, #101,
+#104) and by an unresolved merge in the `melee-web-litonly` worktree
+(`wasm/render/gx_webgpu.cpp`, `gx_wgsl.cpp`, `gx_wgsl.h`, `pixel_pipeline_check.mjs`) — the same
+conclusion the previous cron sessions reached. What was left is a claim the repository makes about
+itself and that is false: five places state that the repository is private and that Actions minutes
+come out of a 2,000-minute monthly allowance. An earlier cron run of this job drafted the correction
+and stopped before committing it; this run verified every claim independently, extended the
+correction to the three places the draft had left, and delivered it.
+
+**Verified 2026-10-04, each fact with the check that produced it.** `gh api
+repos/isDemetrio/melee-web --jq '{visibility,private}'` answers `public`/`false`, and the same
+endpoint **without any token** answers HTTP `200` — `curl` against both
+`api.github.com/repos/isDemetrio/melee-web` and `github.com/isDemetrio/melee-web`, `200` on each — so
+the repository is readable anonymously. `gh api repos/isDemetrio/melee-orig-dol` answers `private`,
+so Q2's separate DOL repository is unaffected. GitHub's billing documentation, section "Free use of
+GitHub Actions": "The use of standard GitHub-hosted runners is free: ... In public repositories"
+(`docs.github.com/en/billing/concepts/product-billing/github-actions`, read that day); its
+runner-pricing page adds "The larger runners are not free for public repositories." Every `runs-on`
+in `.github/workflows/` is `ubuntu-latest`, `ubuntu-24.04` or `ubuntu-24.04-arm`, all standard. The
+repository's own `wasm-probe.yml` already said so in the arm64 job's comment (PR #88: "on this
+repository, which is public, a run costs no minutes"); the five places above contradicted it, and
+the numbers in this file's "The CI budget was being spent twice per push" entry were read as if the
+allowance were being spent.
+
+**Changed.** `docs/AGENT_RULES.md`'s CI budget section now states the verified fact, the documented
+consequence and what that consequence does **not** cover (artifact and cache storage is billed
+separately; a larger or non-standard runner is billed whatever the visibility), and rule 1 no longer
+asserts a visibility it cannot know. The discipline is kept, with its reasons restated: a run that
+only repeats a run already in flight carries no new signal, a 60-minute job holds a queue slot and a
+runner for an hour, and a suite that cannot fail quickly delays the answer rather than the bill.
+`.github/workflows/ci.yml`'s trigger comment is corrected the same way; the trigger itself is
+unchanged. `web/playwright.spike.config.ts` and `web/tests/unit/spike-config.test.ts` keep their
+measured 181 runner-minutes and drop the allowance they were read as a share of.
+`scripts/check_no_game_data.py`'s docstring says visibility is a policy rather than a technical
+control, and that the control matters more now, not less. `docs/OPEN_QUESTIONS.md` gains Q11 for the
+operator.
+
+**What the correction changes, and what it does not.** It changes no practice; it changes the reason
+for one — an experiment is avoided for time and signal, never for an allowance that was not being
+spent. It does change the weight of O1, which asks for a legal judgement on publishing game-derived
+code while this repository's source is already public; Q11 records that, with what is and is not in
+question (no game data is tracked: `python3 scripts/check_no_game_data.py --all` — 264 tracked files,
+clean). The visibility itself is not touched: this account has `admin` on the repository, and
+flipping it is the operator's call, not a worker session's.
+
+**Not done, and why.** No simulation, renderer, workflow behaviour or deploy is changed; no build and
+no game data is involved. On the VPS: `python3 -m unittest discover -s scripts/tests` (207 tests,
+`OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (264 tracked files, clean) and
+`bash scripts/tests/test_deploy_guard.sh` (all guards hold). CI decides the rest.

@@ -10,9 +10,10 @@ established, so you do not have to rediscover them.
 ## Non-negotiable
 
 1. **Never commit game data.** No `*.iso`, `*.gcm`, `*.dol`, `*.gci`, no
-   `upstream/melee-unlocked/port/generated/`, no extracted disc filesystem. The repo
-   is private but game data still stays out of it. If a task seems to require
-   committing one of these, stop and write it to `docs/OPEN_QUESTIONS.md` instead.
+   `upstream/melee-unlocked/port/generated/`, no extracted disc filesystem. The repository is
+   public (verified 2026-10-04, `docs/OPEN_QUESTIONS.md` Q11) and game data stays out of it all
+   the same. If a task seems to require committing one of these, stop and write it to
+   `docs/OPEN_QUESTIONS.md` instead.
 2. **Never build on the operator's VPS.** It has 2 vCPU, 3.7 GB RAM, no compiler
    toolchain, no sudo, and no swap. Compiling the recompiled game there would take the
    machine down. All compilation happens in GitHub Actions or a Codespace.
@@ -49,11 +50,29 @@ established, so you do not have to rediscover them.
 
 ## CI budget
 
-The repository is private, so Actions minutes come out of the account's 2,000-minute monthly
-allowance rather than being unlimited. Measured on 2026-10-01: 91 workflow runs in one day,
-roughly 660 minutes — a third of the month — of which 24 were WASM core builds at 18–35 minutes
-each. When the allowance runs out the jobs stop until the next month; there is no charge, because
-the spending limit is zero. The cost of waste is therefore stalled work, not money.
+**The repository is public, and this section said the opposite until 2026-10-04.** Verified that
+day two ways: `gh api repos/isDemetrio/melee-web --jq .visibility` answers `public`, and the same
+request **without a token** answers `200`, so the repository is readable anonymously. GitHub's own
+billing documentation states the consequence — "The use of standard GitHub-hosted runners is free:
+... In public repositories" (`docs.github.com/en/billing/concepts/product-billing/github-actions`,
+"Free use of GitHub Actions", read that day) — and the runners this repository uses are standard
+(`ubuntu-latest`, `ubuntu-24.04`, `ubuntu-24.04-arm`), so they consume no monthly allowance.
+`wasm-probe.yml`'s arm64 job already said so (PR #88, "on this repository, which is public, a run
+costs no minutes"); this file and `ci.yml` contradicted it.
+
+The 2,000-minute figure was the allowance for a **private** repository, and this one has not been
+one. Measured on 2026-10-01 while this section believed otherwise: 91 workflow runs in one day,
+roughly 660 minutes — a third of a month — of which 24 were WASM core builds at 18–35 minutes each.
+The minutes are not billed, and the discipline below is kept anyway, with its reasons restated: a
+run that only repeats a run already in flight carries no new signal; a 60-minute job holds a queue
+slot and a runner for an hour; a suite that cannot fail quickly delays the answer rather than the
+bill. Two things that sentence does not settle, and that this file therefore does not claim:
+whether artifact and cache **storage** for a public repository is free too (GitHub's page treats
+storage as a separate line in the billing model, and this file did not verify it), and that a larger
+or non-standard runner is billed whatever the repository's visibility — the same documentation's
+runner-pricing page says it outright: "The larger runners are not free for public repositories".
+What the correction changes is the reason to avoid an experiment: it is time and signal, never an
+allowance that was not being spent.
 
 - **Batch experiments into one build.** The module per dispatch is the expensive unit; the fixed
   costs (emsdk setup, the release guest compile gate, the Chromium run) are paid on every run.

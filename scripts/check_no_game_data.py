@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Fail the build if game data or oversized files are staged in the git index.
 
-Why this exists: the repository is private, but "private" is a policy, not a
-technical control. One `git add -A` in a tired moment is enough to commit an ISO,
-a DOL, or 67 MB of recompiler output derived from the Nintendo disc, and after that
+Why this exists: visibility is a policy, not a technical control. The repository
+is public (verified 2026-10-04, `docs/OPEN_QUESTIONS.md` Q11), which makes the
+control below matter more, not less. One `git add -A` in a tired moment is enough
+to commit an ISO, a DOL, or 67 MB of recompiler output derived from the Nintendo
+disc, and after that
 it is in the history forever. This script is the technical control.
 
 It reads the index, not the working tree, so it catches exactly what a commit would

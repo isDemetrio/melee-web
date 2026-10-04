@@ -6,9 +6,9 @@ export default defineConfig({
   // are 44 of them: on a branch whose readback probes time out, 27 of the 44 tests spent about
   // 1.8 minutes each and the job was killed at its own timeout-minutes: 60 cap, so the run was
   // reported as cancelled instead of naming the probes that failed. Three such runs on
-  // 2026-10-04 (37164057193, 37165648926, 3715924165) cost 181 runner-minutes of a 2,000-minute
-  // month, while a healthy suite is 51 s (step 15 of run 37169669256 on main). A green branch
-  // therefore never reaches this bound.
+  // 2026-10-04 (37164057193, 37165648926, 3715924165) cost 181 runner-minutes, while a healthy
+  // suite is 51 s (step 15 of run 37169669256 on main). A green branch therefore never reaches
+  // this bound.
   globalTimeout: 15 * 60_000,
   fullyParallel: false, workers: 1, reporter: 'list',
   use: { baseURL: 'http://127.0.0.1:4175', headless: true },
