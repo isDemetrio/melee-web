@@ -537,39 +537,53 @@ fn sample_map(tmap: u32, uv: vec2f, bias: f32) -> vec4f {
   return s;
 }
 
-// The TEV's registers PREV, C0, C1, C2, K0-K3, and the current stage's texture, ras and konst colours.
-var<private> regs: array<vec4i, 4>;
-var<private> kregs: array<vec4i, 4>;
+// The TEV's registers PREV, C0, C1, C2 and K0-K3, and the current stage's texture, ras and konst
+// colours. Separate variables and select chains, not arrays: an array indexed at run time is
+// scratch memory on a GPU (and on SwiftShader), and the TEV indexes them in every stage.
+var<private> r0: vec4i;
+var<private> r1: vec4i;
+var<private> r2: vec4i;
+var<private> r3: vec4i;
+var<private> k0: vec4i;
+var<private> k1: vec4i;
+var<private> k2: vec4i;
+var<private> k3: vec4i;
 var<private> tex_t: vec4i;
 var<private> ras_t: vec4i;
 var<private> konst_t: vec4i;
 
+fn reg(i: u32) -> vec4i { return select(select(r3, r2, i == 2u), select(r1, r0, i == 0u), i < 2u); }
+fn kreg(i: u32) -> vec4i { return select(select(k3, k2, i == 2u), select(k1, k0, i == 0u), i < 2u); }
+fn set_rgb(i: u32, v: vec3i) {
+  if (i == 0u) { r0 = vec4i(v, r0.a); } else if (i == 1u) { r1 = vec4i(v, r1.a); }
+  else if (i == 2u) { r2 = vec4i(v, r2.a); } else { r3 = vec4i(v, r3.a); }
+}
+fn set_alpha(i: u32, v: i32) {
+  if (i == 0u) { r0.w = v; } else if (i == 1u) { r1.w = v; } else if (i == 2u) { r2.w = v; } else { r3.w = v; }
+}
 // A swap table (ksel registers 2 * table and 2 * table + 1).
 fn swap_table(v: vec4i, table: u32) -> vec4i {
   let a = uid($U_KSEL + 2u * table);
   let b = uid($U_KSEL + 2u * table + 1u);
   return vec4i(v[a & 3u], v[(a >> 2u) & 3u], v[b & 3u], v[(b >> 2u) & 3u]);
 }
-fn konst_value(k: u32) -> i32 {
-  var t = array<i32, 8>(255, 223, 191, 159, 128, 96, 64, 32);
-  return t[k];
-}
-// kselC / kselA.
+// kselC / kselA. Selections 0-7 are 255, 223, 191, 159, 128, 96, 64, 32.
+fn konst_value(k: u32) -> i32 { return select(256, 255, k < 4u) - 32 * i32(k); }
 fn konst_color(kc: u32) -> vec3i {
   if (kc < 8u) { return vec3i(konst_value(kc)); }
   if (kc < 12u) { return vec3i(0); }
-  if (kc < 16u) { return kregs[kc - 12u].rgb; }
-  return vec3i(kregs[(kc - 16u) % 4u][(kc - 16u) / 4u]);
+  if (kc < 16u) { return kreg(kc - 12u).rgb; }
+  return vec3i(kreg((kc - 16u) % 4u)[(kc - 16u) / 4u]);
 }
 fn konst_alpha(ka: u32) -> i32 {
   if (ka < 8u) { return konst_value(ka); }
   if (ka < 16u) { return 0; }
-  return kregs[(ka - 16u) % 4u][(ka - 16u) / 4u];
+  return kreg((ka - 16u) % 4u)[(ka - 16u) / 4u];
 }
 // cInput / aInput.
 fn color_in(i: u32) -> vec3i {
   var r = vec3i(0);
-  if (i < 8u) { r = select(regs[i / 2u].rgb, vec3i(regs[i / 2u].a), (i & 1u) != 0u); }
+  if (i < 8u) { let v = reg(i >> 1u); r = select(v.rgb, vec3i(v.a), (i & 1u) != 0u); }
   else if (i == 8u) { r = tex_t.rgb; }
   else if (i == 9u) { r = vec3i(tex_t.a); }
   else if (i == 10u) { r = ras_t.rgb; }
@@ -581,18 +595,18 @@ fn color_in(i: u32) -> vec3i {
 }
 fn alpha_in(i: u32) -> i32 {
   var r = 0;
-  if (i < 4u) { r = regs[i].a; }
+  if (i < 4u) { r = reg(i).a; }
   else if (i == 4u) { r = tex_t.a; }
   else if (i == 5u) { r = ras_t.a; }
   else if (i == 6u) { r = konst_t.a; }
   return r;
 }
-// write_tev_regular's tables: the scale, the bias, and the lerped's rounding (lerpBias[lb]).
-fn tev_scale(shift: u32) -> i32 { var t = array<i32, 4>(1, 2, 4, 1); return t[shift]; }
-fn tev_bias(bias: u32) -> i32 { var t = array<i32, 4>(0, 128, -128, 0); return t[bias]; }
+// write_tev_regular's tables: the scale (1, 2, 4, 1/2 by the final shift), the bias (0, +128, -128),
+// and the lerp's rounding lerpBias[2 * op + ((shift == 3) == alpha)]: 0, +128, 0, +127.
+fn tev_scale(shift: u32) -> i32 { return select(1, 1 << shift, shift < 3u); }
+fn tev_bias(bias: u32) -> i32 { return select(select(0, -128, bias == 2u), 128, bias == 1u); }
 fn tev_round(op: u32, shift: u32, alpha: bool) -> i32 {
-  var t = array<i32, 4>(0, 128, 0, 127);
-  return t[2u * op + select(0u, 1u, (shift == 3u) == alpha)];
+  return select(0, select(128, 127, op == 1u), (shift == 3u) == alpha);
 }
 fn regular_color(a: vec3i, b: vec3i, c: vec3i, d: vec3i, bias: u32, op: u32, shift: u32) -> vec3i {
   let s = tev_scale(shift);
@@ -623,42 +637,26 @@ fn compare_alpha(cmp: u32, a: vec4i, b: vec4i, c: vec4i, d: vec4i) -> i32 {
   if (cmp < 6u) { return d.a + select(0, c.a, compare_wide(cmp, a.rgb, b.rgb)); }
   return d.a + select(0, c.a, select(a.a > b.a, a.a == b.a, cmp == 7u));
 }
+// GX compare functions: bit 0 less, bit 1 equal, bit 2 greater (NEVER 0 ... ALWAYS 7).
 fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
-  var t = array<bool, 8>(false, (a < r), (a == r), (a <= r), (a > r), (a != r), (a >= r), true);
-  return t[f];
+  return ((f & 1u) != 0u && a < r) || ((f & 2u) != 0u && a == r) || ((f & 4u) != 0u && a > r);
 }
 
 @fragment fn fs(i: Out) -> @location(0) vec4f {
   let ntex = uid($U_NUMTEXGENS);
   let stages = uid($U_STAGES);
-  var tcs = array<vec3f, 8>(i.tex0, i.tex1, i.tex2, i.tex3, i.tex4, i.tex5, i.tex6, i.tex7);
-  // Every stage's texture first, in uniform control flow (no sample may follow a discard).
-  var texv: array<vec4i, 16>;
+  r0 = vec4i(u.rows[$ROW_TEV_COLORS]); r1 = vec4i(u.rows[$ROW_TEV_COLORS + 1]);
+  r2 = vec4i(u.rows[$ROW_TEV_COLORS + 2]); r3 = vec4i(u.rows[$ROW_TEV_COLORS + 3]);
+  k0 = vec4i(u.rows[$ROW_KCOLORS]); k1 = vec4i(u.rows[$ROW_KCOLORS + 1]);
+  k2 = vec4i(u.rows[$ROW_KCOLORS + 2]); k3 = vec4i(u.rows[$ROW_KCOLORS + 3]);
+  let col0 = vec4i(round(i.colors_0 * 255.0));
+  let col1 = vec4i(round(i.colors_1 * 255.0));
+  // Each stage samples its texture in the stage, in uniform control flow; the clip test's discard
+  // comes after the last stage, so that no sample follows a discard.
   for (var n = 0u; n < stages; n++) {
     let cc = uid($U_COLOR_ENV + n);
     let ac = uid($U_ALPHA_ENV + n);
     let tref = uid($U_TREF + n / 2u);
-    let odd = (n & 1u) != 0u;
-    let uses_tex = bitfield(cc, 12u, 4u) == 8u || bitfield(cc, 8u, 4u) == 8u || bitfield(cc, 4u, 4u) == 8u || bitfield(cc, 0u, 4u) == 8u ||
-               bitfield(cc, 12u, 4u) == 9u || bitfield(cc, 8u, 4u) == 9u || bitfield(cc, 4u, 4u) == 9u || bitfield(cc, 0u, 4u) == 9u ||
-               bitfield(ac, 13u, 3u) == 4u || bitfield(ac, 10u, 3u) == 4u || bitfield(ac, 7u, 3u) == 4u || bitfield(ac, 4u, 3u) == 4u;
-    if (bitfield(tref, select(6u, 18u, odd), 1u) == 0u || !uses_tex) { texv[n] = vec4i(255); continue; }
-    let coord = bitfield(tref, select(3u, 15u, odd), 3u);
-    let tmap = bitfield(tref, select(0u, 12u, odd), 3u);
-    var uv = vec2f(0.0);
-    if (coord < ntex) { let t = tcs[coord]; uv = t.xy / select(t.z, 2.0, t.z == 0.0); }
-    texv[n] = vec4i(round(sample_map(tmap, uv, u.rows[103u + tmap / 4u][tmap % 4u]) * 255.0));
-  }
-  if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
-  for (var k = 0u; k < 4u; k++) {
-    regs[k] = vec4i(u.rows[$ROW_TEV_COLORS + k]);
-    kregs[k] = vec4i(u.rows[$ROW_KCOLORS + k]);
-  }
-  let col0 = vec4i(round(i.colors_0 * 255.0));
-  let col1 = vec4i(round(i.colors_1 * 255.0));
-  for (var n = 0u; n < stages; n++) {
-    let cc = uid($U_COLOR_ENV + n);
-    let ac = uid($U_ALPHA_ENV + n);
     let odd = (n & 1u) != 0u;
     let cd = bitfield(cc, 0u, 4u); let ccc = bitfield(cc, 4u, 4u); let cb = bitfield(cc, 8u, 4u); let ca = bitfield(cc, 12u, 4u);
     let cbias = bitfield(cc, 16u, 2u); let cop = bitfield(cc, 18u, 1u); let cclamp = bitfield(cc, 19u, 1u);
@@ -666,14 +664,30 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
     let ad = bitfield(ac, 4u, 3u); let acc = bitfield(ac, 7u, 3u); let ab = bitfield(ac, 10u, 3u); let aa = bitfield(ac, 13u, 3u);
     let abias = bitfield(ac, 16u, 2u); let aop = bitfield(ac, 18u, 1u); let aclamp = bitfield(ac, 19u, 1u);
     let ashift = bitfield(ac, 20u, 2u); let adest = bitfield(ac, 22u, 2u);
+    var texel = vec4i(255);
+    let uses_tex = ca == 8u || cb == 8u || ccc == 8u || cd == 8u || ca == 9u || cb == 9u || ccc == 9u || cd == 9u ||
+                   aa == 4u || ab == 4u || acc == 4u || ad == 4u;
+    if (bitfield(tref, select(6u, 18u, odd), 1u) != 0u && uses_tex) {
+      let coord = bitfield(tref, select(3u, 15u, odd), 3u);
+      let tmap = bitfield(tref, select(0u, 12u, odd), 3u);
+      var uv = vec2f(0.0);
+      if (coord < ntex) {
+        var t = i.tex0;
+        if (coord == 1u) { t = i.tex1; } else if (coord == 2u) { t = i.tex2; } else if (coord == 3u) { t = i.tex3; }
+        else if (coord == 4u) { t = i.tex4; } else if (coord == 5u) { t = i.tex5; } else if (coord == 6u) { t = i.tex6; }
+        else if (coord == 7u) { t = i.tex7; }
+        uv = t.xy / select(t.z, 2.0, t.z == 0.0);
+      }
+      texel = vec4i(round(sample_map(tmap, uv, u.rows[103u + tmap / 4u][tmap % 4u]) * 255.0));
+    }
     if (ca == 10u || cb == 10u || ccc == 10u || cd == 10u || ca == 11u || cb == 11u || ccc == 11u || cd == 11u ||
         aa == 5u || ab == 5u || acc == 5u || ad == 5u) {
-      let chan = bitfield(uid($U_TREF + n / 2u), select(7u, 19u, odd), 3u);
+      let chan = bitfield(tref, select(7u, 19u, odd), 3u);
       ras_t = vec4i(0);
       if (chan == 0u) { ras_t = swap_table(col0, bitfield(ac, 0u, 2u)); }
       if (chan == 1u) { ras_t = swap_table(col1, bitfield(ac, 0u, 2u)); }
     }
-    tex_t = swap_table(texv[n], bitfield(ac, 2u, 2u));
+    tex_t = swap_table(texel, bitfield(ac, 2u, 2u));
     if (ca == 14u || cb == 14u || ccc == 14u || cd == 14u || aa == 6u || ab == 6u || acc == 6u || ad == 6u) {
       let ksel = uid($U_KSEL + n / 2u);
       konst_t = vec4i(konst_color(bitfield(ksel, select(4u, 14u, odd), 5u)), konst_alpha(bitfield(ksel, select(9u, 19u, odd), 5u)));
@@ -692,15 +706,14 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
     else { a = compare_alpha((ashift << 1u) | aop, tin_a, tin_b, tin_c, tin_d); }
     if (cclamp != 0u) { c = clamp(c, vec3i(0), vec3i(255)); } else { c = clamp(c, vec3i(-1024), vec3i(1023)); }
     if (aclamp != 0u) { a = clamp(a, 0, 255); } else { a = clamp(a, -1024, 1023); }
-    regs[cdest] = vec4i(c, regs[cdest].a);
-    regs[adest].w = a;
+    set_rgb(cdest, c);
+    set_alpha(adest, a);
   }
-  var prev = regs[0];
+  if (any(abs(i.clip.xy) > vec2f(i.clip.w))) { discard; }
+  var prev = r0;
   let last_c = bitfield(uid($U_COLOR_ENV + stages - 1u), 22u, 2u);
   let last_a = bitfield(uid($U_ALPHA_ENV + stages - 1u), 22u, 2u);
-  if (last_c != 0u) { prev = vec4i(regs[last_c].rgb, prev.a); }
-  if (last_a != 0u) { prev.w = regs[last_a].a; }
-  prev = prev & vec4i(255);
+  prev = vec4i(reg(last_c).rgb, reg(last_a).a) & vec4i(255);
   // Alpha test.
   let ops = uid($U_ALPHA_OPS);
   let alpharef = vec2i(u.rows[105].xy);
