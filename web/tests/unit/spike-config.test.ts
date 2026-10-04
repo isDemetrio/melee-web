@@ -6,9 +6,11 @@
  * probes time out spends about 1.8 minutes per test, so the step ran for 51 minutes and the job
  * was killed at its own `timeout-minutes: 60` cap -- reported as cancelled, with no list of the
  * probes that failed. Three runs did it on 2026-10-04 (37164057193, 37165648926, 3715924165):
- * 181 runner-minutes of a 2,000-minute monthly allowance, spent in about ninety minutes. The
- * healthy suite is 51 s (step 15 of run 37169669256 on `main`), so a green branch never reaches
- * the bound; it is what turns a red one into a failure in minutes.
+ * 181 runner-minutes, spent in about ninety minutes. The repository is public, so those minutes
+ * are not billed (`docs/AGENT_RULES.md`, CI budget) and the cost was the runner and the hour it
+ * held rather than an allowance. The healthy suite is 51 s (step 15 of run 37169669256 on
+ * `main`), so a green branch never reaches the bound; it is what turns a red one into a failure
+ * in minutes.
  *
  * What this does not cover: the correctness of the harness itself, and the pixel-probe step that
  * runs after it (`wasm/render/pixel_pipeline_check.mjs`), which is a separate command.

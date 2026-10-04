@@ -384,3 +384,34 @@ and the port can adopt the device the page acquired in PR #52 — in the realm o
 PR #55, in the realm of the worker the renderer's module is instantiated in. `EM_JS` is what step 1 shipped in
 `wasm/render/gx_webgpu.cpp`, so keeping it is the zero-change option; adopting the device instead
 would make the backend own the instance, adapter and device, and is now known to be possible.
+
+## Q11 — The repository is public — **raised 2026-10-04, needs the operator**
+
+`gh api repos/isDemetrio/melee-web --jq .visibility` answers `public` (`private: false`), and the
+same endpoint **without a token** answers `200`: this repository is world-readable. Five places
+asserted the opposite until 2026-10-04 — `docs/AGENT_RULES.md` ("CI budget", and rule 1's "the repo
+is private"), `.github/workflows/ci.yml`'s trigger comment, the comments in
+`web/playwright.spike.config.ts` and `web/tests/unit/spike-config.test.ts` that read their measured
+runner-minutes as a share of a "2,000-minute monthly allowance", and
+`scripts/check_no_game_data.py`'s "the repository is private" — while `wasm-probe.yml`'s arm64 job
+already relied on the repository being public (PR #88). The contradiction was found by a cron
+session while looking for the next autonomous step; nothing has failed because of it.
+
+**What is not in question.** `isDemetrio/melee-orig-dol` is private (checked the same day, Q2), no
+game data is tracked here (`python3 scripts/check_no_game_data.py --all`: 264 tracked files, clean),
+and the compiled core stays in private artifacts (D3). Nothing found so far looks like an
+unintended exposure of Nintendo's data.
+
+**What needs an answer.**
+
+- **Is `public` intended?** If it is, the consequence already recorded is the CI budget: the minutes
+  are free (the corrected section of `docs/AGENT_RULES.md`, checked against GitHub's billing
+  documentation), and the plan's remaining decisions are unchanged.
+- **If it is not**, the visibility is the operator's to decide. This account has `admin` on the
+  repository, but a worker session does not change the visibility of the project's repository on
+  its own initiative.
+- **It bears on O1** (`docs/PHASE0_DEPLOY_PLAN.md` section 2). O1 asks for the operator's legal
+  judgement on publishing game-derived code, and it was written as a question about the deploy of
+  the spike page. The repository's source is published already, so the exposure O1 reasons about is
+  wider than the deploy it was written for. That does not answer O1 and it is not a legal opinion;
+  it is a fact the decision should be taken with.
