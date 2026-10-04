@@ -369,3 +369,26 @@ describe('native / JS residual boundaries', () => {
     expect(cell(record, 'residual_unexplained_ms')).toBeNull();
   });
 });
+
+
+it('retains changing native ingress as signed unexplained time, and rejects stale roundtrips', () => {
+  const sample = (entryShift: number, previousRetrace: number) => {
+    let now = 0;
+    const meter = new FrameMeter(createFlight(), () => now);
+    const finish = () => { meter.bitmapDone(); meter.ackDone(); return meter.cycleEnd(); };
+    now = 5;
+    meter.coreEnd(1, 0, null, { entered: 5, readDone: 5, core: { retrace: 1, simMs: 0, csvMs: 0 },
+      bridge: { entered: 4, nativePreMs: 0, previousRetrace: 0, nativeRoundtripMs: 0 } });
+    now = 100; finish();
+    now = 104; meter.heartbeatReturned(1); meter.heartbeatResuming(1);
+    now = 140 + entryShift;
+    meter.coreEnd(2, 1, null, { entered: 137 + entryShift, readDone: 139 + entryShift,
+      core: { retrace: 2, simMs: 20, csvMs: 3 },
+      bridge: { entered: 136 + entryShift, nativePreMs: 7, previousRetrace, nativeRoundtripMs: 102 } });
+    return finish();
+  };
+  expect(cell(sample(2, 1), 'residual_unexplained_ms')).toBe(2);
+  expect(cell(sample(-2, 1), 'residual_unexplained_ms')).toBe(-2);
+  expect(cell(sample(2, 0), 'previous_native_roundtrip_ms')).toBeNull();
+  expect(cell(sample(2, 0), 'residual_unexplained_ms')).toBeNull();
+});

@@ -64,7 +64,14 @@ time in the two small bridge boundary intervals **jointly**; this instrumentatio
 cannot distinguish ingress from egress. P precedes R: calling P the native resume
 would be false. A large `residual_unexplained_ms` leaves cross-clock disagreement,
 clock-read latency and omitted boundary accounting unresolved, with signed and
-absolute numbers printed rather than assigned to a function.
+absolute numbers printed rather than assigned to a function. In particular the
+native B→E ingress is taken from r−1 in the roundtrip comparison whereas the old
+residual contains ingress at r. Thus the unexplained term also contains
+`ingress(r) - ingress(r−1)`. This can move individual rows even with perfect clocks;
+it telescopes over a consecutive cohort, but not over arbitrary excluded rows.
+The roundtrip comparison is exact for its tagged retrace; it is not an exact
+isolation of native egress. A paired common-clock native/JS boundary trace would
+be needed to separate those two intervals without this ambiguity.
 
 These are wall clocks, not thread CPU clocks. GC, descheduling or hidden WebKit
 synchronization within an interval require a Safari/WebKit runtime trace correlated
@@ -102,3 +109,29 @@ Builds/tests and the full 2400-checkpoint replay run only in Actions. The requir
 reference is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`. Results are recorded in the PR
 and PROGRESS after completion. The operator's new iPhone game report is still
 required to place the 14.9 ms in one of these intervals; the old JSONs cannot do so.
+
+## Actions evidence — 2026-10-04
+
+- [CI 37166320644](https://github.com/isDemetrio/melee-web/actions/runs/37166320644):
+  typecheck, 373 unit tests, browser tests and `check_no_game_data.py --all` passed.
+- [Native build 37166320592](https://github.com/isDemetrio/melee-web/actions/runs/37166320592): passed.
+- [WASM build 37166338021](https://github.com/isDemetrio/melee-web/actions/runs/37166338021):
+  passed, 42 page tests and 13 pixel probes. The duplicate PR build was cancelled
+  in favour of this dispatch with the typed private-module artifact input.
+- [Downloaded page JSON](https://github.com/isDemetrio/melee-web/actions/runs/37166338021/artifacts/11288854544):
+  JS clock 117.10 ns/read, native 195.55 ns/read; total residual clock estimate
+  0.000977 ms/frame, newly added 0.000430 ms/frame. Three synthetic renderer frames,
+  zero matched native retraces, explicit unavailable status. These are Chromium
+  runner numbers, not iPhone timings and not evidence attributing the 14.9 ms.
+- [Replay 37166723768](https://github.com/isDemetrio/melee-web/actions/runs/37166723768):
+  passed; full 2400-checkpoint SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`.
+  Disc, generated C++/DOL and replay data stayed on the runner; only the synthetic
+  page JSON was downloaded to the editing workspace.
+
+The follow-up changes only documentation and an additional signed/stale-boundary
+unit test. Source identity against build commit `9b246e4` can be checked with
+`git diff --exit-code 9b246e4 HEAD -- native wasm patches upstream web/src`.
+Final check status is linked from [PR #102](https://github.com/isDemetrio/melee-web/pull/102).
+Automatic shell preview deployment is disabled (`CF_DEPLOY_SHELL`); no deployed
+phone preview or iPhone game report is claimed. PR stays open pending review and
+the operator's runtime measurement.
