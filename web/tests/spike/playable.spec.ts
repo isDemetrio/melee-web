@@ -94,6 +94,11 @@ test('main page presents consecutive real core frames while worker stays synchro
   expect(report.frames_total).toBe(3);
   expect(report.timer_resolution_ms).toBeGreaterThan(0);
   expect(report.clock_cost_ns).toBeGreaterThan(0);
+  expect(report.native_clock_cost_ns).toBeGreaterThanOrEqual(0);
+  // Renderer-only selftest has no native simulation/retrace: never invent attribution.
+  expect(report.summary.all.residual_attribution.matched_frames).toBe(0);
+  expect(report.summary.all.residual_attribution.status).toContain('unavailable');
+  expect(report.summary.all.estimated_total_residual_clock_ms).toBeGreaterThanOrEqual(0);
   expect(report.not_measured.length).toBeGreaterThan(0);
   const [header, ...lines] = (report.frames_csv as string).split('\n');
   const columns = header!.split(',');

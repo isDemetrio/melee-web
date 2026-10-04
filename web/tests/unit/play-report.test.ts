@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadHeartbeat, storeHeartbeat } from '../../src/spike/heartbeat';
 import { COLUMN, createFlight, FLIGHT_CALL, FLIGHT_DRAWS, FLIGHT_FRAME, FLIGHT_MATCH, FLIGHT_PHASE, FRAME_COLUMNS,
   METHODS, PHASES, type FrameColumn, type FrameRecord, type MethodTotals } from '../../src/play/frame-meter';
-import { FREEZE_MS, motive, NOT_MEASURED, PLAY_STORAGE_KEY, PlayReport, type PerfMeta } from '../../src/play/report';
+import { FREEZE_MS, motive, NOT_MEASURED, PLAY_STORAGE_KEY, PlayReport, summarize, type PerfMeta } from '../../src/play/report';
 
 /** A frame record from named cells; every other cell 0, the split columns null. */
 function row(cells: Partial<Record<FrameColumn, number>>, top?: FrameRecord['top']): FrameRecord {
@@ -170,3 +170,21 @@ describe('persisted record', () => {
 function round1(x: number): number {
   return Math.round(x * 10) / 10;
 }
+
+
+it('reports matched residual intervals and calibrated cost without changing legacy fields', () => {
+  const measured = row({ core_unattributed_ms: 14.9, native_pre_heartbeat_ms: 0.1,
+    previous_native_roundtrip_ms: 19.7, previous_js_heartbeat_ms: 5,
+    previous_js_return_to_resume_probe_ms: 14.5, previous_bridge_outside_js_ms: 0.2,
+    bridge_entry_ms: 0.1, residual_unexplained_ms: 0 });
+  const missing = [...measured.row]; missing[COLUMN.residual_unexplained_ms] = null;
+  const summary = summarize([measured.row, missing], false, false, 40, [], 80)!;
+  expect(summary.residual_attribution.matched_frames).toBe(1);
+  expect(summary.residual_attribution.excluded_frames).toBe(1);
+  expect(summary.residual_attribution.mean_ms?.['previous_js_return_to_resume_probe_ms']).toBe(14.5);
+  expect(summary.reconciliation.matched_frames).toBe(2);
+  expect(summary.estimated_residual_clock_ms).toBe(0.00016);
+  expect(summary.estimated_total_residual_clock_ms).toBe(0.00036);
+  expect(summary.estimated_added_residual_clock_ms).toBe(0.00016);
+  expect(summarize([missing], false, false, 40, [])?.residual_attribution.status).toContain('unavailable');
+});

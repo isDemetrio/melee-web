@@ -3054,3 +3054,24 @@ PREV: black); `render.spec.ts`'s probe 30 becomes [65,32,16,96], GX's integer MO
   `// alpha test:` marker the preprocessor strips from the EM_JS body, so it never ran there.
 - Not verified by this agent: the phone (the user's eye is the verdict on colour), the canvas
   path on a real GPU, and iPhone pipeline compile time for the larger shaders.
+
+## 2026-10-04 — attack residual instrumentation
+
+Branch `perf/attack-residual`, based on `b97787c`. Added native pre-heartbeat and
+roundtrip timers, paired JS entry/return/resume probes, signed interval reconciliation
+and separate native clock calibration. Existing report columns remain. Renderer
+untouched; no gameplay optimisation. Details and limitations: `ATTACK_RESIDUAL.md`.
+CI/checkpoint results pending. Next: run Actions, compare the full 2400-row SHA-1,
+then obtain a new phone report; old D/E/F reports cannot localize their 14.9 ms.
+
+Verification completed: CI `37166320644` green (373 unit tests plus browser/hygiene),
+Linux `37166320592` green, WASM `37166338021` green (42 page tests, 13 pixel probes).
+Replay `37166723768` verifies the complete 2400-checkpoint reference SHA-1
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571`. Synthetic page artifact `11288854544`
+reports 0.000977 ms/frame estimated residual clock cost on Chromium; native retrace
+attribution correctly unavailable in that renderer-only test. Follow-up adds a
+signed/changing-ingress/stale-ID unit test and documents the boundary ambiguity;
+compiled source remains identical to `9b246e4`. Final checks/results are on PR #102.
+No renderer changes, optimisation, game data, or merge. Shell deploy is disabled by
+repository configuration. Still required: operator's new iPhone game report; neither
+CPU work nor a WebKit wait has been established as the source of its 14.9 ms.

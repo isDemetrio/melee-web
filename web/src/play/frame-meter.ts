@@ -81,7 +81,9 @@ export const FRAME_COLUMNS = ['retrace', 'match_frame', 'cycle_ms', 'core_ms', '
   'resources_ms', 'encode_ms', 'queue_ms', 'present_ms', 'created', 'pipelines_created', 'disc_ms', 'disc_bytes',
   'bitmap_ms', 'ack_ms', 'idle_ms', 'hidden', 'decode_ms', 'non_decode_ms',
   'sim_ms', 'previous_heartbeat_tail_ms', 'csv_write_ms', 'heartbeat_read_ms', 'heartbeat_finish_ms',
-  'core_unattributed_ms'] as const;
+  'core_unattributed_ms', 'native_pre_heartbeat_ms', 'previous_native_roundtrip_ms',
+  'previous_js_heartbeat_ms', 'previous_js_return_to_resume_probe_ms',
+  'previous_bridge_outside_js_ms', 'bridge_entry_ms', 'residual_unexplained_ms'] as const;
 export type FrameColumn = (typeof FRAME_COLUMNS)[number];
 export const COLUMN = Object.fromEntries(FRAME_COLUMNS.map((name, index) => [name, index])) as Record<FrameColumn, number>;
 
@@ -104,7 +106,10 @@ export interface MethodTotals {
 
 /** The core profiler's split of `core_ms` for one retrace (decoder_cost.csv, patch 0008). */
 export interface CoreTiming { retrace: number; simMs: number; csvMs: number }
-export interface HeartbeatTiming { entered: number; readDone: number; core: CoreTiming | null }
+export interface BridgeTiming {
+  nativePreMs: number; previousRetrace: number; nativeRoundtripMs: number; entered: number;
+}
+export interface HeartbeatTiming { entered: number; readDone: number; core: CoreTiming | null; bridge?: BridgeTiming }
 
 export interface CoreSplit { decodeMs: number; nonDecodeMs: number }
 
@@ -137,11 +142,21 @@ export class FrameMeter {
   private heartbeatTiming: HeartbeatTiming | null = null;
   private returnedAt: number | null = null;
   private returnedRetrace = 0;
+  private bridgeEntered: number | null = null;
+  private jsSpan: number | null = null;
+  private resumeProbe: { retrace: number; ms: number } | null = null;
+
+  heartbeatResuming(retrace: number): void {
+    const at = this.now();
+    this.resumeProbe = this.returnedAt !== null && this.returnedRetrace === retrace
+      ? { retrace, ms: at - this.returnedAt } : null;
+  }
 
   /** Called by the WASM bridge AFTER heartbeat returns; charged to the next cycle. */
   heartbeatReturned(retrace: number): void {
     this.returnedAt = this.now();
     this.returnedRetrace = retrace;
+    this.jsSpan = this.bridgeEntered === null ? null : this.returnedAt - this.bridgeEntered;
   }
 
   methodSnapshot(): Record<string, MethodTotal> {
@@ -256,7 +271,22 @@ export class FrameMeter {
     const finish = timing ? this.coreEndAt - timing.readDone : null;
     const residual = core && tail !== null && read !== null && finish !== null
       ? this.coreEndAt - this.cycleStart - core.simMs - core.csvMs - tail - read - finish : null;
+    const bridge = timing?.bridge;
+    const joined = core && bridge && bridge.previousRetrace === this.retrace - 1 &&
+      this.returnedRetrace === bridge.previousRetrace && this.resumeProbe?.retrace === bridge.previousRetrace &&
+      this.jsSpan !== null && residual !== null;
+    const probe = joined ? this.resumeProbe!.ms : null;
+    const outside = joined ? bridge.nativeRoundtripMs - this.jsSpan! - probe! : null;
+    const ingress = bridge && timing ? timing.entered - bridge.entered : null;
+    const unexplained = joined ? residual - bridge.nativePreMs - probe! - outside! - ingress! : null;
     const values: Record<FrameColumn, number | null> = {
+      native_pre_heartbeat_ms: core && bridge ? round(bridge.nativePreMs) : null,
+      previous_native_roundtrip_ms: joined ? round(bridge.nativeRoundtripMs) : null,
+      previous_js_heartbeat_ms: joined ? round(this.jsSpan!) : null,
+      previous_js_return_to_resume_probe_ms: probe === null ? null : round(probe),
+      previous_bridge_outside_js_ms: outside === null ? null : round(outside),
+      bridge_entry_ms: ingress === null ? null : round(ingress),
+      residual_unexplained_ms: unexplained === null ? null : round(unexplained),
       sim_ms: core ? round(core.simMs) : null,
       previous_heartbeat_tail_ms: tail === null ? null : round(tail),
       csv_write_ms: core ? round(core.csvMs) : null,
@@ -283,6 +313,7 @@ export class FrameMeter {
     this.flight[FLIGHT_DRAWS] = 0;
     this.flight[FLIGHT_PHASE] = CORE;
     this.cycleStart = end;
+    this.bridgeEntered = bridge?.entered ?? null;
     return record;
   }
 

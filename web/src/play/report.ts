@@ -37,8 +37,9 @@ export const NOT_MEASURED = [
   'Calls shorter than timer_resolution_ms read as 0 or one tick; the per-method totals are sums of such reads.',
   'The meter\'s own cost is inside core_ms: about 2 x webgpu_calls x clock_cost_ns per frame (estimated_meter_ms in the summary).',
   'When a presented frame reaches the screen: ack_ms ends when the page has handed the bitmap to its canvas, not when the compositor shows it.',
-  'Residual timing adds three JS clock reads and one steady_clock read per retrace; their cost is included, not subtracted. estimated_residual_clock_ms estimates only these clock reads using the JS calibration, not wrappers, CSV work, internal profiler reads or scheduling.',
+  'Residual timing now adds five JS clock reads and two steady_clock reads per retrace (previously three and one). estimated_residual_clock_ms retains the old four-read JS proxy for compatibility; estimated_total_residual_clock_ms uses separate startup JS/native calibrations. Neither estimates wrapper work, scheduling or profiler reads; neither is subtracted.',
   'core_ms = sim_ms + previous_heartbeat_tail_ms + csv_write_ms + heartbeat_read_ms + heartbeat_finish_ms + core_unattributed_ms. Signed residual is not clamped; absent/mismatched core telemetry and the first frame have null residual. WebGPU/disc are overlapping submeasurements, not additional phases.',
+  'Residual attribution uses same-retrace native roundtrip versus JS callback elapsed time, including ACK/pacing waits. These overlap existing phases and must not be added to the cycle. previous_js_return_to_resume_probe_ms ends at the last JS probe before native resume; previous_bridge_outside_js_ms contains native-to-JS ingress plus probe-to-native-resume, including instrumentation. Wall clocks cannot distinguish GC, descheduling, hidden runtime waits or CPU work inside those boundaries. residual_unexplained_ms retains signed clock/accounting disagreement; no interval is automatically called CPU work or a wait.',
   'WebGPU calls made before the first frame (the backend attaching) are not counted.',
   'sampled_phases and freezes are read on the page\'s animation frames (about 60 Hz, nearest frame): they can alias with the worker, which is also paced at 60 Hz, and they stop while the page\'s main thread is blocked.',
   'Frames while the page was hidden are kept in frames_csv (hidden = 1) but left out of every summary.',
@@ -50,6 +51,7 @@ export interface PerfMeta {
   opt: string | null;
   timerResolutionMs: number;
   clockCostNs: number;
+  nativeClockCostNs?: number | null;
   split: boolean;
   notes: string[];
   crossOriginIsolated: boolean;
@@ -151,7 +153,7 @@ function countStats(values: number[]) {
  * The summary of a set of visible frames: per-column statistics in the spike's form, the share of
  * the total time each part took, the frame rate, and how many frames were late by how much.
  */
-export function summarize(rows: Row[], inMatch: boolean, split: boolean, clockCostNs: number | null, errors: string[]) {
+export function summarize(rows: Row[], inMatch: boolean, split: boolean, clockCostNs: number | null, errors: string[], nativeClockCostNs: number | null = null) {
   const visible = rows.filter((row) => value(row, 'hidden') === 0);
   const selected = inMatch ? visible.filter((row) => value(row, 'match_frame') > 0) : visible;
   if (!selected.length) return null;
@@ -193,13 +195,33 @@ export function summarize(rows: Row[], inMatch: boolean, split: boolean, clockCo
     unattributed_abs_p95_ms: matched.length ? nearestRank(absoluteResidual, 0.95) : null,
     unattributed_abs_max_ms: matched.length ? Math.max(...absoluteResidual) : null,
   };
+  const attributionColumns: FrameColumn[] = ['core_unattributed_ms', 'native_pre_heartbeat_ms',
+    'previous_native_roundtrip_ms', 'previous_js_heartbeat_ms', 'previous_js_return_to_resume_probe_ms',
+    'previous_bridge_outside_js_ms', 'bridge_entry_ms', 'residual_unexplained_ms'];
+  const attributed = selected.filter((row) => attributionColumns.every((column) => row[COLUMN[column]] != null));
+  const residualAttribution = {
+    matched_frames: attributed.length, excluded_frames: selected.length - attributed.length,
+    status: attributed.length ? 'intervals measured; wait versus CPU work inside each interval is not measured'
+      : 'unavailable: requires consecutive retraces with native bridge telemetry and both JS return probes',
+    mean_ms: attributed.length ? Object.fromEntries(attributionColumns.map((column) => [column,
+      round(attributed.reduce((total, row) => total + value(row, column), 0) / attributed.length)])) : null,
+    unexplained_abs_p95_ms: attributed.length
+      ? nearestRank(attributed.map((row) => Math.abs(value(row, 'residual_unexplained_ms'))), 0.95) : null,
+    unexplained_abs_max_ms: attributed.length
+      ? Math.max(...attributed.map((row) => Math.abs(value(row, 'residual_unexplained_ms')))) : null,
+  };
   return {
     rows: label, frames: selected.length, seconds: round(total / 1000, 1),
     fps: total > 0 ? round(selected.length / (total / 1000), 1) : null,
     percent_of_time: percent, webgpu_percent_of_time: webgpu_percent,
     ...(split ? { core_split_percent_of_time: { decode: share(sum('decode_ms')), non_decode: share(sum('non_decode_ms')) } } : {}),
     frames_over_ms: Object.fromEntries(OVER_MS.map((ms) => [String(ms), selected.filter((row) => value(row, 'cycle_ms') > ms).length])),
-    per_frame, counts, reconciliation,
+    per_frame, counts, reconciliation, residual_attribution: residualAttribution,
+    residual_clock_reads: { js: 5, native: 2, added_js: 2, added_native: 1 },
+    estimated_total_residual_clock_ms: clockCostNs === null || nativeClockCostNs === null ? null
+      : round((5 * clockCostNs + 2 * nativeClockCostNs) / 1e6, 6),
+    estimated_added_residual_clock_ms: clockCostNs === null || nativeClockCostNs === null ? null
+      : round((2 * clockCostNs + nativeClockCostNs) / 1e6, 6),
     estimated_residual_clock_ms: clockCostNs === null ? null : round(4 * clockCostNs / 1e6, 6),
     estimated_meter_ms: clockCostNs === null ? null : round((2 * meanCalls * clockCostNs) / 1e6),
   };
@@ -379,9 +401,10 @@ export class PlayReport {
       core_commit: this.meta?.commit ?? null, core_opt: this.meta?.opt ?? null, user_agent: userAgent,
       cross_origin_isolated: this.meta?.crossOriginIsolated ?? null,
       timer_resolution_ms: this.meta?.timerResolutionMs ?? null, clock_cost_ns: clock,
+      native_clock_cost_ns: this.meta?.nativeClockCostNs ?? null,
       core_split: split, core_split_requested: this.requestedSplit,
       frames_total: this.framesTotal, frames_kept: rows.length, slow_frame_ms: SLOW_FRAME_MS, freeze_ms: FREEZE_MS,
-      summary: { all: summarize(rows, false, split, clock, errors), in_match: summarize(rows, true, split, clock, errors) },
+      summary: { all: summarize(rows, false, split, clock, errors, this.meta?.nativeClockCostNs ?? null), in_match: summarize(rows, true, split, clock, errors, this.meta?.nativeClockCostNs ?? null) },
       queue_probe: this.meta?.queueProbe ?? null,
       webgpu_methods: this.totals,
       slow_frames: { total: this.slowTotal, kept: this.worstSlow(SLOW_FRAMES_KEPT) },
@@ -414,7 +437,7 @@ export class PlayReport {
       logTail: this.log.slice(-LOG_TAIL),
       perf: {
         schema: 'melee-play-perf/1', state: this.state, line: this.line(now), frames_total: this.framesTotal,
-        core_split: split, last_600_frames: summarize(this.rows.slice(-600), false, split, this.meta?.clockCostNs ?? null, errors),
+        core_split: split, last_600_frames: summarize(this.rows.slice(-600), false, split, this.meta?.clockCostNs ?? null, errors, this.meta?.nativeClockCostNs ?? null),
         slow_frames: { total: this.slowTotal, worst: this.worstSlow(20) },
         freezes: { total: this.freezesTotal, last: this.freezes.slice(-20) },
         queue_probe: this.meta?.queueProbe ?? null,
