@@ -38,12 +38,12 @@ class Oracle {
   uint64_t pool_bytes = 0;
   std::unordered_set<uint32_t> efb_copy_addrs;
   // Totals.
-  uint64_t frames = 0, misses = 0, evictions = 0, levels = 0, simd_levels = 0, flip = 0;
-  std::array<uint64_t, 16> fmt_misses{}, fmt_levels{}, fmt_simd_levels{}, fmt_bytes{};
+  uint64_t frames = 0, misses = 0, evictions = 0, levels = 0, simd_levels = 0, table_levels = 0, flip = 0;
+  std::array<uint64_t, 16> fmt_misses{}, fmt_levels{}, fmt_simd_levels{}, fmt_table_levels{}, fmt_bytes{};
   std::array<double, 16> fmt_ref_ms{}, fmt_cand_ms{};
   // This frame.
   double frame_ref_ms = 0, frame_cand_ms = 0;
-  uint64_t frame_misses = 0, frame_simd_levels = 0;
+  uint64_t frame_misses = 0, frame_simd_levels = 0, frame_table_levels = 0;
   template <class T> void add(const T& v) {
     auto* p = reinterpret_cast<const uint8_t*>(&v); bytes.insert(bytes.end(), p, p + sizeof(v));
   }
@@ -76,12 +76,15 @@ class Oracle {
     if (flip++ & 1) { ref_ms = decode_chain(t, false, ref); cand_ms = decode_chain(t, true, cand); }
     else { cand_ms = decode_chain(t, true, cand); ref_ms = decode_chain(t, false, ref); }
     if (ref != cand) { std::fprintf(stderr, "texsimd: decoded texture differs from reference (format %u %ux%u)\n", t.format, t.width, t.height); std::abort(); }
-    uint32_t w = t.width, h = t.height; uint64_t simd = 0;
-    for (uint32_t l = 0; l < t.mip_levels; ++l) { simd += gxw::texture_level_simd(w, h, t.format); w = std::max(1u, w / 2); h = std::max(1u, h / 2); }
-    ++misses; ++frame_misses; levels += t.mip_levels; simd_levels += simd; frame_simd_levels += simd;
+    uint32_t w = t.width, h = t.height; uint64_t simd = 0, table = 0;
+    for (uint32_t l = 0; l < t.mip_levels; ++l) {
+      simd += gxw::texture_level_simd(w, h, t.format); table += gxw::texture_level_table(w, h, t.format);
+      w = std::max(1u, w / 2); h = std::max(1u, h / 2);
+    }
+    ++misses; ++frame_misses; levels += t.mip_levels; simd_levels += simd; frame_simd_levels += simd; table_levels += table; frame_table_levels += table;
     frame_ref_ms += ref_ms; frame_cand_ms += cand_ms;
     const uint32_t f = t.format & 15;
-    ++fmt_misses[f]; fmt_levels[f] += t.mip_levels; fmt_simd_levels[f] += simd;
+    ++fmt_misses[f]; fmt_levels[f] += t.mip_levels; fmt_simd_levels[f] += simd; fmt_table_levels[f] += table;
     for (auto& l : cand) fmt_bytes[f] += l.size();
     fmt_ref_ms[f] += ref_ms; fmt_cand_ms[f] += cand_ms;
     // Same content decoded before (evicted then reused): it must give the same digest.
@@ -110,28 +113,28 @@ class Oracle {
     if (auto* p = std::getenv("MELEE_GFX_ORACLE")) { file = std::fopen(p, "w"); if (!file) std::abort(); }
     if (auto* p = std::getenv("MELEE_TEX_TIMES")) {
       times = std::fopen(p, "w"); if (!times) std::abort();
-      std::fprintf(times, "sequence,scene_major,scene_minor,misses,simd_levels,ref_ms,cand_ms\n");
+      std::fprintf(times, "sequence,scene_major,scene_minor,misses,simd_levels,table_levels,ref_ms,cand_ms\n");
     }
   }
   ~Oracle() {
     if (!file) return;
     std::fclose(file); if (times) std::fclose(times);
-    std::printf("texsimd summary: {\"frames\":%llu,\"misses\":%llu,\"unique\":%zu,\"evictions\":%llu,\"levels\":%llu,\"simd_levels\":%llu,\"formats\":[",
+    std::printf("texsimd summary: {\"frames\":%llu,\"misses\":%llu,\"unique\":%zu,\"evictions\":%llu,\"levels\":%llu,\"simd_levels\":%llu,\"table_levels\":%llu,\"formats\":[",
                 (unsigned long long)frames, (unsigned long long)misses, digests.size(), (unsigned long long)evictions,
-                (unsigned long long)levels, (unsigned long long)simd_levels);
+                (unsigned long long)levels, (unsigned long long)simd_levels, (unsigned long long)table_levels);
     bool comma = false;
     for (int i = 0; i < 16; ++i) {
       if (!fmt_misses[i]) continue;
-      std::printf("%s{\"format\":%d,\"misses\":%llu,\"levels\":%llu,\"simd_levels\":%llu,\"bytes\":%llu,\"ref_ms\":%.6f,\"cand_ms\":%.6f}",
+      std::printf("%s{\"format\":%d,\"misses\":%llu,\"levels\":%llu,\"simd_levels\":%llu,\"table_levels\":%llu,\"bytes\":%llu,\"ref_ms\":%.6f,\"cand_ms\":%.6f}",
                   comma ? "," : "", i, (unsigned long long)fmt_misses[i], (unsigned long long)fmt_levels[i],
-                  (unsigned long long)fmt_simd_levels[i], (unsigned long long)fmt_bytes[i], fmt_ref_ms[i], fmt_cand_ms[i]);
+                  (unsigned long long)fmt_simd_levels[i], (unsigned long long)fmt_table_levels[i], (unsigned long long)fmt_bytes[i], fmt_ref_ms[i], fmt_cand_ms[i]);
       comma = true;
     }
     std::printf("]}\n");
   }
   void frame(const gx::Frame& f) {
     if (!file) return;
-    ++frames; frame_ref_ms = frame_cand_ms = 0; frame_misses = frame_simd_levels = 0;
+    ++frames; frame_ref_ms = frame_cand_ms = 0; frame_misses = frame_simd_levels = frame_table_levels = 0;
     bytes.clear(); add(f.sequence); add(f.scene_major); add(f.scene_minor); add(f.discontinuous);
     add(uint64_t(f.vertices.size()));
     for (auto& v : f.vertices) { add(v.pos); add(v.nrm); add(v.col0); add(v.col1); add(v.uv); add(v.posmtx); add(v.texmtx); }
@@ -183,8 +186,8 @@ class Oracle {
     const auto hash = wasm_compat::sha1(bytes.data(), bytes.size());
     std::fprintf(file, "%llu,", (unsigned long long)f.sequence); for (auto b : hash) std::fprintf(file, "%02x", b);
     std::fputc('\n', file); std::fflush(file);
-    if (times) std::fprintf(times, "%llu,%u,%u,%llu,%llu,%.6f,%.6f\n", (unsigned long long)f.sequence, unsigned(f.scene_major),
-                            unsigned(f.scene_minor), (unsigned long long)frame_misses, (unsigned long long)frame_simd_levels,
+    if (times) std::fprintf(times, "%llu,%u,%u,%llu,%llu,%llu,%.6f,%.6f\n", (unsigned long long)f.sequence, unsigned(f.scene_major),
+                            unsigned(f.scene_minor), (unsigned long long)frame_misses, (unsigned long long)frame_simd_levels, (unsigned long long)frame_table_levels,
                             frame_ref_ms, frame_cand_ms);
   }
 };

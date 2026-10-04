@@ -27,6 +27,13 @@ jobs:
       - uses: mymindstorm/setup-emsdk@v14
         with:
           version: ${{ env.EMSDK_VERSION }}
+      - name: Kernels against gx::decode_texture (real wasm SIMD, random texels, every format)
+        run: |
+          set -euo pipefail
+          em++ -std=c++17 -O2 -msimd128 -Iupstream/melee-unlocked/port/runtime/gx -I. \
+            experiments/texture-simd/kernels_check.cpp upstream/melee-unlocked/port/runtime/gx/gx_texture.cpp \
+            -sENVIRONMENT=node -o "$RUNNER_TEMP/kernels_check.js"
+          node "$RUNNER_TEMP/kernels_check.js" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Generate guest outside checkout
         env:
           GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
@@ -56,8 +63,10 @@ jobs:
           done
           # The candidate must really contain the kernel: count v128 shuffles in each module.
           for label in baseline candidate; do
-            n=$(wasm-dis "$RUNNER_TEMP/$label/melee_core_node.wasm" | grep -c 'i8x16.shuffle' || true)
-            echo "$label i8x16.shuffle: $n" | tee -a "$RUNNER_TEMP/results/machine.txt" "$GITHUB_STEP_SUMMARY"
+            for op in i8x16.shuffle i8x16.swizzle; do
+              n=$(wasm-dis "$RUNNER_TEMP/$label/melee_core_node.wasm" | grep -c "$op" || true)
+              echo "$label $op: $n" | tee -a "$RUNNER_TEMP/results/machine.txt" "$GITHUB_STEP_SUMMARY"
+            done
           done
       - name: Read private disc
         working-directory: ${{ runner.temp }}

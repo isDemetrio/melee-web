@@ -2,7 +2,7 @@
 """Replays both builds over the 2400 checkpoints; writes digests and timings only, never guest data.
 
 baseline  = renderer decoder forced to the reference (GXW_TEXTURE_DECODE_REFERENCE)
-candidate = renderer decoder as shipped (SIMD RGBA8)
+candidate = renderer decoder as shipped (SIMD kernels, C4/C8 palette table)
 Each build: one plain replay (trace gate, sim_ms), then oracle replays. The oracle times the
 reference and the renderer's decoder on every simulated pool miss, alternating order, so one
 candidate run is a paired before/after; the baseline run is the control (both sides reference).
@@ -34,13 +34,18 @@ def summarize(rows):
         saved = [a-b for a, b in zip(ref, cand)]
         out[name] = {
             'frames': len(sel), 'frames_with_decode': sum(1 for r in sel if r['misses']),
-            'frames_with_simd': sum(1 for r in sel if r['simd_levels']), 'misses': sum(r['misses'] for r in sel),
+            'frames_with_simd': sum(1 for r in sel if r['simd_levels']),
+            'frames_with_table': sum(1 for r in sel if r['table_levels']),
+            'frames_with_fast': sum(1 for r in sel if r['simd_levels'] or r['table_levels']), 'misses': sum(r['misses'] for r in sel),
             'ref_total_ms': sum(ref), 'cand_total_ms': sum(cand),
             'ref_mean_ms': statistics.mean(ref) if ref else 0, 'cand_mean_ms': statistics.mean(cand) if cand else 0,
             'ref_p95_ms': pct(ref, .95), 'cand_p95_ms': pct(cand, .95),
             'ref_p99_ms': pct(ref, .99), 'cand_p99_ms': pct(cand, .99),
             'ref_max_ms': max(ref, default=0), 'cand_max_ms': max(cand, default=0),
             'saved_mean_ms': statistics.mean(saved) if saved else 0, 'saved_max_ms': max(saved, default=0),
+            # Frames that decode at all, and the frame the reference spends most on (the load hitch).
+            'saved_mean_decode_frames_ms': statistics.mean([s for s, r in zip(saved, sel) if r['misses']] or [0]),
+            'worst_ref_frame': max(({'ref_ms': x, 'cand_ms': y} for x, y in zip(ref, cand)), key=lambda d: d['ref_ms'], default=None),
         }
     return out
 
@@ -60,7 +65,7 @@ for variant in ('baseline', 'candidate'):
         line = next(s for s in (out/'stdout.log').read_text().splitlines() if s.startswith('texsimd summary: '))
         with t.open() as f:
             rows = [{'in_match': int(r['scene_major']) == 2 and int(r['scene_minor']) == 2, 'misses': int(r['misses']),
-                     'simd_levels': int(r['simd_levels']), 'ref_ms': float(r['ref_ms']), 'cand_ms': float(r['cand_ms'])}
+                     'simd_levels': int(r['simd_levels']), 'table_levels': int(r['table_levels']), 'ref_ms': float(r['ref_ms']), 'cand_ms': float(r['cand_ms'])}
                     for r in csv.DictReader(f)]
         b['oracle_runs'].append({'oracle': json.loads(line.removeprefix('texsimd summary: ')), 'per_frame': summarize(rows)})
         oracle.setdefault(variant, g.read_bytes())
