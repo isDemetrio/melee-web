@@ -51,3 +51,22 @@ The parity run ends at match frame 762; its first scripted in-match movement is 
 It measures two characters on Onett before those scripted actions, not active four-player combat.
 
 No attribution, hypothesis or optimization of the separate 14.9 ms interval is made here.
+
+## Amdahl bound for the requested scope
+
+Using the measured **profiled** phone E/F decomposition, with other work unchanged:
+
+| Quantity | E | F |
+| --- | ---: | ---: |
+| Current core ms | 43.816 | 44.154 |
+| Reduction required to reach 13 ms | 30.816 | 31.154 |
+| Required speedup to reach 13 ms | 3.370× | 3.396× |
+| Non-decode plus GX excluding end-frame, ms | 21.655 | 21.827 |
+| Core left if those two blocks cost **zero**, ms | 22.161 | 22.327 |
+| Maximum speedup from those blocks alone | 1.977× | 1.978× |
+
+This is an optimistic **upper bound**, not an attainable optimization. It already rules out
+3× from simulation/decoder changes alone in those measured sessions. It does not prove an
+absolute no-go for the whole project: renderer work and the separate outstanding attribution
+are outside this task. No cost in either is declared irreducible or removable here. The table
+must not be applied to unprofiled D/G as if their missing split were measured.
