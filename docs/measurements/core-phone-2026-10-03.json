@@ -1,0 +1,182 @@
+{
+  "F": {
+    "file": "doc_48c9f1ad4a44_play-report-2026-10-03T20-21-41.843Z.json",
+    "sha256": "46fd6cf78c7969cf895b5a91fa3c34e0a219b376efc6f3b74777e055c0ca26d1",
+    "commit": "9e9b6e7332fad29a53d381c51b84e06400d6c859",
+    "started_at": "2026-10-03T20:19:47.403Z",
+    "split": true,
+    "frames_csv": {
+      "frames": 1577,
+      "means": {
+        "cycle_ms": 46.026645529486366,
+        "core_ms": 44.15396322130628,
+        "webgpu_ms": 2.211084337349398,
+        "webgpu_calls": 1991.0621433100825,
+        "resources_ms": 0.030500951173113508,
+        "encode_ms": 1.347000634115409,
+        "queue_ms": 0.8279898541534559,
+        "present_ms": 0.0055928979074191506,
+        "disc_ms": 0.019543436905516805,
+        "bitmap_ms": 1.5873050095117311,
+        "ack_ms": 0.28334812935954345,
+        "idle_ms": 0.002029169308814204,
+        "decode_ms": 15.720266328471782,
+        "non_decode_ms": 13.366886493341788,
+        "sim_ms": 29.08715282181357,
+        "previous_heartbeat_tail_ms": 0.06041851616994293,
+        "csv_write_ms": 0.019036144578313253,
+        "heartbeat_read_ms": 0.04388078630310717,
+        "heartbeat_finish_ms": 0.006899175649968294,
+        "core_unattributed_ms": 14.936575776791376
+      }
+    },
+    "decoder_cost": {
+      "frames": 1577,
+      "means": {
+        "sim_ms": 29.08715282181357,
+        "record_ms": 0.8686493341788205,
+        "texture_ms": 0.609143944197844,
+        "observer_ms": 0.11302473050095117,
+        "rest_ms": 20.03430564362714,
+        "decode_ms": 15.720266328471782,
+        "decode_rest_ms": 6.869511731135066,
+        "non_decode_ms": 13.366886493341788,
+        "record_calls": 1627.8497146480659,
+        "texture_calls": 550.283449587825,
+        "observer_calls": 550.283449587825,
+        "decode_calls": 29518.225110970197,
+        "observer_game_ms": 0.20209258084971465,
+        "end_frame_ms": 7.2599365884591,
+        "non_decode_rest_ms": 13.164793912492074,
+        "allocate_joint_calls": 0.527584020291693,
+        "load_joint_calls": 0.527584020291693,
+        "release_joint_calls": 0.15726062143310082,
+        "display_joint_calls": 132.24730500951173,
+        "rigid_matrix_calls": 179.13887127457198,
+        "other_matrix_calls": 0.0,
+        "envelope_matrix_calls": 131.17628408370322,
+        "end_frame_calls": 0.9771718452758402
+      }
+    }
+  },
+  "E": {
+    "file": "doc_943faf915290_play-report-2026-10-03T20-21-24.002Z.json",
+    "sha256": "3e899f3313daca56ee1a0a868def829d92548ae435e282ba6a06a8ceb0b1a2e2",
+    "commit": "9e9b6e7332fad29a53d381c51b84e06400d6c859",
+    "started_at": "2026-10-03T20:19:47.403Z",
+    "split": true,
+    "frames_csv": {
+      "frames": 1437,
+      "means": {
+        "cycle_ms": 45.60098816979819,
+        "core_ms": 43.815643702157274,
+        "webgpu_ms": 2.164481558803062,
+        "webgpu_calls": 1963.30201809325,
+        "resources_ms": 0.033068893528183714,
+        "encode_ms": 1.3156854558107167,
+        "queue_ms": 0.810285316631872,
+        "present_ms": 0.005441892832289492,
+        "disc_ms": 0.01789839944328462,
+        "bitmap_ms": 1.576715379262352,
+        "ack_ms": 0.206624913013222,
+        "idle_ms": 0.0020041753653444678,
+        "decode_ms": 15.521725817675714,
+        "non_decode_ms": 13.272122477383437,
+        "sim_ms": 28.793848295059153,
+        "previous_heartbeat_tail_ms": 0.05827418232428671,
+        "csv_write_ms": 0.019220598469032707,
+        "heartbeat_read_ms": 0.043910925539318024,
+        "heartbeat_finish_ms": 0.0068615170494084905,
+        "core_unattributed_ms": 14.893528183716075
+      }
+    },
+    "decoder_cost": {
+      "frames": 1437,
+      "means": {
+        "sim_ms": 28.793848295059153,
+        "record_ms": 0.8583020180932498,
+        "texture_ms": 0.6397077244258873,
+        "observer_ms": 0.11194154488517745,
+        "rest_ms": 19.841934585942937,
+        "decode_ms": 15.521725817675714,
+        "decode_rest_ms": 6.7726791927627,
+        "non_decode_ms": 13.272122477383437,
+        "record_calls": 1602.429366736256,
+        "texture_calls": 547.3235908141962,
+        "observer_calls": 547.3235908141962,
+        "decode_calls": 29252.42032011134,
+        "observer_game_ms": 0.20286708420320113,
+        "end_frame_ms": 7.1390953375086985,
+        "non_decode_rest_ms": 13.069255393180237,
+        "allocate_joint_calls": 0.5789839944328462,
+        "load_joint_calls": 0.5789839944328462,
+        "release_joint_calls": 0.17258176757132915,
+        "display_joint_calls": 136.18371607515658,
+        "rigid_matrix_calls": 185.86499652052888,
+        "other_matrix_calls": 0.0,
+        "envelope_matrix_calls": 123.88726513569938,
+        "end_frame_calls": 0.9749478079331941
+      }
+    }
+  },
+  "G": {
+    "file": "doc_b8bb558c2eb3_play-report-2026-10-03T21-45-46.604Z.json",
+    "sha256": "a053ac23a182ebd7d7133ae406f55167e4a2ae82c68501e27f3df038be3e8218",
+    "commit": "b97787c24e685583403cae7570b52aba54f1503f",
+    "started_at": "2026-10-03T21:43:10.729Z",
+    "split": false,
+    "frames_csv": {
+      "frames": 1827,
+      "means": {
+        "cycle_ms": 41.704827586206896,
+        "core_ms": 34.43772304324028,
+        "webgpu_ms": 2.6258456486042694,
+        "webgpu_calls": 2070.3470169677066,
+        "resources_ms": 0.045134099616858235,
+        "encode_ms": 1.583864258347017,
+        "queue_ms": 0.9907717569786535,
+        "present_ms": 0.006075533661740558,
+        "disc_ms": 0.00535303776683087,
+        "bitmap_ms": 7.017142857142857,
+        "ack_ms": 0.2476518883415435,
+        "idle_ms": 0.0023097974822112754,
+        "sim_ms": 19.460886699507387,
+        "previous_heartbeat_tail_ms": 0.04684181718664478,
+        "csv_write_ms": 0.017766830870279148,
+        "heartbeat_read_ms": 0.03865353037766831,
+        "heartbeat_finish_ms": 0.0047290640394088675,
+        "core_unattributed_ms": 14.868845101258895
+      }
+    }
+  },
+  "D": {
+    "file": "doc_da707885a8d0_play-report-2026-10-03T20-19-30.996Z.json",
+    "sha256": "9e5ac7e5d5f8db5697990c1a4a07d519ba977aa4a9355be5d502f28f8b19a071",
+    "commit": "9e9b6e7332fad29a53d381c51b84e06400d6c859",
+    "started_at": "2026-10-03T20:16:33.937Z",
+    "split": false,
+    "frames_csv": {
+      "frames": 3803,
+      "means": {
+        "cycle_ms": 35.88899290034183,
+        "core_ms": 33.22818827241651,
+        "webgpu_ms": 2.678864054693663,
+        "webgpu_calls": 1990.4719957927953,
+        "resources_ms": 0.046521167499342625,
+        "encode_ms": 1.4827504601630292,
+        "queue_ms": 1.141435708651065,
+        "present_ms": 0.008156718380226137,
+        "disc_ms": 0.012632132526952406,
+        "bitmap_ms": 2.4132789902708387,
+        "ack_ms": 0.24463844333420984,
+        "idle_ms": 0.0028871943202734684,
+        "sim_ms": 18.279836970812518,
+        "previous_heartbeat_tail_ms": 0.04599000788850907,
+        "csv_write_ms": 0.018590586379174337,
+        "heartbeat_read_ms": 0.04696292400736261,
+        "heartbeat_finish_ms": 0.0057165395740205105,
+        "core_unattributed_ms": 14.83109124375493
+      }
+    }
+  }
+}
