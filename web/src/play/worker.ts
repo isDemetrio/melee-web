@@ -202,15 +202,20 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     core.FS.mount(core.FS.filesystems['WORKERFS'], { files: [event.data.iso] }, '/disc');
     core.FS.mkdir('/card');
     scope.postMessage({ type: 'ready' });
-    // Live play starts at the game's menus. No script and no trace hashing. --sim-times appends one
-    // short row per retrace (retrace, sim_ms, match_frame): it is how the report tells the match
-    // from the menus, the way the spike does. It reads the scene, it writes no guest state.
+    // Live play starts at the game's menus. No script and no trace hashing: headless_main.cpp traces
+    // to stdout unless --state-trace is given, and an empty path is the only way to switch it off.
+    // That trace hashes all 40 MiB of RAM and ARAM every retrace, outside sim_ms (14.4–14.7 ms of
+    // every phone frame's core_unattributed_ms), and posts its line to the page's log 60 times a
+    // second. It only reads guest state (dvd_settle waits on reads the game cannot see yet).
+    // --sim-times appends one short row per retrace (retrace, sim_ms, match_frame): it is how the
+    // report tells the match from the menus, the way the spike does. It reads the scene, it writes
+    // no guest state.
     simTail = new CsvTail(core.FS, SIM_TIMES);
     if (split) decoderTail = new CsvTail(core.FS, DECODER_COST);
     meter.start();
     const exitCode = core.callMain(['--iso', `/disc/${event.data.iso.name}`, '--headless', '--fast',
       '--frames', '4294967295', '--time-base', '1', '--volume', '0', '--card-dir', '/card',
-      '--sim-times', SIM_TIMES]);
+      '--state-trace', '', '--sim-times', SIM_TIMES]);
     disc?.close();
     flush();
     scope.postMessage({ type: 'ended', exitCode });
