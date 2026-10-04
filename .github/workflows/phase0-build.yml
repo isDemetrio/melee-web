@@ -151,16 +151,19 @@ jobs:
           # The feature list is explicit on purpose. `--all-features` produces a module that Node
           # and V8 reject at instantiation ("unknown import kind 0x7f"), and nothing in the build
           # notices until something tries to load it. So the flags stay spelled out, and the
-          # compile check below is part of the step rather than a nicety.
+          # compile check below is part of the step rather than a nicety. Only the web module gets
+          # --enable-simd: its RGBA8 texture kernel (wasm/render/texture_decode.h) uses v128, which
+          # Binaryen otherwise rejects; the node module has no renderer and keeps its old flags.
           #
           # The level is -O2, not -O3: the pass is the JS build of Binaryen here, and -O3 on a
           # 16 MB module took minutes of runner time for no measured gain.
           npm install -g binaryen@132.0.0
           for module in "$RUNNER_TEMP/wasm/melee_core_node.wasm" "$RUNNER_TEMP/wasm/melee_core_web.wasm"; do
             before=$(stat -c%s "$module")
+            simd=''; case "$module" in *_web.wasm) simd=--enable-simd ;; esac
             wasm-opt --enable-bulk-memory --enable-mutable-globals \
               --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
-              -O2 "$module" -o "$module.opt"
+              $simd -O2 "$module" -o "$module.opt"
             mv "$module.opt" "$module"
             echo "wasm-opt: $(basename "$module") $before -> $(stat -c%s "$module") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
           done
