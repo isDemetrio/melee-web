@@ -153,3 +153,46 @@ perché `tee` mascherava il fallimento Node. Correzione: 64 MiB iniziali e
 `set -euo pipefail`; JSON vuoti esclusi dai risultati. Nessun guadagno attribuito
 al banco fallito. Questa anomalia non riguarda il workflow replay, che usa
 `subprocess.run(check=True)` e verifica ogni digest.
+
+## Accessi, limiti sollevati e indirizzi costanti: banco corretto
+
+[Run 37229869202](https://github.com/isDemetrio/melee-web/actions/runs/37229869202),
+[raw](measurements/beyond-kernels-37229869202/). Il banco usa il vero `ppc::ld32`,
+RAM separata, fallback locked-cache/MMIO sintetici, 32 casi di alias/indirizzi non
+allineati/confini/overflow. 20.480.000 letture per misura, aritmetica unsigned esatta.
+
+| Compilazione | helper corrente ms | guardia unica per loop ms | rapporto |
+| --- | ---: | ---: | ---: |
+| Oz | 17,862437 | 13,364476 | 1,337× |
+| O2 | 18,085894 | 9,945879 | 1,818× |
+
+Il percorso hoisted controlla tutto il range prima del loop e ricade sull'originale
+quando non è interamente RAM; ogni load resta memcpy tipizzato + byteswap. Non
+rimuove i controlli indiscriminatamente. È una misura sintetica di un loop eleggibile,
+**non** una trasformazione già applicata ai loop guest e non un risparmio di frame.
+Per produzione il ricompilatore deve provare range e alias, e spezzare/ricontrollare
+la regione presso chiamate e poll eventi: non si può spostare una lettura MMIO o
+assumere invarianti i registri attraverso un backedge che consegna eventi.
+
+Indirizzo costante `0x80000100`: helper vs offset pre-risolto, Oz **12,359678→11,009769
+ms** sullo stesso numero di iterazioni; a O2 **0,011200→0,008138 ms** perché il
+compilatore elimina già le letture ripetute. Questi ultimi microsecondi non sono
+un'accelerazione della memoria: mostrano la forza del constant folding su questo
+loop. Non trasferire il rapporto a indirizzi dinamici del guest. L'inlining completo
+nel gioco è una variante separata, ancora in CI.
+
+## Hot guest O2: risultato nullo, primo oracolo grafico respinto
+
+Run 37229144679, [misure hot](measurements/beyond-core-37229144679/hot/replay.json).
+Tre coppie: **8,6055→8,5905**, **8,5495→8,5626**, **8,5394→8,6009 ms** in partita.
+Rapporto delle medie **0,9977×**; dimensione **15.241.395→16.867.355 byte**.
+Otto tracce CPU (sei cronometrate, due con oracolo) conservano il digest canonico.
+Verdetto prestazionale: **nessun guadagno dimostrato**, +10,7% dimensione.
+
+Il confronto grafico ha respinto il run. L'oracolo leggeva `postMatrices` e `lights`
+anche quando il decoder le lascia intenzionalmente non inizializzate (`SkipInit`,
+`gx_core.cpp` condizioni XF dual-transform e canali illuminati). La correzione usa
+le stesse condizioni di cattura, preservando tutti i byte di ogni stato definito;
+non azzera stato attivo e non cambia il decoder. Finché il confronto corretto non
+passa, questo run **non certifica parità grafica**. Non usare il solo digest CPU
+per promuovere alcun prototipo. I replay cronometrati non attivano l'oracolo.

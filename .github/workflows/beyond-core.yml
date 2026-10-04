@@ -1,6 +1,19 @@
 name: Beyond core — measured WASM candidates
 on:
   workflow_dispatch:
+    inputs:
+      variants:
+        description: 'JSON list of measured candidates'
+        type: string
+        default: '["inline","simd","hot","rgba8"]'
+      four_player:
+        description: 'Also gate and time the separate four-port workload'
+        type: boolean
+        default: false
+      oracle_only:
+        description: 'Recheck graphics after oracle-only corrections; no timing rerun'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -11,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [inline, simd, hot, rgba8]
+        variant: ${{ fromJSON(inputs.variants || '["inline","simd","hot","rgba8"]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -63,7 +76,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote --file "$RUNNER_TEMP/disc.iso"
       - name: Three paired replays, every full trace gated
+        env:
+          ORACLE_ONLY: ${{ inputs.oracle_only && '1' || '0' }}
         run: python3 experiments/beyond-core/replay.py
+      - name: Separate four-player workload
+        if: ${{ inputs.four_player }}
+        run: python3 experiments/beyond-core/four_player.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -72,4 +90,4 @@ jobs:
           retention-days: 7
       - name: Remove private data
         if: always()
-        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/build" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/replay"
+        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/build" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/replay" "$RUNNER_TEMP/four-replay"

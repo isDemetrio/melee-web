@@ -37,7 +37,12 @@ public:
     }
     add(uint64_t(f.draws.size()));for(auto& d:f.draws){
       add(d.primitive);add(d.first_vertex);add(d.vertex_count);add(d.first_segment);add(d.segment_count);add(d.components);
-      add(d.bp.reg);add(d.posMatrices);add(d.normalMatrices);add(d.postMatrices);add(d.lights);add(d.xf_regs);
+      add(d.bp.reg);add(d.posMatrices);add(d.normalMatrices);
+      // SkipInit deliberately leaves disabled post transforms/lights undefined.
+      // Only hash initialized state, under the exact capture predicates in gx_core.cpp.
+      if(d.xf_regs[0x12]&1)add(d.postMatrices);
+      bool lit=false;for(uint32_t j=0;j<(d.xf_regs[0x09]&3);++j)lit=lit||gx::lit_enable(d.xf_regs[0x0e+j])||gx::lit_enable(d.xf_regs[0x10+j]);
+      if(lit)add(d.lights);add(d.xf_regs);
       add(d.matrix_index_a);add(d.matrix_index_b);add(d.tev_colors);add(d.tev_kcolors);
       add(d.identity);add(d.object_generation);add(d.owner_player);add(d.skinned);
       // Authored subframe captures are disabled in this offline host; fail if that changes.

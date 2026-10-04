@@ -6,7 +6,7 @@ root = Path(os.environ['GITHUB_WORKSPACE'])
 tmp = Path(os.environ['RUNNER_TEMP'])
 results = {'engine': subprocess.check_output(['node', '--version'], text=True).strip(),
            'platform': platform.platform(), 'pairs': []}
-for trial in range(3):
+for trial in range(0 if os.environ.get('ORACLE_ONLY') == '1' else 3):
     pair = {}
     for variant in (('baseline', 'candidate') if trial % 2 == 0 else ('candidate', 'baseline')):
         out = tmp / 'replay'
@@ -32,6 +32,7 @@ for variant in ('baseline', 'candidate'):
     assert hashlib.sha1((out/'trace.csv').read_bytes()).hexdigest() == 'c79c53b9cdf81426fa0277e7497a69e55bc5f571'
     line=next(s for s in (out/'stdout.log').read_text().splitlines() if s.startswith('graphics decode: '))
     results['texture_decode'][variant]=json.loads(line.removeprefix('graphics decode: '))
+(tmp/'results/replay.json').write_text(json.dumps(results,indent=2)+'\n')
 a=(tmp/'baseline-graphics.csv').read_bytes()
 b=(tmp/'candidate-graphics.csv').read_bytes()
 assert a and a==b, 'ordered graphics output differs'

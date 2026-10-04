@@ -1,0 +1,57 @@
+{
+  "engine": "v22.23.3",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "pairs": [
+    {
+      "baseline": {
+        "mean_ms": 8.605533595800525,
+        "p95_ms": 9.2712,
+        "frames": 762,
+        "trace_sha1": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "wasm_bytes": 15241395
+      },
+      "candidate": {
+        "mean_ms": 8.590540944881889,
+        "p95_ms": 9.0,
+        "frames": 762,
+        "trace_sha1": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "wasm_bytes": 16867355
+      },
+      "speedup": 1.0017452510866116
+    },
+    {
+      "candidate": {
+        "mean_ms": 8.562592913385826,
+        "p95_ms": 9.0286,
+        "frames": 762,
+        "trace_sha1": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "wasm_bytes": 16867355
+      },
+      "baseline": {
+        "mean_ms": 8.54948372703412,
+        "p95_ms": 9.1341,
+        "frames": 762,
+        "trace_sha1": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "wasm_bytes": 15241395
+      },
+      "speedup": 0.9984690167471103
+    },
+    {
+      "baseline": {
+        "mean_ms": 8.539428608923885,
+        "p95_ms": 9.0649,
+        "frames": 762,
+        "trace_sha1": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "wasm_bytes": 15241395
+      },
+      "candidate": {
+        "mean_ms": 8.600897900262467,
+        "p95_ms": 9.2012,
+        "frames": 762,
+        "trace_sha1": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "wasm_bytes": 16867355
+      },
+      "speedup": 0.9928531541646708
+    }
+  ]
+}
