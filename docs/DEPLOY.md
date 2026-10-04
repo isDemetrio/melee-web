@@ -3,9 +3,17 @@
 How the three deployable pieces of this project get to Cloudflare, what the operator has to
 set up once, and how to undo a deploy.
 
-**The deployment commands below have not been executed by this implementation agent.** There is no Cloudflare account login and no API
-token in this repository's CI, so every command below is written from the documentation and
-reviewed, not run (`docs/OPEN_QUESTIONS.md` Q3). What *is* verified by CI is the part that
+**The commands below were written from the documentation and reviewed, not run by an
+implementation agent.** This paragraph said "there is no Cloudflare account login and no API token
+in this repository's CI" until 2026-10-04. Both halves are false now, and the corrections belong
+here because the rest of the file was read with them in mind. The account exists and the
+credentials are **set**: `gh api repos/isDemetrio/melee-web/actions/secrets` lists
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and `gh api
+repos/isDemetrio/melee-web/actions/variables` lists `CF_PAGES_PROJECT=melee-web` — the three names
+section 2 point 8 asks for. A preview deployment is live and behind Access: an anonymous `GET` of
+`https://phase0-spike.melee-web.pages.dev/spike.html` answers `200` with Cloudflare Access's
+*Sign in* page rather than the page or the module. Which of section 3's commands has been run
+end to end is **not** claimed here beyond that preview. What *is* verified by CI is the part that
 decides whether an unattended run can publish anything: the guard tests in
 `scripts/tests/test_deploy_guard.sh` prove that `scripts/deploy.sh` and
 `scripts/upload_assets.sh` refuse to act without credentials, with a dirty tree, with an
@@ -18,7 +26,7 @@ incomplete dist, or with a manifest naming objects that are not in the store.
 | Browser shell (HTML/CSS/JS) | Cloudflare Pages project `melee-web`, static | `scripts/build_web.sh` |
 | Pages Functions (`/api/*`) | Same Pages project, `functions/` directory | Pages build, no separate step |
 | Asset manifest + blob store | R2 bucket `melee-web-assets`, key `manifest.json` and `<sha256>.bin` | `scripts/make_manifest.py`, uploaded by `scripts/upload_assets.sh` |
-| The game core (`melee.wasm`) | Nothing to deploy yet | Does not exist: no disc image, no DOL (`docs/OPEN_QUESTIONS.md` Q1) |
+| The game core | Phase 0 publishes `spike-core/melee_core_web.wasm` as the `phase0-spike` Pages preview (`docs/PHASE0_DEPLOY_PLAN.md` section 3); nothing else is deployed | `.github/workflows/phase0-build.yml`. The disc image and the DOL exist (`docs/OPEN_QUESTIONS.md` Q1, Q2), and the web module is 16,323,255 bytes at `-Oz`, under Pages' 25 MiB per-file limit (Q8). Until 2026-10-04 this row said "does not exist: no disc image, no DOL" |
 
 `wrangler.toml` names the project, points Pages at `web/dist`, and binds the R2 bucket as
 `ASSETS_R2`. The Function `functions/api/asset-manifest.ts` reads the key `manifest.json`
@@ -49,7 +57,16 @@ from that binding; the blobs themselves are **not** served through Pages.
 8. **GitHub**: repository secrets `CLOUDFLARE_API_TOKEN` (Pages + R2 + Realtime TURN
    permissions) and `CLOUDFLARE_ACCOUNT_ID`; repository variable `CF_PAGES_PROJECT`
    (`melee-web`). The deploy job in `.github/workflows/ci.yml` skips itself with a notice
-   while they are absent, so the workflow is green before they exist.
+   while they are absent, so the workflow is green before they exist. **They are present
+   now (2026-10-04, the note at the top of this file), and the job still skips** — on the
+   repository variable `CF_DEPLOY_SHELL`, which gates publishing the shell separately
+   because a shell that cannot load a game should not sit on the project's production
+   address. The run's own notice says so: `deploy skipped: credentials are present but the
+   shell deploy is off; set the repository variable CF_DEPLOY_SHELL=true when the shell can
+   actually load a game` (run `37222100034`, job *Cloudflare Pages (skips without
+   credentials)*). That gate is also why `https://melee-web.pages.dev/` answers Pages'
+   `404` "Deployment Not Found": `docs/PHASE0_DEPLOY_PLAN.md` section 3 records it in the
+   "Accesso protetto" row, and section 1 carries the measurement.
 
 ## 3. The deploy path, in order
 
@@ -57,8 +74,9 @@ from that binding; the blobs themselves are **not** served through Pages.
 # 1. Build the shell. Never on the VPS: it has no Node and 3.7 GB of RAM.
 scripts/build_web.sh                       # -> web/dist, checks _headers and the 1 MB budget
 
-# 2. Assets. Requires the operator's own ISO; the extraction scripts of
-#    docs/PLAN_BREAKDOWN.md T8 are not written yet, so this step is documented only.
+# 2. Assets. Requires the operator's own ISO. `scripts/extract_fs.py` exists -- this comment
+#    said the T8 scripts were "not written yet" until 2026-10-04. What is missing is a run
+#    against a real disc: `docs/T8_VALIDATION.md` reads the FST and extracts nothing.
 #    python scripts/extract_fs.py ~/private/melee.iso assets-extracted
 python scripts/make_manifest.py --assets assets-extracted --out assets/manifest.json \
   --base-url https://assets.<your-domain>
@@ -116,12 +134,17 @@ CI has not verified is never published.
 
 ## 5. What is not verified
 
-- Every command in section 3: no account, no token, no ISO. The guard tests cover the
-  refusal paths only, plus `--dry-run` output.
+- Every command in section 3: the account and the credentials now exist (the note at the top of
+  this file) and the ISO is on the VPS, so the reason this entry gave until 2026-10-04 no longer
+  holds. Which of the commands has been run against that account is not claimed beyond the
+  `phase0-spike` preview. The guard tests cover the refusal paths only, plus `--dry-run` output.
 - The R2 custom domain, the CORS rule and the CORP transform rule: described from the
   documentation, never applied to an account.
-- The client side of the asset path (fetch by manifest, cache in OPFS, hand bytes to the
-  core) is not written yet. `web/src/types.ts` types the manifest; nothing fetches it.
+- The client side of the asset path is written and unit-tested — `web/src/assets/manifest.ts`,
+  `cache.ts` and `store.ts`, with `web/tests/unit/asset-manifest.test.ts`,
+  `asset-cache.test.ts` and `asset-store.test.ts` — but nothing in the shell calls it yet: the
+  page still reads the disc, so the path is not exercised end to end. This entry said "not
+  written yet" until 2026-10-04.
 - The Pages Functions bundle and their tests are green in CI; the deployed behaviour with a
   real Access JWT, a real TURN key and a real R2 binding is untested.
 
@@ -237,11 +260,16 @@ Three things this cannot settle on its own:
   `curl -sI https://phase0-spike.<project>.pages.dev/spike-core/melee_core_web.wasm`: it must not
   show `immutable`. Same for `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` on
   `spike.html`, and `Content-Type: application/wasm` on the module.
-- **The address format.** `https://phase0-spike.<project>.pages.dev` is expected, not verified; the
-  run summary carries whatever wrangler reports.
+- **The address format.** Verified 2026-10-04: `https://phase0-spike.melee-web.pages.dev/spike.html`
+  answers `200` (the Access *Sign in* page), so the `<branch>.<project>.pages.dev` form this
+  bullet expected is the one the project uses. What the module is actually served with is still
+  behind Access.
 
-The deployment procedure was not run by this implementation agent; the dated operator report
-above records a live preview and its Access failure.
+The deployment procedure was not run by an implementation agent; the dated operator report above
+records the Access failure. The preview is independently confirmed live and protected
+(2026-10-04, the note at the top of this file). The 403-after-login defect that report describes
+is **not** re-tested by that check, and cannot be: Access answers before the middleware runs, so
+a request without a token never reaches the Function that returned the 403.
 
 **Verified while writing this** (on the VPS, 2026-09-30):
 
