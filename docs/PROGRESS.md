@@ -3075,3 +3075,39 @@ compiled source remains identical to `9b246e4`. Final checks/results are on PR #
 No renderer changes, optimisation, game data, or merge. Shell deploy is disabled by
 repository configuration. Still required: operator's new iPhone game report; neither
 CPU work nor a WebKit wait has been established as the source of its 14.9 ms.
+
+## 2026-10-04 — the probe suite is bounded, and what a red one was costing (cron, `cron/p0-probe-global-timeout`)
+
+**Why.** The `build` job of `perf/one-shader` (PR #100) and of `fix/lit-channels` (PR #101) is red,
+and GitHub reports it as *cancelled*, not failed. The log says why: the Playwright suite ran 44
+tests with one worker, 27 of the tests from number 8 to number 36 each spent about 1.8 minutes (the
+110 s expectation timeout) and failed, and the job was killed at its own `timeout-minutes: 60` cap
+while test 37 was starting (run `37164057193`, `perf/one-shader`, 00:09:25 → 01:09:49). Two more
+runs did the same: `37165648926` and `3715924165`, both `fix/lit-channels`, 00:40:10 → 01:40:31 and
+00:45:32 → 01:45:52. Three runs, **181 runner-minutes in about ninety minutes**, against the
+2,000-minute monthly allowance `docs/AGENT_RULES.md` measures against. For scale, `phase0-build.yml`
+has spent 540 minutes since 2026-10-03T00:00Z over 49 runs, and the repository 665 minutes over 122
+runs.
+
+**Change.** `web/playwright.spike.config.ts`: `globalTimeout: 15 * 60_000`, with those numbers in
+the comment. The per-test `timeout: 120_000` and `expect.timeout: 110_000` bound one test and bound
+nothing about a suite of 44; the new field bounds the run, so a branch whose probes time out now
+stops after about fifteen minutes with the failures it reached. A green branch is unaffected: the
+same step is 51 s, step 15 of run `37169669256` on `main`. `web/tests/unit/spike-config.test.ts`
+asserts the bound exists and stays under 20 minutes, in the style of `build-config.test.ts`.
+
+**Not done.** No renderer, simulation, workflow or test-semantics file is touched, and the two
+branches above keep their own failing probes: this changes how long a red suite costs, not what it
+reports as wrong. The cause of those timeouts — every WebGPU readback probe reaching its expectation
+timeout on a branch that generates one uber-shader — is the renderer thread and is being diagnosed
+there (`fix/lit-hang`, last pushed 02:03).
+
+**Blocked, and by what.** The remaining autonomous work is the renderer, and all of it is in
+flight on branches that own the same files (`wasm/render/gx_webgpu.cpp`,
+`wasm/render/gx_wgsl.{cpp,h}`, `wasm/render/pixel_pipeline_check.mjs`,
+`web/src/spike/{gpu,main,worker}.ts`, `web/tests/spike/render.spec.ts`,
+`.github/workflows/phase0-build.yml`): PR #70 (`render/webgpu-lighting`, `CONFLICTING` with `main`
+since the alpha/blend merge), PR #100, PR #101 (stacked on #100) and `fix/lit-hang`. Everything else
+needs the operator: the legal call O1, the credentials O2–O9, the decisions Q10(a) and Q10(b), the
+choice of the core-budget experiment, and the device rows M1, M2 and M5 — the decisive Android row
+is still unmeasured.
