@@ -1,6 +1,10 @@
 name: Core attribution (private disc, aggregate results only)
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/core-profile.yml'
+      - 'scripts/phase0/summarize_native_profile.py'
 permissions:
   contents: read
 concurrency:
