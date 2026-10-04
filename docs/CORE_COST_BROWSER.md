@@ -105,7 +105,7 @@ Nessuna è stata misurata come guadagno: tranne la prima (§4), sono **candidati
 | `memcmp` byte per byte di musl | 5,0% / 5,6% | profilo: 3,2 punti dalla cattura delle texture (`TextureSnapshotCache::equal`, quando la scorciatoia della versione RAM manca) e 1,7 da `operator==` su `std::array<uint32_t,76>` in `draw_segment` | un confronto per parole ha lo stesso risultato booleano. Prima va contato **quante volte** la scorciatoia di versione manca: è un contatore, non ancora scritto |
 | JS del backend per draw (`gxw_draw__inner`) | 23,4% / — | profilo V8 con WebGPU finto: ~9 µs di JS per draw su ~1650 draw | è il renderer, non il core: la prova è il controllo di contenuto del banco (`VALIDATE=1`) e lo stato dei pass. Il numero di JSC non è misurato |
 | helper di memoria fuori linea (`ppc::ld32`/`st32`… non inlinati a `-Oz`) | 12,6% / 22,2% | profilo: sono funzioni con nome, chiamate a ogni accesso | inlinare non cambia la semantica. **Ma** l'esperimento "accessi in memoria" di stanotte ha misurato 0,92× sul gioco: non ripeterlo alla cieca. Il profilo dice dove sta il costo (chiamata + `mark_ram_write`), non che inlinare lo tolga |
-| `ppc::trace_enter` chiamata in partita | 0,6–1,1% | profilo: `enter()` prende il percorso lento, quindi `g_trace_funcs` è vero (un hook d'ingresso è registrato) | da capire quale hook e se serve in partita; non indagato |
+| `ppc::trace_enter` chiamata a **ogni** ingresso di funzione | 0,6–1,1% (più parte di `enter`, 0,9–1,5%) | profilo; causa letta nel sorgente: `native/headless_main.cpp:96` registra un solo hook (inizio partita, `0x8016D800`) e `add_entry_hook` accende `g_trace_funcs` per tutta la sessione, quindi ogni `enter()` chiama `trace_enter`, che scorre la lista degli hook | l'hook deve continuare a scattare all'ingresso di `0x8016D800`; un controllo dell'indirizzo inline al posto della chiamata lo preserva. Da provare con la traccia |
 
 Non riducibile con gli attrezzi di questo compito: il **corpo guest** (15% attaccato). È il lavoro
 della console, e specializzarlo richiede prove di equivalenza funzione per funzione.
@@ -132,8 +132,8 @@ della console, e specializzarlo richiede prove di equivalenza funzione per funzi
   statistico sulle quote è sotto 0,1 punti. Il rumore fra corse sulla VPS è ~10% sul totale
   (`sim_ms` medio 62,4 e 55,5 ms in due corse attaccate identiche): le quote valgono, i millisecondi no.
 - **Contatori che non scattano**: nessuno dichiarato qui come zero. Uno scatta inatteso: `ppc::trace_enter`
-  è chiamata (0,6–1,1% del fotogramma) — c'è dunque un hook d'ingresso registrato in partita; non è
-  stato indagato.
+  è chiamata (0,6–1,1% del fotogramma) perché l'hook d'inizio partita di `native/headless_main.cpp:96`
+  accende il percorso lento di `enter()` per tutta la sessione (§3).
 - **Dal VPS al telefono**: la pagina di gioco ha già lo split (casella "core split", patch 0008/0009) che
   sul telefono misura le stesse tre zone con un altro taglio: `end_frame_ms` ≈ renderer,
   `decode_ms − end_frame_ms` ≈ GPU emulata, `non_decode_ms` ≈ zona guest + HLE. Una partita con lo split
