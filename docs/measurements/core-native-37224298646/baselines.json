@@ -1,0 +1,17 @@
+{
+  "baseline-2-times": {
+    "frames": 762,
+    "mean_ms": 8.036691338582678,
+    "p99_ms": 8.8251
+  },
+  "baseline-3-times": {
+    "frames": 762,
+    "mean_ms": 7.716755905511811,
+    "p99_ms": 8.4857
+  },
+  "baseline-1-times": {
+    "frames": 762,
+    "mean_ms": 8.04952375328084,
+    "p99_ms": 8.863
+  }
+}

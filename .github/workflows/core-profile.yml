@@ -59,9 +59,9 @@ jobs:
             chmod +x "$RUNNER_TEMP/profile-wrapper"
             bash scripts/phase0/run_checkpoints.sh "$RUNNER_TEMP/profile-wrapper" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/replay" 2400
             echo "c79c53b9cdf81426fa0277e7497a69e55bc5f571  $RUNNER_TEMP/replay/trace.csv" | sha1sum -c -
-            "$PERF" script -i "$RUNNER_TEMP/perf.data" -F time,event,ip,sym,dso > "$RUNNER_TEMP/samples.txt"
+            "$PERF" script --inline -i "$RUNNER_TEMP/perf.data" -F time,event,ip,sym,dso > "$RUNNER_TEMP/samples.txt"
             python3 scripts/phase0/summarize_native_profile.py "$RUNNER_TEMP/samples.txt" "$RUNNER_TEMP/replay/stdout.log" "$RUNNER_TEMP/replay/sim_times.csv" > "$RUNNER_TEMP/results/trial-$trial.json"
-            cat "$RUNNER_TEMP/results/trial-$trial.json"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print({k:d[k] for k in ("samples", "match_mean_ms", "areas_exclusive")})' "$RUNNER_TEMP/results/trial-$trial.json"
           done
           python3 scripts/check_no_game_data.py --all
       - uses: actions/upload-artifact@v4
@@ -71,4 +71,4 @@ jobs:
           retention-days: 7
       - name: Remove game data and sampled stack memory
         if: always()
-        run: rm -rf "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/replay" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/perf.data" "$RUNNER_TEMP/samples.txt" "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build"
+        run: rm -rf "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/replay" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/perf.data" "$RUNNER_TEMP/perf.data.old" "$RUNNER_TEMP/samples.txt" "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build"

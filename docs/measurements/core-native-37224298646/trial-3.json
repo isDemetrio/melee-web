@@ -1,0 +1,443 @@
+{
+  "match_frames": 762,
+  "match_mean_ms": 7.707564304461942,
+  "match_p99_ms": 8.6025,
+  "samples": 2937,
+  "excluded_samples": 14340,
+  "areas_exclusive": [
+    {
+      "symbol": "translated guest/PPC helpers",
+      "samples": 1793,
+      "percent": 61.049
+    },
+    {
+      "symbol": "GX other",
+      "samples": 850,
+      "percent": 28.941
+    },
+    {
+      "symbol": "HLE/audio/OS",
+      "samples": 174,
+      "percent": 5.924
+    },
+    {
+      "symbol": "GX draw recording",
+      "samples": 75,
+      "percent": 2.554
+    },
+    {
+      "symbol": "GX texture snapshot",
+      "samples": 25,
+      "percent": 0.851
+    },
+    {
+      "symbol": "observer/pose",
+      "samples": 20,
+      "percent": 0.681
+    }
+  ],
+  "leaf": [
+    {
+      "symbol": "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+      "samples": 448,
+      "percent": 15.254
+    },
+    {
+      "symbol": "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+      "samples": 270,
+      "percent": 9.193
+    },
+    {
+      "symbol": "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+      "samples": 144,
+      "percent": 4.903
+    },
+    {
+      "symbol": "std::vector<unsigned char, std::allocator<unsigned char> >::_M_default_append(unsigned long)",
+      "samples": 94,
+      "percent": 3.201
+    },
+    {
+      "symbol": "gx::DrawCall& std::vector<gx::DrawCall, std::allocator<gx::DrawCall> >::emplace_back<gx::DrawCall>(gx::DrawCall&&)",
+      "samples": 68,
+      "percent": 2.315
+    },
+    {
+      "symbol": "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+      "samples": 68,
+      "percent": 2.315
+    },
+    {
+      "symbol": "std::vector<gx::Vertex, std::allocator<gx::Vertex> >::_M_default_append(unsigned long)",
+      "samples": 67,
+      "percent": 2.281
+    },
+    {
+      "symbol": "ppc::psq_load(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+      "samples": 66,
+      "percent": 2.247
+    },
+    {
+      "symbol": "wasm_compat::fma(double, double, double)",
+      "samples": 60,
+      "percent": 2.043
+    },
+    {
+      "symbol": "ppc::trace_enter(ppc::Context&, unsigned int)",
+      "samples": 60,
+      "percent": 2.043
+    },
+    {
+      "symbol": "guest::f_8035C910(ppc::Context&, unsigned char*)",
+      "samples": 56,
+      "percent": 1.907
+    },
+    {
+      "symbol": "ppc::psq_store(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+      "samples": 55,
+      "percent": 1.873
+    },
+    {
+      "symbol": "[unknown]",
+      "samples": 54,
+      "percent": 1.839
+    },
+    {
+      "symbol": "gx::write_fifo(unsigned int, int)",
+      "samples": 52,
+      "percent": 1.771
+    },
+    {
+      "symbol": "guest::f_80342204(ppc::Context&, unsigned char*)",
+      "samples": 50,
+      "percent": 1.702
+    },
+    {
+      "symbol": "host::ptr(unsigned int, unsigned int)",
+      "samples": 49,
+      "percent": 1.668
+    },
+    {
+      "symbol": "host::gx_write(unsigned int, int)",
+      "samples": 49,
+      "percent": 1.668
+    },
+    {
+      "symbol": "gx::drain_fifo()",
+      "samples": 43,
+      "percent": 1.464
+    },
+    {
+      "symbol": "guest::f_8036E4C4(ppc::Context&, unsigned char*)",
+      "samples": 42,
+      "percent": 1.43
+    },
+    {
+      "symbol": "host::wr16(unsigned int, unsigned short)",
+      "samples": 38,
+      "percent": 1.294
+    },
+    {
+      "symbol": "guest::f_80379A20(ppc::Context&, unsigned char*)",
+      "samples": 37,
+      "percent": 1.26
+    },
+    {
+      "symbol": "ppc::st64(ppc::Context&, unsigned char*, unsigned int, unsigned long)",
+      "samples": 33,
+      "percent": 1.124
+    },
+    {
+      "symbol": "guest::f_8037A54C(ppc::Context&, unsigned char*)",
+      "samples": 26,
+      "percent": 0.885
+    },
+    {
+      "symbol": "host::mmio_write(unsigned int, unsigned int, int)",
+      "samples": 26,
+      "percent": 0.885
+    },
+    {
+      "symbol": "ax::process_pb_list(unsigned int)",
+      "samples": 20,
+      "percent": 0.681
+    },
+    {
+      "symbol": "guest::f_80360950(ppc::Context&, unsigned char*)",
+      "samples": 17,
+      "percent": 0.579
+    },
+    {
+      "symbol": "host::rd16(unsigned int)",
+      "samples": 16,
+      "percent": 0.545
+    },
+    {
+      "symbol": "gx::(anonymous namespace)::xf_load(unsigned int, unsigned int, unsigned char const*)",
+      "samples": 16,
+      "percent": 0.545
+    },
+    {
+      "symbol": "guest::f_80326240(ppc::Context&, unsigned char*)",
+      "samples": 16,
+      "percent": 0.545
+    },
+    {
+      "symbol": "ppc::st16(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+      "samples": 15,
+      "percent": 0.511
+    },
+    {
+      "symbol": "guest::f_803606F0(ppc::Context&, unsigned char*)",
+      "samples": 15,
+      "percent": 0.511
+    },
+    {
+      "symbol": "guest::f_8035E388(ppc::Context&, unsigned char*)",
+      "samples": 14,
+      "percent": 0.477
+    },
+    {
+      "symbol": "guest::f_8035EBA0(ppc::Context&, unsigned char*)",
+      "samples": 14,
+      "percent": 0.477
+    },
+    {
+      "symbol": "guest::f_80384F28(ppc::Context&, unsigned char*)",
+      "samples": 14,
+      "percent": 0.477
+    },
+    {
+      "symbol": "ppc::ld64(ppc::Context&, unsigned char*, unsigned int)",
+      "samples": 13,
+      "percent": 0.443
+    },
+    {
+      "symbol": "host::mark_ram_write(unsigned int, unsigned int)",
+      "samples": 13,
+      "percent": 0.443
+    },
+    {
+      "symbol": "ppc::st8(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+      "samples": 12,
+      "percent": 0.409
+    },
+    {
+      "symbol": "guest::f_803263D4(ppc::Context&, unsigned char*)",
+      "samples": 12,
+      "percent": 0.409
+    },
+    {
+      "symbol": "guest::f_8036B030(ppc::Context&, unsigned char*)",
+      "samples": 11,
+      "percent": 0.375
+    },
+    {
+      "symbol": "guest::f_8033EC6C(ppc::Context&, unsigned char*)",
+      "samples": 11,
+      "percent": 0.375
+    }
+  ],
+  "inclusive_do_not_sum": [
+    {
+      "symbol": "guest::f_8000522C(ppc::Context&, unsigned char*)",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "_start",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "guest::f_801A43A0(ppc::Context&, unsigned char*)",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "guest::f_801A4510(ppc::Context&, unsigned char*)",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "guest::f_801A4D34(ppc::Context&, unsigned char*)",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "main",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "[unknown]",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "guest::f_801A4014(ppc::Context&, unsigned char*)",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "__libc_start_main",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "guest::f_8015FEB4(ppc::Context&, unsigned char*)",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "ppc::call(ppc::Context&, unsigned char*, unsigned int)",
+      "samples": 2937,
+      "percent": 100.0
+    },
+    {
+      "symbol": "guest::f_80390FC0(ppc::Context&, unsigned char*)",
+      "samples": 2264,
+      "percent": 77.085
+    },
+    {
+      "symbol": "guest::f_80390ED0(ppc::Context&, unsigned char*)",
+      "samples": 2117,
+      "percent": 72.08
+    },
+    {
+      "symbol": "guest::f_803749B0(ppc::Context&, unsigned char*)",
+      "samples": 2096,
+      "percent": 71.365
+    },
+    {
+      "symbol": "guest::f_800301D0(ppc::Context&, unsigned char*)",
+      "samples": 2092,
+      "percent": 71.229
+    },
+    {
+      "symbol": "guest::f_80374480(ppc::Context&, unsigned char*)",
+      "samples": 2080,
+      "percent": 70.821
+    },
+    {
+      "symbol": "guest::f_803743B8(ppc::Context&, unsigned char*)",
+      "samples": 2051,
+      "percent": 69.833
+    },
+    {
+      "symbol": "guest::f_8035E388(ppc::Context&, unsigned char*)",
+      "samples": 2037,
+      "percent": 69.356
+    },
+    {
+      "symbol": "guest::f_8036E8AC(ppc::Context&, unsigned char*)",
+      "samples": 1342,
+      "percent": 45.693
+    },
+    {
+      "symbol": "guest::f_801C5DB0(ppc::Context&, unsigned char*)",
+      "samples": 1124,
+      "percent": 38.27
+    },
+    {
+      "symbol": "guest::f_803709DC(ppc::Context&, unsigned char*)",
+      "samples": 1087,
+      "percent": 37.011
+    },
+    {
+      "symbol": "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+      "samples": 1060,
+      "percent": 36.091
+    },
+    {
+      "symbol": "guest::f_801C5B90(ppc::Context&, unsigned char*)",
+      "samples": 1038,
+      "percent": 35.342
+    },
+    {
+      "symbol": "host::mmio_write(unsigned int, unsigned int, int)",
+      "samples": 1036,
+      "percent": 35.274
+    },
+    {
+      "symbol": "host::gx_write(unsigned int, int)",
+      "samples": 1010,
+      "percent": 34.389
+    },
+    {
+      "symbol": "gx::write_fifo(unsigned int, int)",
+      "samples": 955,
+      "percent": 32.516
+    },
+    {
+      "symbol": "ppc::mmio_write(ppc::Context&, unsigned int, unsigned int, int)",
+      "samples": 932,
+      "percent": 31.733
+    },
+    {
+      "symbol": "guest::f_800311EC(ppc::Context&, unsigned char*)",
+      "samples": 802,
+      "percent": 27.307
+    },
+    {
+      "symbol": "gx::drain_fifo()",
+      "samples": 790,
+      "percent": 26.898
+    },
+    {
+      "symbol": "guest::f_80080E18(ppc::Context&, unsigned char*)",
+      "samples": 788,
+      "percent": 26.83
+    },
+    {
+      "symbol": "guest::f_800805C8(ppc::Context&, unsigned char*)",
+      "samples": 765,
+      "percent": 26.047
+    },
+    {
+      "symbol": "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+      "samples": 747,
+      "percent": 25.434
+    },
+    {
+      "symbol": "guest::f_803410D8(ppc::Context&, unsigned char*)",
+      "samples": 743,
+      "percent": 25.298
+    },
+    {
+      "symbol": "guest::f_8036E83C(ppc::Context&, unsigned char*)",
+      "samples": 555,
+      "percent": 18.897
+    },
+    {
+      "symbol": "guest::f_80363A24(ppc::Context&, unsigned char*)",
+      "samples": 520,
+      "percent": 17.705
+    },
+    {
+      "symbol": "guest::f_80074048(ppc::Context&, unsigned char*)",
+      "samples": 481,
+      "percent": 16.377
+    },
+    {
+      "symbol": "guest::f_8036E4C4(ppc::Context&, unsigned char*)",
+      "samples": 478,
+      "percent": 16.275
+    },
+    {
+      "symbol": "guest::f_80390CFC(ppc::Context&, unsigned char*)",
+      "samples": 382,
+      "percent": 13.006
+    },
+    {
+      "symbol": "guest::f_803761C0(ppc::Context&, unsigned char*)",
+      "samples": 258,
+      "percent": 8.784
+    },
+    {
+      "symbol": "host::call_guest(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)",
+      "samples": 250,
+      "percent": 8.512
+    }
+  ]
+}

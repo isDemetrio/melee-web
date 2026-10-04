@@ -70,3 +70,30 @@ This is an optimistic **upper bound**, not an attainable optimization. It alread
 absolute no-go for the whole project: renderer work and the separate outstanding attribution
 are outside this task. No cost in either is declared irreducible or removable here. The table
 must not be applied to unprofiled D/G as if their missing split were measured.
+
+## First native result — run 37224298646
+
+[CI run](https://github.com/isDemetrio/melee-web/actions/runs/37224298646), source
+`7cbab8d`; [aggregates](measurements/core-native-37224298646/).
+AMD EPYC 7763 runner, GCC native `-O1`, single-thread host, real decoder, no WebGPU.
+All **six** 2400-row traces (three unprofiled, three sampled) passed the full reference SHA-1.
+Mean in-match ms, paired unprofiled → sampled: **8.050 → 8.102**, **8.037 → 7.958**,
+**7.717 → 7.708**. Difference ranges −0.98% to +0.66%; no measurable systematic slowdown
+at this resolution, but this is not a confidence bound for an individual function.
+9,037 retained samples across 2,286 match frames, at 499 Hz. Unknown leaf PCs account for
+1.76–1.84%; outer stacks still identify an area. The native compile policy differs from WASM
+(`-Oz` guest, selected runtime units `-O2`), so percentages are not transferred to iPhone.
+
+First pass: translated guest/PPC **60.48–61.64%**, GX together **32.35–33.66%**,
+HLE/audio/OS **4.94–5.92%**, observers **0.59–0.68%**. Subdividing GX needs care:
+`decode_vertices` was inlined into `parse_command` (15.25–16.87% self). This first
+classifier also labels allocations whose template name contains `gx::` as generic GX;
+its draw/vertex subcategories are consequently **not** a complete attribution. The next
+run adds decoder-only debug information and inline symbolization, and fixes scope ownership.
+
+Independent self costs: `ppc::st32` **8.19–9.46%**, `ppc::ld32` **4.90–5.59%**,
+software exact FMA **2.04–2.63%**; `trace_enter` **1.20–2.04%**. No one of these can
+supply a factor three. Inclusive guest display call `HSD_JObjDisp` (`803749B0`) is about
+70%; `SetupEnvelopeModelMtx` (`8036E4C4`) about 16%. These include callees and must not
+be added to GX or to each other. Names come from the pinned `port/recomp/GALE01_symbols.txt`.
+No optimization has been implemented on this evidence.

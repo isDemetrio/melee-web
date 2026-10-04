@@ -34,6 +34,10 @@ target_link_libraries(melee_core_headless PRIVATE Threads::Threads)
 target_link_options(melee_core_headless PRIVATE -Wl,--no-undefined)
 if(MELEE_PROFILE_INTERVALS)
   target_compile_definitions(melee_core_headless PRIVATE MELEE_PROFILE_INTERVALS=1)
+  # Debug information for inlined decoder helpers, without changing optimization
+  # or adding debug data to the 144 generated translation units.
+  set_source_files_properties("${PORT}/runtime/gx/gx_core.cpp"
+    PROPERTIES COMPILE_OPTIONS "-g")
 endif()
 if(MELEE_SINGLE_THREAD)
   target_compile_definitions(melee_core_headless PRIVATE MELEE_SINGLE_THREAD=1)

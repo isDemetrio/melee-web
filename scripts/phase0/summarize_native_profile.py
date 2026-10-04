@@ -31,7 +31,9 @@ def classify(stack):
             return 'GX draw recording'
         if 'decode_vertices' in name or 'read_component' in name:
             return 'GX vertex decode'
-        if 'gx::' in name:
+        # A vector<gx::Vertex> allocator is not a GX scope: keep walking to
+        # decode_vertices/record_draw so its allocation gets the right owner.
+        if name.startswith('gx::') and 'std::' not in name:
             return 'GX other'
         if name.startswith('hle::') or 'ax::' in name:
             return 'HLE/audio/OS'
@@ -67,7 +69,7 @@ assert unknown == 0, f'Unparsed samples: {unknown}'
 rows = [float(r['sim_ms']) for r in csv.DictReader(times_path.open()) if int(r['match_frame']) > 0]
 assert len(rows) == 762
 
-def table(counter, limit=40):
+def table(counter, limit=1000):
     return [{'symbol': k, 'samples': n, 'percent': round(100*n/count, 3)}
             for k, n in counter.most_common(limit)]
 print(json.dumps({'match_frames': len(rows), 'match_mean_ms': statistics.mean(rows),
