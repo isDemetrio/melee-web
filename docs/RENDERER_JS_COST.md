@@ -51,7 +51,41 @@ Sono ipotesi attribuite, non ancora guadagni: vanno prototipate e misurate nel m
 alternati, `sim_ms` in partita), con traccia dei 2400 checkpoint identica a `c79c53b9…` **e** oracolo
 grafico verde.
 
-## 2. Il resto del renderer, e la produzione — in corso
+## 2. Il resto del renderer: JS, C++, e una correzione alla tabella di PR #119
+
+**Correzione.** Lo split di PR #119 (`cpuprofile_split.py`) assegna la zona guardando i nomi della
+pila, e la regex della zona FIFO (`\bgx::`) colpisce anche i **tipi degli argomenti**:
+`(anonymous namespace)::draw_segment(gx::Frame const&, gx::DrawCall const&, …)` — C++ del renderer —
+finisce in "decodifica FIFO GX", e con lui tutto ciò che chiama (`memcmp`, `vector::insert`,
+malloc/free). Sullo stesso profilo (questo ramo, 762 fotogrammi), contando invece ogni campione che
+ha `submit_and_recycle` nella pila:
+
+| zona (renderer attaccato) | split di #119 | per pila (`submit_and_recycle`) |
+| --- | ---: | ---: |
+| renderer | 30,45% | **40,53%** (di cui 2,93% wrapper del banco, non in produzione) |
+| decodifica FIFO GX | 28,19% | **18,13%** |
+
+Lo spostamento è **10,06% del fotogramma**, tutto C++ del renderer. Il renderer in produzione è
+quindi **~37,6%** del fotogramma attaccato, e la decodifica FIFO **~18%**, non 28%.
+
+**Composizione del renderer** (% del fotogramma, per foglia, campioni con `submit_and_recycle` in pila):
+
+| parte | % fotogramma | µs/draw (profilato) |
+| --- | ---: | ---: |
+| JS `gxw_draw` (sezione 1) | 22,58 | 7,19 |
+| JS `gxw_bind` (8 chiamate per draw) | 2,58 | 0,82 |
+| JS `gxw_evicted`, `gxw_copy`, flush | 0,10 | 0,03 |
+| passaggio wasm→JS (`wasm-to-js`, ~10 chiamate per draw) | 1,31 | 0,42 |
+| C++ `draw_segment` (costruzione delle 106 righe di costanti, TEV, raster) | 4,55 | 1,45 |
+| C++ `memcmp` (confronto della `ShaderUid`, 76 parole, nella ricerca dello shader) | 1,78 | 0,57 |
+| C++ `vector` degli indici per segmento + malloc/free | ~2,1 | ~0,67 |
+| C++ hash della `ShaderUid`, mappa dei contenuti texture, riciclo del frame, altro | ~2,1 | ~0,67 |
+| wrapper `gxw_draw` del banco (non in produzione) | 2,93 | — |
+
+JS ~25,3%, C++ ~10,5%, confine ~1,3%. La scrittura dei buffer verso WebGPU (`writeBuffer`, 3 per
+batch) non si vede: è nel finto. La preparazione per draw che costa è quella in JS.
+
+## 3. La produzione — in corso
 
 Notato leggendo il codice, da misurare:
 
@@ -66,7 +100,7 @@ Notato leggendo il codice, da misurare:
 - La **validazione di contenuto** del banco (`VALIDATE=1`: hash dei byte di ogni draw) esiste solo
   nel banco; nel percorso di produzione non c'è.
 
-## 3. Limite dichiarato
+## 4. Limite dichiarato
 
 Il tempo **dentro** le chiamate WebGPU vere (sul telefono: IPC verso il processo GPU di WebKit e
 codifica Metal) e il tempo GPU **non sono misurabili dalla VPS**: qui WebGPU è finto. Quel pezzo lo
