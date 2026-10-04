@@ -62,6 +62,54 @@ emulatore. Ma "emulatore" qui ha **due** superfici, con attrezzi diversi:
 - **Emulazione della CPU** (helper di memoria fuori linea, `fma` software, `enter`): ~23% attaccato.
   Questa è del ricompilatore / runtime `ppc`.
 
+## 2. La ripartizione, nelle quattro voci richieste
+
+Partizione disgiunta del fotogramma di partita, V8, renderer attaccato (62,61 ms/fotogramma sulla
+VPS; le quote sono il dato, i ms valgono solo per il rapporto). "Preparazione della scena" è la
+zona guest con `HSD_JObjDisp` nella pila; l'"altro guest" è tutto il resto del codice tradotto
+(logica di gioco, fisica, animazione, audio guest come `DSPSendMailToDSP` e `HandleReverb`).
+
+| voce | quota | di cui |
+| --- | ---: | --- |
+| **preparazione della scena** (zona guest sotto `HSD_JObjDisp`) | **22,2%** | corpo guest 8,7 · helper di memoria 6,9 · `fma` software 4,9 · `enter`/dispatch 1,8 |
+| **decodifica GX** (GPU emulata, dentro gli store del guest) | **28,4%** | `parse_command` 7,4 · `memcmp` nella cattura delle texture 3,2 · `gx_write` 2,8 · `record_draw` 1,9 · `decode_vertices` 0,6 |
+| **accessi in memoria del guest** (helper fuori linea, **tutte** le zone guest) | **12,6%** | `ld32` 4,6 · `st32` 3,1 · `psq_load/store` 1,4 · `host::ptr/rd16/wr16` 1,5 — già contati 6,9 punti nella prima riga |
+| **renderer** (`submit_and_recycle`: C++ e JS del backend) | **31,1%** | JS `gxw_draw__inner` 23,4 · `draw_segment` 4,6 · `operator==` su 76 parole (→ `memcmp`) 1,7 |
+| altro guest (fuori dalla scena) | 15,4% | corpo 6,4 · memoria 5,7 · `fma` 2,2 |
+| resto | 2,9% | HLE, MMIO non GX, retrace, GC del JS |
+
+Headless (senza renderer) le stesse voci valgono: scena 39,2%, decodifica GX 31,6%, altro guest 26,5%,
+resto 2,7%.
+
+**Limiti della ripartizione.**
+
+- Il renderer è misurato con WebGPU finto: sul telefono a questa voce si somma il costo vero delle
+  chiamate (sincrono ≈ 2,6 ms, misurato dalla pagina) e il JS gira su JSC, non su V8. È la voce
+  **meno trasferibile** al telefono.
+- Gli ms sono della VPS. Il rapporto VPS/telefono non è costante fra le zone: la differenza "attaccato
+  meno headless" vale ~24 ms sulla VPS (62,4 − 38,3) e ~24,5 ms sul telefono (28,9 di oggi contro i
+  4,35 headless di `d624d06`). Sono però build e giorni diversi: questo confronto è un indizio che sul
+  telefono pesi soprattutto il renderer, **non una misura**.
+- La misura del telefono che chiude il punto è una partita con la casella **core split** attiva sul
+  build attuale: `end_frame_ms` ≈ renderer, `decode_ms − end_frame_ms` ≈ decodifica GX,
+  `non_decode_ms` ≈ zona guest + HLE (§1).
+
+## 3. Cosa è riducibile, e con quale evidenza
+
+Solo voci che il profilo nomina, con la prova del comportamento che ciascuna richiederebbe.
+Nessuna è stata misurata come guadagno: tranne la prima (§4), sono **candidati**.
+
+| candidato | quota V8 (att. / headless) | evidenza | perché il comportamento può restare identico |
+| --- | ---: | --- | --- |
+| **`fma` software** nelle istruzioni FMA a precisione singola e paired-single | 7,0% / 12,2% (con `ppc::fmadd`) | profilo: `fma`+`normalize` della libm, chiamate da `ppc::fmadd` ← `PSMTXConcat`, `HSD_MtxScaledAdd`, `HSD_MtxInverseTranspose` | se i due fattori hanno insieme ≤ 53 bit significativi il prodotto è **esatto** in double, e `a*c+b` arrotonda una volta sola: è per definizione il risultato della FMA. `fmadds`/`ps_madd` passano `a` (float, 24 bit) e `f25(c)` (≤ 26 bit): 50 bit. Prototipo misurato in §4 |
+| `memcmp` byte per byte di musl | 5,0% / 5,6% | profilo: 3,2 punti dalla cattura delle texture (`TextureSnapshotCache::equal`, quando la scorciatoia della versione RAM manca) e 1,7 da `operator==` su `std::array<uint32_t,76>` in `draw_segment` | un confronto per parole ha lo stesso risultato booleano. Prima va contato **quante volte** la scorciatoia di versione manca: è un contatore, non ancora scritto |
+| JS del backend per draw (`gxw_draw__inner`) | 23,4% / — | profilo V8 con WebGPU finto: ~9 µs di JS per draw su ~1650 draw | è il renderer, non il core: la prova è il controllo di contenuto del banco (`VALIDATE=1`) e lo stato dei pass. Il numero di JSC non è misurato |
+| helper di memoria fuori linea (`ppc::ld32`/`st32`… non inlinati a `-Oz`) | 12,6% / 22,2% | profilo: sono funzioni con nome, chiamate a ogni accesso | inlinare non cambia la semantica. **Ma** l'esperimento "accessi in memoria" di stanotte ha misurato 0,92× sul gioco: non ripeterlo alla cieca. Il profilo dice dove sta il costo (chiamata + `mark_ram_write`), non che inlinare lo tolga |
+| `ppc::trace_enter` chiamata in partita | 0,6–1,1% | profilo: `enter()` prende il percorso lento, quindi `g_trace_funcs` è vero (un hook d'ingresso è registrato) | da capire quale hook e se serve in partita; non indagato |
+
+Non riducibile con gli attrezzi di questo compito: il **corpo guest** (15% attaccato). È il lavoro
+della console, e specializzarlo richiede prove di equivalenza funzione per funzione.
+
 ## Come è misurato, e i limiti
 
 - **Motore**: V8 di Node 22.22.3 sulla VPS (x86, 2 vCPU condivise), cioè il motore di Chromium, **non**
