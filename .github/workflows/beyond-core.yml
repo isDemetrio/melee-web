@@ -1,0 +1,93 @@
+name: Beyond core — measured WASM candidates
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: 'JSON list of measured candidates'
+        type: string
+        default: '["inline","simd","hot","rgba8"]'
+      four_player:
+        description: 'Also gate and time the separate four-port workload'
+        type: boolean
+        default: false
+      oracle_only:
+        description: 'Recheck graphics after oracle-only corrections; no timing rerun'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: beyond-core-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  replay:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.variants || '["inline","simd","hot","rgba8"]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+      - name: Generate guest outside checkout
+        env:
+          GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
+        run: scripts/phase0/fetch_and_recompile.sh offline "$RUNNER_TEMP/generated"
+      - name: Build baseline and candidate
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          python3 experiments/beyond-core/install_oracle.py
+          npm install -g binaryen@132.0.0
+          mkdir -p "$RUNNER_TEMP/results"
+          lscpu > "$RUNNER_TEMP/results/machine.txt"
+          for label in baseline candidate; do
+            flags=''
+            if [ "$label" = candidate ]; then
+              python3 experiments/beyond-core/configure.py "$VARIANT"
+              if [ "$VARIANT" = simd ] || [ "$VARIANT" = rgba8 ]; then flags='-msimd128'; fi
+            fi
+            emcmake cmake -S wasm/core -B "$RUNNER_TEMP/build" -G Ninja \
+              -DMELEE_GEN="$RUNNER_TEMP/generated" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+              -DCMAKE_CXX_FLAGS="$flags"
+            cmake --build "$RUNNER_TEMP/build" --target melee_core_node --parallel 3
+            mkdir -p "$RUNNER_TEMP/$label"
+            cp "$RUNNER_TEMP/build/melee_core_node.js" "$RUNNER_TEMP/$label/"
+            wasm-opt --enable-bulk-memory --enable-mutable-globals \
+              --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
+              --enable-simd -O2 "$RUNNER_TEMP/build/melee_core_node.wasm" \
+              -o "$RUNNER_TEMP/$label/melee_core_node.wasm"
+          done
+      - name: Read private disc
+        working-directory: ${{ runner.temp }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote --file "$RUNNER_TEMP/disc.iso"
+      - name: Three paired replays, every full trace gated
+        env:
+          ORACLE_ONLY: ${{ inputs.oracle_only && '1' || '0' }}
+        run: python3 experiments/beyond-core/replay.py
+      - name: Separate four-player workload
+        if: ${{ inputs.four_player }}
+        run: python3 experiments/beyond-core/four_player.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: beyond-core-${{ matrix.variant }}
+          path: ${{ runner.temp }}/results
+          retention-days: 7
+      - name: Remove private data
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/build" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/replay" "$RUNNER_TEMP/four-replay"

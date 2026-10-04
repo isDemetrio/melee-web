@@ -1,0 +1,539 @@
+{
+  "browser": "141.0.7390.37",
+  "trials": [
+    {
+      "trial": 0,
+      "label": "baseline",
+      "batches": [
+        {
+          "geometry": 16,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 40.69999999999709,
+          "apiMs": 4.499999999956344,
+          "drainMs": 328.3000000000029,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        },
+        {
+          "geometry": 39,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 46.40000000000873,
+          "apiMs": 16.799999999973807,
+          "drainMs": 287.6999999999971,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        }
+      ],
+      "methods": {
+        "createCommandEncoder": {
+          "calls": 600,
+          "ms": 2.2999999999883585
+        },
+        "end": {
+          "calls": 600,
+          "ms": 0
+        },
+        "submit": {
+          "calls": 600,
+          "ms": 11.200000000011642
+        },
+        "setVertexBuffer": {
+          "calls": 200,
+          "ms": 0
+        },
+        "setIndexBuffer": {
+          "calls": 200,
+          "ms": 0.29999999998835847
+        },
+        "setPipeline": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "setBindGroup": {
+          "calls": 400,
+          "ms": 0.6999999999970896
+        },
+        "setViewport": {
+          "calls": 200,
+          "ms": 0.1999999999825377
+        },
+        "setScissorRect": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "drawIndexed": {
+          "calls": 600,
+          "ms": 0.3000000000029104
+        },
+        "writeBuffer": {
+          "calls": 600,
+          "ms": 0.9999999999708962
+        },
+        "writeTexture": {
+          "calls": 300,
+          "ms": 1.1000000000203727
+        },
+        "createBindGroup": {
+          "calls": 300,
+          "ms": 3.9999999999563443
+        }
+      },
+      "adapter": {}
+    },
+    {
+      "trial": 0,
+      "label": "candidate",
+      "batches": [
+        {
+          "geometry": 16,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 45.5,
+          "apiMs": 20.199999999938882,
+          "drainMs": 282.8000000000029,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        },
+        {
+          "geometry": 39,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 70,
+          "apiMs": 25.89999999999418,
+          "drainMs": 262.8000000000029,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        }
+      ],
+      "methods": {
+        "createCommandEncoder": {
+          "calls": 600,
+          "ms": 1.6999999999679858
+        },
+        "end": {
+          "calls": 600,
+          "ms": 0
+        },
+        "submit": {
+          "calls": 600,
+          "ms": 26.000000000043656
+        },
+        "setVertexBuffer": {
+          "calls": 200,
+          "ms": 0.19999999999708962
+        },
+        "setIndexBuffer": {
+          "calls": 200,
+          "ms": 0.19999999999708962
+        },
+        "setPipeline": {
+          "calls": 200,
+          "ms": 0.3000000000029104
+        },
+        "setBindGroup": {
+          "calls": 400,
+          "ms": 4.599999999976717
+        },
+        "setViewport": {
+          "calls": 200,
+          "ms": 0.19999999999708962
+        },
+        "setScissorRect": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "drawIndexed": {
+          "calls": 600,
+          "ms": 0.10000000000582077
+        },
+        "writeBuffer": {
+          "calls": 600,
+          "ms": 0.9999999999854481
+        },
+        "writeTexture": {
+          "calls": 300,
+          "ms": 0.9999999999708962
+        },
+        "createBindGroup": {
+          "calls": 300,
+          "ms": 10.699999999982538
+        }
+      },
+      "adapter": {}
+    },
+    {
+      "trial": 1,
+      "label": "candidate",
+      "batches": [
+        {
+          "geometry": 16,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 43.89999999999418,
+          "apiMs": 6.899999999994179,
+          "drainMs": 291,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        },
+        {
+          "geometry": 39,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 66,
+          "apiMs": 26.300000000046566,
+          "drainMs": 274.20000000001164,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        }
+      ],
+      "methods": {
+        "createCommandEncoder": {
+          "calls": 600,
+          "ms": 10.000000000014552
+        },
+        "end": {
+          "calls": 600,
+          "ms": 0.4999999999854481
+        },
+        "submit": {
+          "calls": 600,
+          "ms": 11.000000000014552
+        },
+        "setVertexBuffer": {
+          "calls": 200,
+          "ms": 0.09999999999126885
+        },
+        "setIndexBuffer": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "setPipeline": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "setBindGroup": {
+          "calls": 400,
+          "ms": 0.5000000000145519
+        },
+        "setViewport": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "setScissorRect": {
+          "calls": 200,
+          "ms": 0.39999999999417923
+        },
+        "drawIndexed": {
+          "calls": 600,
+          "ms": 0.29999999997380655
+        },
+        "writeBuffer": {
+          "calls": 600,
+          "ms": 1.3999999999941792
+        },
+        "writeTexture": {
+          "calls": 300,
+          "ms": 1.099999999976717
+        },
+        "createBindGroup": {
+          "calls": 300,
+          "ms": 7.600000000064028
+        }
+      },
+      "adapter": {}
+    },
+    {
+      "trial": 1,
+      "label": "baseline",
+      "batches": [
+        {
+          "geometry": 16,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 32.60000000000582,
+          "apiMs": 10.699999999982538,
+          "drainMs": 293.79999999998836,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        },
+        {
+          "geometry": 39,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 44.09999999999127,
+          "apiMs": 18.500000000014552,
+          "drainMs": 304.90000000000873,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        }
+      ],
+      "methods": {
+        "createCommandEncoder": {
+          "calls": 600,
+          "ms": 2.2999999999883585
+        },
+        "end": {
+          "calls": 600,
+          "ms": 0.40000000000873115
+        },
+        "submit": {
+          "calls": 600,
+          "ms": 16.70000000006985
+        },
+        "setVertexBuffer": {
+          "calls": 200,
+          "ms": 0.09999999999126885
+        },
+        "setIndexBuffer": {
+          "calls": 200,
+          "ms": 0.3000000000174623
+        },
+        "setPipeline": {
+          "calls": 200,
+          "ms": 0.20000000001164153
+        },
+        "setBindGroup": {
+          "calls": 400,
+          "ms": 0.5999999999912689
+        },
+        "setViewport": {
+          "calls": 200,
+          "ms": 0.1999999999825377
+        },
+        "setScissorRect": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "drawIndexed": {
+          "calls": 600,
+          "ms": 0.09999999999126885
+        },
+        "writeBuffer": {
+          "calls": 600,
+          "ms": 3.699999999967986
+        },
+        "writeTexture": {
+          "calls": 300,
+          "ms": 1.3999999999505235
+        },
+        "createBindGroup": {
+          "calls": 300,
+          "ms": 3.1000000000203727
+        }
+      },
+      "adapter": {}
+    },
+    {
+      "trial": 2,
+      "label": "baseline",
+      "batches": [
+        {
+          "geometry": 16,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 42.60000000000582,
+          "apiMs": 9.499999999970896,
+          "drainMs": 284,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        },
+        {
+          "geometry": 39,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 59.29999999998836,
+          "apiMs": 19.90000000006694,
+          "drainMs": 196,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        }
+      ],
+      "methods": {
+        "createCommandEncoder": {
+          "calls": 600,
+          "ms": 1.7999999999592546
+        },
+        "end": {
+          "calls": 600,
+          "ms": 0.9000000000232831
+        },
+        "submit": {
+          "calls": 600,
+          "ms": 14.10000000000582
+        },
+        "setVertexBuffer": {
+          "calls": 200,
+          "ms": 0.1999999999825377
+        },
+        "setIndexBuffer": {
+          "calls": 200,
+          "ms": 0.09999999999126885
+        },
+        "setPipeline": {
+          "calls": 200,
+          "ms": 0.3000000000029104
+        },
+        "setBindGroup": {
+          "calls": 400,
+          "ms": 0.19999999999708962
+        },
+        "setViewport": {
+          "calls": 200,
+          "ms": 0.39999999999417923
+        },
+        "setScissorRect": {
+          "calls": 200,
+          "ms": 0.09999999999126885
+        },
+        "drawIndexed": {
+          "calls": 600,
+          "ms": 0.40000000000873115
+        },
+        "writeBuffer": {
+          "calls": 600,
+          "ms": 1.1999999999970896
+        },
+        "writeTexture": {
+          "calls": 300,
+          "ms": 3.7000000000261934
+        },
+        "createBindGroup": {
+          "calls": 300,
+          "ms": 6.000000000058208
+        }
+      },
+      "adapter": {}
+    },
+    {
+      "trial": 2,
+      "label": "candidate",
+      "batches": [
+        {
+          "geometry": 16,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 38.39999999999418,
+          "apiMs": 13.699999999982538,
+          "drainMs": 218.89999999999418,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        },
+        {
+          "geometry": 39,
+          "iterations": 100,
+          "draws": 300,
+          "cpuMs": 54.39999999999418,
+          "apiMs": 18.399999999965075,
+          "drainMs": 203.40000000000873,
+          "pixel": [
+            128,
+            64,
+            32,
+            192
+          ]
+        }
+      ],
+      "methods": {
+        "createCommandEncoder": {
+          "calls": 600,
+          "ms": 4.099999999962165
+        },
+        "end": {
+          "calls": 600,
+          "ms": 0.5000000000145519
+        },
+        "submit": {
+          "calls": 600,
+          "ms": 15.89999999992142
+        },
+        "setVertexBuffer": {
+          "calls": 200,
+          "ms": 0
+        },
+        "setIndexBuffer": {
+          "calls": 200,
+          "ms": 0.10000000000582077
+        },
+        "setPipeline": {
+          "calls": 200,
+          "ms": 0.09999999999126885
+        },
+        "setBindGroup": {
+          "calls": 400,
+          "ms": 0.40000000000873115
+        },
+        "setViewport": {
+          "calls": 200,
+          "ms": 0.20000000001164153
+        },
+        "setScissorRect": {
+          "calls": 200,
+          "ms": 0.29999999998835847
+        },
+        "drawIndexed": {
+          "calls": 600,
+          "ms": 0.5000000000291038
+        },
+        "writeBuffer": {
+          "calls": 600,
+          "ms": 0.6999999999679858
+        },
+        "writeTexture": {
+          "calls": 300,
+          "ms": 2.099999999991269
+        },
+        "createBindGroup": {
+          "calls": 300,
+          "ms": 7.200000000055297
+        }
+      },
+      "adapter": {}
+    }
+  ]
+}

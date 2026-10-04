@@ -1,0 +1,44 @@
+name: Beyond core — exact SIMD and ordered threads
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  kernels:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+      - name: Build and measure exact kernels in WASM
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/results"
+          scripts/apply_patches.sh
+          for opt in Oz O2; do
+            em++ experiments/kernels/memory.cpp -I. -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
+              -std=c++17 "-$opt" -ffp-contract=off -fno-fast-math -sENVIRONMENT=node -sINITIAL_MEMORY=64MB \
+              -o "$RUNNER_TEMP/memory.js"
+            node "$RUNNER_TEMP/memory.js" | tee "$RUNNER_TEMP/results/memory-$opt.json"
+          done
+          em++ experiments/kernels/bench.cpp upstream/melee-unlocked/port/runtime/gx/gx_texture.cpp \
+            -Iupstream/melee-unlocked/port/runtime/gx -std=c++17 -O2 -msimd128 \
+            -pthread -sPTHREAD_POOL_SIZE=2 -sENVIRONMENT=node -sEXIT_RUNTIME=1 \
+            -sINITIAL_MEMORY=128MB -ffp-contract=off -fno-fast-math \
+            -o "$RUNNER_TEMP/kernels.js"
+          for trial in 1 2 3; do node "$RUNNER_TEMP/kernels.js" | tee "$RUNNER_TEMP/results/kernels-$trial.json"; done
+          lscpu > "$RUNNER_TEMP/results/machine.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beyond-kernels
+          path: ${{ runner.temp }}/results
+          retention-days: 7
