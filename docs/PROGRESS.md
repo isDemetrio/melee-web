@@ -3407,3 +3407,12 @@ build: `python3 -m unittest discover -s scripts/tests` (Ran 207 tests, `OK (skip
 (210 citations in 4 documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh`,
 `bash scripts/tests/test_phase0_runner.sh` and `bash scripts/tests/test_device_test_serve.sh`. CI
 decides the rest.
+
+## 2026-10-04 — ricerca oltre simulazione/GX, primo pezzo
+
+Ramo `perf/beyond-core`, base `2af0cab`. Il mandato conserva il tetto 1,98× di #112
+ed esplora gli altri contenitori. [BEYOND_CORE.md](BEYOND_CORE.md) fissa il contratto
+del prossimo report operatore; `beyond-core.yml` avvia A/B WASM con gate completo per
+inlining memoria, SIMD automatico e ottimizzazione selettiva dei guest hotspot.
+Risultati ancora pendenti; thread/renderer e oracolo grafico da completare.
+Nessun file `wasm/render/*` modificato, nessuna build/test sul VPS, nessun merge.
