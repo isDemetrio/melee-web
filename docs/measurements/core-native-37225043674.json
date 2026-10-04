@@ -1,0 +1,597 @@
+{
+  "run": 37225043674,
+  "source_commit": "9e0661c",
+  "method": "native GCC -O1, decoder -g, perf 499 Hz DWARF inline, in-match only",
+  "trials": [
+    {
+      "trial": 1,
+      "samples": 2857,
+      "excluded_samples": 14279,
+      "baseline_mean_ms": 7.37548687664042,
+      "baseline_p99_ms": 7.92,
+      "sampled_mean_ms": 7.527937007874016,
+      "sampled_p99_ms": 9.1903,
+      "gx_nested_percent_of_headless_core": {
+        "write_fifo_inclusive": 33.567,
+        "feed_outside_drain": 5.741,
+        "drain_outside_parse": 1.61,
+        "parse_excluding_vertices": 12.215,
+        "vertices_inclusive": 14.001,
+        "vertices_percent_of_drain": 50.316
+      },
+      "selected_inclusive_percent_do_not_sum": {
+        "guest::f_803749B0(ppc::Context&, unsigned char*)": 72.804,
+        "guest::f_8036E4C4(ppc::Context&, unsigned char*)": 15.541,
+        "guest::f_80390CFC(ppc::Context&, unsigned char*)": 13.301,
+        "guest::f_80342204(ppc::Context&, unsigned char*)": 6.86,
+        "read_component": 5.32,
+        "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)": 3.605,
+        "record_draw": 3.29,
+        "ppc::trace_enter(ppc::Context&, unsigned int)": 2.205,
+        "guest::f_8035C910(ppc::Context&, unsigned char*)": 1.925,
+        "build_desc": 1.575,
+        "snapshot_textures": 1.015,
+        "gx::TextureSnapshotCache::capture(unsigned char const*, unsigned long, unsigned char const*, unsigned long, unsigned long, unsigned long)": 0.7
+      },
+      "top_25_leaf": [
+        {
+          "symbol": "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+          "samples": 240,
+          "percent": 8.4
+        },
+        {
+          "symbol": "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+          "samples": 140,
+          "percent": 4.9
+        },
+        {
+          "symbol": "read_component",
+          "samples": 116,
+          "percent": 4.06
+        },
+        {
+          "symbol": "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+          "samples": 113,
+          "percent": 3.955
+        },
+        {
+          "symbol": "decode_vertices",
+          "samples": 101,
+          "percent": 3.535
+        },
+        {
+          "symbol": "std::vector<unsigned char, std::allocator<unsigned char> >::_M_default_append(unsigned long)",
+          "samples": 87,
+          "percent": 3.045
+        },
+        {
+          "symbol": "wasm_compat::fma(double, double, double)",
+          "samples": 64,
+          "percent": 2.24
+        },
+        {
+          "symbol": "ppc::trace_enter(ppc::Context&, unsigned int)",
+          "samples": 63,
+          "percent": 2.205
+        },
+        {
+          "symbol": "ppc::psq_load(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 63,
+          "percent": 2.205
+        },
+        {
+          "symbol": "guest::f_80342204(ppc::Context&, unsigned char*)",
+          "samples": 63,
+          "percent": 2.205
+        },
+        {
+          "symbol": "gx::DrawCall::DrawCall(gx::DrawCall&&)",
+          "samples": 57,
+          "percent": 1.995
+        },
+        {
+          "symbol": "ppc::psq_store(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 54,
+          "percent": 1.89
+        },
+        {
+          "symbol": "gx::write_fifo(unsigned int, int)",
+          "samples": 51,
+          "percent": 1.785
+        },
+        {
+          "symbol": "guest::f_8035C910(ppc::Context&, unsigned char*)",
+          "samples": 50,
+          "percent": 1.75
+        },
+        {
+          "symbol": "host::ptr(unsigned int, unsigned int)",
+          "samples": 50,
+          "percent": 1.75
+        },
+        {
+          "symbol": "__gnu_cxx::__enable_if<!std::__is_scalar<gx::Vertex>::__value, void>::__type std::__fill_a1<gx::Vertex*, gx::Vertex>(gx::Vertex*, gx::Vertex*, gx::Vertex const&)",
+          "samples": 48,
+          "percent": 1.68
+        },
+        {
+          "symbol": "host::gx_write(unsigned int, int)",
+          "samples": 48,
+          "percent": 1.68
+        },
+        {
+          "symbol": "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 41,
+          "percent": 1.435
+        },
+        {
+          "symbol": "[unknown]",
+          "samples": 40,
+          "percent": 1.4
+        },
+        {
+          "symbol": "be32",
+          "samples": 39,
+          "percent": 1.365
+        },
+        {
+          "symbol": "host::wr16(unsigned int, unsigned short)",
+          "samples": 35,
+          "percent": 1.225
+        },
+        {
+          "symbol": "gx::drain_fifo()",
+          "samples": 35,
+          "percent": 1.225
+        },
+        {
+          "symbol": "guest::f_8037A54C(ppc::Context&, unsigned char*)",
+          "samples": 34,
+          "percent": 1.19
+        },
+        {
+          "symbol": "ppc::st64(ppc::Context&, unsigned char*, unsigned int, unsigned long)",
+          "samples": 31,
+          "percent": 1.085
+        },
+        {
+          "symbol": "guest::f_80379A20(ppc::Context&, unsigned char*)",
+          "samples": 28,
+          "percent": 0.98
+        }
+      ],
+      "areas_exclusive_see_taxonomy_limitations": [
+        {
+          "symbol": "translated guest/PPC helpers",
+          "samples": 1714,
+          "percent": 59.993
+        },
+        {
+          "symbol": "GX other",
+          "samples": 521,
+          "percent": 18.236
+        },
+        {
+          "symbol": "GX vertex decode",
+          "samples": 348,
+          "percent": 12.181
+        },
+        {
+          "symbol": "HLE/audio/OS",
+          "samples": 167,
+          "percent": 5.845
+        },
+        {
+          "symbol": "GX draw recording",
+          "samples": 55,
+          "percent": 1.925
+        },
+        {
+          "symbol": "GX texture snapshot",
+          "samples": 26,
+          "percent": 0.91
+        },
+        {
+          "symbol": "observer/pose",
+          "samples": 25,
+          "percent": 0.875
+        },
+        {
+          "symbol": "other/unknown",
+          "samples": 1,
+          "percent": 0.035
+        }
+      ]
+    },
+    {
+      "trial": 2,
+      "samples": 2831,
+      "excluded_samples": 14254,
+      "baseline_mean_ms": 7.400820078740158,
+      "baseline_p99_ms": 7.8555,
+      "sampled_mean_ms": 7.464011548556431,
+      "sampled_p99_ms": 8.1587,
+      "gx_nested_percent_of_headless_core": {
+        "write_fifo_inclusive": 33.31,
+        "feed_outside_drain": 5.687,
+        "drain_outside_parse": 2.049,
+        "parse_excluding_vertices": 11.445,
+        "vertices_inclusive": 14.129,
+        "vertices_percent_of_drain": 51.149
+      },
+      "selected_inclusive_percent_do_not_sum": {
+        "guest::f_803749B0(ppc::Context&, unsigned char*)": 73.19,
+        "guest::f_8036E4C4(ppc::Context&, unsigned char*)": 15.507,
+        "guest::f_80390CFC(ppc::Context&, unsigned char*)": 13.07,
+        "guest::f_80342204(ppc::Context&, unsigned char*)": 6.888,
+        "read_component": 5.475,
+        "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)": 3.603,
+        "record_draw": 3.108,
+        "ppc::trace_enter(ppc::Context&, unsigned int)": 1.625,
+        "guest::f_8035C910(ppc::Context&, unsigned char*)": 1.59,
+        "build_desc": 1.272,
+        "gx::TextureSnapshotCache::capture(unsigned char const*, unsigned long, unsigned char const*, unsigned long, unsigned long, unsigned long)": 0.812,
+        "snapshot_textures": 0.495
+      },
+      "top_25_leaf": [
+        {
+          "symbol": "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+          "samples": 238,
+          "percent": 8.407
+        },
+        {
+          "symbol": "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+          "samples": 146,
+          "percent": 5.157
+        },
+        {
+          "symbol": "read_component",
+          "samples": 122,
+          "percent": 4.309
+        },
+        {
+          "symbol": "decode_vertices",
+          "samples": 96,
+          "percent": 3.391
+        },
+        {
+          "symbol": "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+          "samples": 87,
+          "percent": 3.073
+        },
+        {
+          "symbol": "std::vector<unsigned char, std::allocator<unsigned char> >::_M_default_append(unsigned long)",
+          "samples": 82,
+          "percent": 2.897
+        },
+        {
+          "symbol": "gx::DrawCall::DrawCall(gx::DrawCall&&)",
+          "samples": 72,
+          "percent": 2.543
+        },
+        {
+          "symbol": "wasm_compat::fma(double, double, double)",
+          "samples": 63,
+          "percent": 2.225
+        },
+        {
+          "symbol": "guest::f_80342204(ppc::Context&, unsigned char*)",
+          "samples": 60,
+          "percent": 2.119
+        },
+        {
+          "symbol": "host::gx_write(unsigned int, int)",
+          "samples": 59,
+          "percent": 2.084
+        },
+        {
+          "symbol": "ppc::psq_store(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 55,
+          "percent": 1.943
+        },
+        {
+          "symbol": "gx::write_fifo(unsigned int, int)",
+          "samples": 55,
+          "percent": 1.943
+        },
+        {
+          "symbol": "host::ptr(unsigned int, unsigned int)",
+          "samples": 52,
+          "percent": 1.837
+        },
+        {
+          "symbol": "__gnu_cxx::__enable_if<!std::__is_scalar<gx::Vertex>::__value, void>::__type std::__fill_a1<gx::Vertex*, gx::Vertex>(gx::Vertex*, gx::Vertex*, gx::Vertex const&)",
+          "samples": 52,
+          "percent": 1.837
+        },
+        {
+          "symbol": "ppc::psq_load(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 51,
+          "percent": 1.801
+        },
+        {
+          "symbol": "host::wr16(unsigned int, unsigned short)",
+          "samples": 50,
+          "percent": 1.766
+        },
+        {
+          "symbol": "ppc::trace_enter(ppc::Context&, unsigned int)",
+          "samples": 46,
+          "percent": 1.625
+        },
+        {
+          "symbol": "guest::f_8035C910(ppc::Context&, unsigned char*)",
+          "samples": 44,
+          "percent": 1.554
+        },
+        {
+          "symbol": "gx::drain_fifo()",
+          "samples": 41,
+          "percent": 1.448
+        },
+        {
+          "symbol": "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 37,
+          "percent": 1.307
+        },
+        {
+          "symbol": "be32",
+          "samples": 35,
+          "percent": 1.236
+        },
+        {
+          "symbol": "guest::f_8037A54C(ppc::Context&, unsigned char*)",
+          "samples": 30,
+          "percent": 1.06
+        },
+        {
+          "symbol": "[unknown]",
+          "samples": 29,
+          "percent": 1.024
+        },
+        {
+          "symbol": "ppc::st64(ppc::Context&, unsigned char*, unsigned int, unsigned long)",
+          "samples": 27,
+          "percent": 0.954
+        },
+        {
+          "symbol": "guest::f_80379A20(ppc::Context&, unsigned char*)",
+          "samples": 27,
+          "percent": 0.954
+        }
+      ],
+      "areas_exclusive_see_taxonomy_limitations": [
+        {
+          "symbol": "translated guest/PPC helpers",
+          "samples": 1714,
+          "percent": 60.544
+        },
+        {
+          "symbol": "GX other",
+          "samples": 488,
+          "percent": 17.238
+        },
+        {
+          "symbol": "GX vertex decode",
+          "samples": 364,
+          "percent": 12.858
+        },
+        {
+          "symbol": "HLE/audio/OS",
+          "samples": 162,
+          "percent": 5.722
+        },
+        {
+          "symbol": "GX draw recording",
+          "samples": 49,
+          "percent": 1.731
+        },
+        {
+          "symbol": "GX texture snapshot",
+          "samples": 30,
+          "percent": 1.06
+        },
+        {
+          "symbol": "observer/pose",
+          "samples": 24,
+          "percent": 0.848
+        }
+      ]
+    },
+    {
+      "trial": 3,
+      "samples": 2849,
+      "excluded_samples": 14244,
+      "baseline_mean_ms": 7.422677427821522,
+      "baseline_p99_ms": 7.8271,
+      "sampled_mean_ms": 7.500014960629922,
+      "sampled_p99_ms": 8.3001,
+      "gx_nested_percent_of_headless_core": {
+        "write_fifo_inclusive": 32.924,
+        "feed_outside_drain": 5.546,
+        "drain_outside_parse": 1.825,
+        "parse_excluding_vertices": 11.794,
+        "vertices_inclusive": 13.759,
+        "vertices_percent_of_drain": 50.256
+      },
+      "selected_inclusive_percent_do_not_sum": {
+        "guest::f_803749B0(ppc::Context&, unsigned char*)": 72.797,
+        "guest::f_8036E4C4(ppc::Context&, unsigned char*)": 15.795,
+        "guest::f_80390CFC(ppc::Context&, unsigned char*)": 12.741,
+        "guest::f_80342204(ppc::Context&, unsigned char*)": 7.687,
+        "read_component": 4.914,
+        "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)": 4.037,
+        "record_draw": 3.686,
+        "guest::f_8035C910(ppc::Context&, unsigned char*)": 2.597,
+        "ppc::trace_enter(ppc::Context&, unsigned int)": 1.79,
+        "build_desc": 1.123,
+        "gx::TextureSnapshotCache::capture(unsigned char const*, unsigned long, unsigned char const*, unsigned long, unsigned long, unsigned long)": 1.018,
+        "snapshot_textures": 0.527
+      },
+      "top_25_leaf": [
+        {
+          "symbol": "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+          "samples": 224,
+          "percent": 7.862
+        },
+        {
+          "symbol": "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+          "samples": 151,
+          "percent": 5.3
+        },
+        {
+          "symbol": "read_component",
+          "samples": 109,
+          "percent": 3.826
+        },
+        {
+          "symbol": "decode_vertices",
+          "samples": 106,
+          "percent": 3.721
+        },
+        {
+          "symbol": "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+          "samples": 97,
+          "percent": 3.405
+        },
+        {
+          "symbol": "std::vector<unsigned char, std::allocator<unsigned char> >::_M_default_append(unsigned long)",
+          "samples": 86,
+          "percent": 3.019
+        },
+        {
+          "symbol": "guest::f_8035C910(ppc::Context&, unsigned char*)",
+          "samples": 73,
+          "percent": 2.562
+        },
+        {
+          "symbol": "guest::f_80342204(ppc::Context&, unsigned char*)",
+          "samples": 72,
+          "percent": 2.527
+        },
+        {
+          "symbol": "wasm_compat::fma(double, double, double)",
+          "samples": 67,
+          "percent": 2.352
+        },
+        {
+          "symbol": "ppc::psq_load(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 61,
+          "percent": 2.141
+        },
+        {
+          "symbol": "ppc::psq_store(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 59,
+          "percent": 2.071
+        },
+        {
+          "symbol": "host::gx_write(unsigned int, int)",
+          "samples": 53,
+          "percent": 1.86
+        },
+        {
+          "symbol": "gx::DrawCall::DrawCall(gx::DrawCall&&)",
+          "samples": 53,
+          "percent": 1.86
+        },
+        {
+          "symbol": "ppc::trace_enter(ppc::Context&, unsigned int)",
+          "samples": 51,
+          "percent": 1.79
+        },
+        {
+          "symbol": "__gnu_cxx::__enable_if<!std::__is_scalar<gx::Vertex>::__value, void>::__type std::__fill_a1<gx::Vertex*, gx::Vertex>(gx::Vertex*, gx::Vertex*, gx::Vertex const&)",
+          "samples": 48,
+          "percent": 1.685
+        },
+        {
+          "symbol": "gx::write_fifo(unsigned int, int)",
+          "samples": 47,
+          "percent": 1.65
+        },
+        {
+          "symbol": "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+          "samples": 44,
+          "percent": 1.544
+        },
+        {
+          "symbol": "gx::drain_fifo()",
+          "samples": 43,
+          "percent": 1.509
+        },
+        {
+          "symbol": "[unknown]",
+          "samples": 41,
+          "percent": 1.439
+        },
+        {
+          "symbol": "host::ptr(unsigned int, unsigned int)",
+          "samples": 40,
+          "percent": 1.404
+        },
+        {
+          "symbol": "host::wr16(unsigned int, unsigned short)",
+          "samples": 34,
+          "percent": 1.193
+        },
+        {
+          "symbol": "ppc::st64(ppc::Context&, unsigned char*, unsigned int, unsigned long)",
+          "samples": 34,
+          "percent": 1.193
+        },
+        {
+          "symbol": "guest::f_8037A54C(ppc::Context&, unsigned char*)",
+          "samples": 29,
+          "percent": 1.018
+        },
+        {
+          "symbol": "guest::f_8036E4C4(ppc::Context&, unsigned char*)",
+          "samples": 25,
+          "percent": 0.878
+        },
+        {
+          "symbol": "host::mark_ram_write(unsigned int, unsigned int)",
+          "samples": 23,
+          "percent": 0.807
+        }
+      ],
+      "areas_exclusive_see_taxonomy_limitations": [
+        {
+          "symbol": "translated guest/PPC helpers",
+          "samples": 1749,
+          "percent": 61.39
+        },
+        {
+          "symbol": "GX other",
+          "samples": 483,
+          "percent": 16.953
+        },
+        {
+          "symbol": "GX vertex decode",
+          "samples": 347,
+          "percent": 12.18
+        },
+        {
+          "symbol": "HLE/audio/OS",
+          "samples": 155,
+          "percent": 5.441
+        },
+        {
+          "symbol": "GX draw recording",
+          "samples": 64,
+          "percent": 2.246
+        },
+        {
+          "symbol": "GX texture snapshot",
+          "samples": 36,
+          "percent": 1.264
+        },
+        {
+          "symbol": "observer/pose",
+          "samples": 15,
+          "percent": 0.527
+        }
+      ]
+    }
+  ]
+}

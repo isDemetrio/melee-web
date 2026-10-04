@@ -1,0 +1,74 @@
+name: Core attribution (private disc, aggregate results only)
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/core-profile.yml'
+      - 'scripts/phase0/summarize_native_profile.py'
+permissions:
+  contents: read
+concurrency:
+  group: core-profile-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Generate offline guest outside checkout
+        env:
+          GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
+        run: scripts/phase0/fetch_and_recompile.sh offline "$RUNNER_TEMP/generated"
+      - name: Build native sampling target
+        run: |
+          cmake -S native -B "$RUNNER_TEMP/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPORT_GEN="$RUNNER_TEMP/generated" -DMELEE_SINGLE_THREAD=ON -DMELEE_PROFILE_INTERVALS=ON
+          cmake --build "$RUNNER_TEMP/build" --target melee_core_headless --parallel 2
+      - name: Read private disc
+        working-directory: ${{ runner.temp }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote --file "$RUNNER_TEMP/disc.iso"
+      - name: Install and permit process-local sampling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y linux-tools-common linux-tools-generic
+          sudo sysctl kernel.perf_event_paranoid=-1
+          perf_path=$(find -L /usr/lib/linux-tools -name perf -type f | sort | tail -1)
+          test -x "$perf_path"
+          "$perf_path" --version
+          echo "PERF=$perf_path" >> "$GITHUB_ENV"
+      - name: Profile three identical replays and gate every trace
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/results"
+          lscpu > "$RUNNER_TEMP/results/machine.txt"
+          for trial in 1 2 3; do
+            bash scripts/phase0/run_checkpoints.sh "$RUNNER_TEMP/build/melee_core_headless" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/baseline" 2400
+            echo "c79c53b9cdf81426fa0277e7497a69e55bc5f571  $RUNNER_TEMP/baseline/trace.csv" | sha1sum -c -
+            cp "$RUNNER_TEMP/baseline/sim_times.csv" "$RUNNER_TEMP/results/baseline-$trial-times.csv"
+            cat > "$RUNNER_TEMP/profile-wrapper" <<'WRAPPER'
+          #!/bin/bash
+          exec "$PERF" record --clockid mono -e cpu-clock:u -F 499 --call-graph dwarf,16384 -o "$RUNNER_TEMP/perf.data" -- "$RUNNER_TEMP/build/melee_core_headless" "$@"
+          WRAPPER
+            chmod +x "$RUNNER_TEMP/profile-wrapper"
+            bash scripts/phase0/run_checkpoints.sh "$RUNNER_TEMP/profile-wrapper" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/replay" 2400
+            echo "c79c53b9cdf81426fa0277e7497a69e55bc5f571  $RUNNER_TEMP/replay/trace.csv" | sha1sum -c -
+            "$PERF" script --inline -i "$RUNNER_TEMP/perf.data" -F time,event,ip,sym,dso > "$RUNNER_TEMP/samples.txt"
+            python3 scripts/phase0/summarize_native_profile.py "$RUNNER_TEMP/samples.txt" "$RUNNER_TEMP/replay/stdout.log" "$RUNNER_TEMP/replay/sim_times.csv" > "$RUNNER_TEMP/results/trial-$trial.json"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print({k:d[k] for k in ("samples", "match_mean_ms", "areas_exclusive")})' "$RUNNER_TEMP/results/trial-$trial.json"
+          done
+          python3 scripts/check_no_game_data.py --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-attribution-aggregates
+          path: ${{ runner.temp }}/results
+          retention-days: 7
+      - name: Remove game data and sampled stack memory
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/replay" "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/perf.data" "$RUNNER_TEMP/perf.data.old" "$RUNNER_TEMP/samples.txt" "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build"

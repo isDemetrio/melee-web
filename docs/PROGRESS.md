@@ -3343,3 +3343,19 @@ of that table still needs the Access service token (O9), and the 403-after-login
 `docs/DEPLOY.md` records is **not** re-tested by this, because Access answers before the middleware
 runs. On the VPS: `python3 -m unittest discover -s scripts/tests` and
 `python3 scripts/check_no_game_data.py --all`. CI decides the rest.
+
+## 2026-10-04 — Core attribution, measured in CI (PR #112)
+
+Branch `perf/core-attribution`; full result and reduction bounds in `docs/CORE_ATTRIBUTION.md`.
+Native perf runs 37224298646 and 37225043674: 12/12 replays preserve the exact 2400-checkpoint
+SHA-1 c79c53b9cdf81426fa0277e7497a69e55bc5f571. Latest unprofiled in-match mean 7.375–7.423 ms
+on AMD EPYC 7763, not an iPhone prediction. Guest scene display owns 72.8–73.2% inclusive;
+vertices own 13.8–14.1% of total, about half the decoder drain subtree. PPC loads/stores are
+major exclusive guest helpers. Phone E/F split is corrected: sim includes backend, and E/F
+are overlapping exports of one session. Simulation/non-decode plus GX excluding backend
+could deliver at most 1.98× in those reports even if both vanished: no demonstrated 3× path.
+No optimization or changes to renderer/play, no local builds/tests, no merge. Full-project
+feasibility remains unproven because four-player load and the independent work are outside
+this measurement. Next useful work: named WASM/JSC profile of active four-player replay,
+then A/B a bounded hotspot while preserving checkpoints and decoded graphics. Do not repeat
+old O2/clock-off gains: already shipped. No additional game data or Monid costs.

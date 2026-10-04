@@ -20,6 +20,7 @@ find_package(Threads REQUIRED)
 set(MELEE_GEN "${PORT_GEN}")
 include("${CMAKE_CURRENT_LIST_DIR}/core_sources.cmake")
 option(MELEE_SINGLE_THREAD "Run host workers inline (WASM parity configuration)" OFF)
+option(MELEE_PROFILE_INTERVALS "Emit monotonic simulation intervals for CI perf sampling" OFF)
 
 add_executable(melee_core_headless ${MELEE_HEADLESS_SOURCES} ${MELEE_SIM_SOURCES}
   ${GUEST_SOURCES} "${PORT_GEN}/function_names.cpp" "${PORT_GEN}/gecko_data.cpp")
@@ -31,6 +32,13 @@ target_compile_options(melee_core_headless PRIVATE -O1 -ffp-contract=off -fno-fa
 target_compile_definitions(melee_core_headless PRIVATE _FILE_OFFSET_BITS=64 MELEE_HEADLESS=1)
 target_link_libraries(melee_core_headless PRIVATE Threads::Threads)
 target_link_options(melee_core_headless PRIVATE -Wl,--no-undefined)
+if(MELEE_PROFILE_INTERVALS)
+  target_compile_definitions(melee_core_headless PRIVATE MELEE_PROFILE_INTERVALS=1)
+  # Debug information for inlined decoder helpers, without changing optimization
+  # or adding debug data to the 144 generated translation units.
+  set_source_files_properties("${PORT}/runtime/gx/gx_core.cpp"
+    PROPERTIES COMPILE_OPTIONS "-g")
+endif()
 if(MELEE_SINGLE_THREAD)
   target_compile_definitions(melee_core_headless PRIVATE MELEE_SINGLE_THREAD=1)
 endif()
