@@ -3343,3 +3343,64 @@ of that table still needs the Access service token (O9), and the 403-after-login
 `docs/DEPLOY.md` records is **not** re-tested by this, because Access answers before the middleware
 runs. On the VPS: `python3 -m unittest discover -s scripts/tests` and
 `python3 scripts/check_no_game_data.py --all`. CI decides the rest.
+
+## 2026-10-04 — the deploy runbook says there are no credentials and no core; both are false (cron, `docs/deploy-runbook-measured`)
+
+**Why this and not something else.** Every autonomous step of the deploy plan is done
+(`docs/PHASE0_DEPLOY_PLAN.md` section 6: PR 1–5 landed, `go_no_go.py` landed, `disc-chunks.json`
+computed, and `docs/PHASE0_REPORT.md` waits on the operator's device rows), and the renderer — the
+plan's only other autonomous work — is held by the branches that own its files (PR #70, #100, #101,
+#104, #109). What was left is the document the operator opens to run step 11 (`deploy_spike`), and
+that document states four absences that are now false. It is the same kind of item the last four
+cron sessions took, and it is the runbook, not a dated log entry: `docs/DEPLOY.md` opened with
+"there is no Cloudflare account login and no API token in this repository's CI", its §1 table said
+the game core "does not exist: no disc image, no DOL", its §3 said the T8 extraction scripts "are
+not written yet", and its §5 said the asset client "is not written yet ... nothing fetches it".
+
+**Verified 2026-10-04, each fact with the check that produced it.**
+`gh api repos/isDemetrio/melee-web/actions/secrets --jq '.secrets[].name'` answers
+`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `DOL_REPO_TOKEN`, and `.../actions/variables`
+answers `CF_PAGES_PROJECT=melee-web` — exactly the three names §2 point 8 asks for. Anonymous
+`GET`s (Python `urllib`, no token, from the VPS) of
+`https://phase0-spike.melee-web.pages.dev/spike.html`, of `.../spike-core/core.json` and of
+`.../phase0/disc-chunks` each answer `200` with the body of Cloudflare Access's *Sign in* page, so
+the preview deployment exists and nothing behind it is readable without a token. Two controls
+separate the two claims that page alone cannot make. A hostname under a project that does not
+exist (`melee-web-nonexistent-ctrl-9182.pages.dev`) **fails DNS** (`Name or service not known`), so
+`*.pages.dev` resolves only for real projects; a branch alias of the real project that does not
+exist (`nosuchbranch-ctrl-9182.melee-web.pages.dev`) answers the **same Access sign-in page**, which
+is what shows Access covers the whole `*.melee-web.pages.dev` wildcard and that a deployment's
+presence is not what provokes the login. The apex is the exception: `https://melee-web.pages.dev/`
+answers `404` with Cloudflare Pages' **"Deployment Not Found"** page and **no** Access challenge, so
+the project exists and has no production deployment — `ci.yml`'s `deploy` job gates that on the
+repository variable `CF_DEPLOY_SHELL` — and Access does not cover the apex. On the VPS:
+`stat -c %s` and `sha1sum` of `/home/hermes/incoming/melee-ntsc102.iso` give 1,459,978,240 bytes and
+`d4e70c06…`, the Redump value Q1 records. `scripts/extract_fs.py` is tracked and `git ls-files`
+lists it. `web/src/assets/manifest.ts`, `cache.ts` and `store.ts` are tracked, and
+`web/tests/unit/asset-{manifest,cache,store}.test.ts` are the tests the state table above already
+counts; `grep -rln "from '.*assets/" web/src` finds only `web/src/spike/disc-cache.ts`, which
+imports `sha256Hex`, so the shell itself still reads the disc and the asset path is not exercised
+end to end.
+
+**Changed.** `docs/DEPLOY.md`, seven places: the opening paragraph, the §1 core row, the §3 comment
+on the assets step, the first and third bullets of §5, the §6 bullet on the address format and the
+sentence closing §6. Each correction names the check above and says what the text claimed before
+2026-10-04. `docs/PHASE0_DEPLOY_PLAN.md`, three places: §1's closing sentence, §3's paragraph on
+the address format, and §3's "Accesso protetto" row, which now carries the wildcard measurement,
+the apex limit and what follows from it (O6 must cover the apex before the production shell is
+published there). No number changes: the module's 16,323,255 bytes at `-Oz`, the 25 MiB limit and
+the ISO's size and hash were already right; what was wrong was the claim that these things do not
+exist.
+
+**Not done, and why.** Nothing was deployed, published, uploaded or built, and no Cloudflare
+credential was used: every external fact above came from an anonymous request or from the
+repository's own metadata. Which of §3's commands has been run end to end is deliberately not
+claimed beyond the preview — the credentials existing does not say what was done with them, and the
+one thing a reader can check without a token is the preview. `docs/PHASE0_REPORT.md` stays
+unwritten: it is P0-12 and belongs with the operator's device rows. On the VPS, all without a
+build: `python3 -m unittest discover -s scripts/tests` (Ran 207 tests, `OK (skipped=1)`),
+`python3 scripts/check_no_game_data.py --all` (264 tracked files, clean),
+`python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked`
+(210 citations in 4 documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh`,
+`bash scripts/tests/test_phase0_runner.sh` and `bash scripts/tests/test_device_test_serve.sh`. CI
+decides the rest.
