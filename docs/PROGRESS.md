@@ -3444,9 +3444,16 @@ now carries both quotes and says what the `!` line buys (without it the module w
 question in the page's own words and drops the stale line citation, and section 1's note keeps the
 served headers unverified while the rules that produce them are read. `docs/DEPLOY.md`, one bullet:
 "the header rules" states the merge and the detach instead of "unverified", and adds that `_headers`
-does not reach `/phase0/disc`. `.github/workflows/phase0-build.yml`, the comment above the appended
-rule, same correction. No rule, no header and no build behaviour changes: the appended rule is the
-documented remedy either way.
+does not reach `/phase0/disc`. No rule, no header and no build behaviour changes: the appended rule
+is the documented remedy either way.
+
+**Left as it is, with the reason.** The same sentence also stands as a comment above the appended
+rule in `.github/workflows/phase0-build.yml` (line 320), and it is **not** corrected here: that file
+is in its own workflow's `pull_request.paths` (line 61), so editing one comment in it bought run
+`37230542327` — a 35-minute WASM core build of sources identical to `main`'s, cancelled under
+`docs/AGENT_RULES.md`'s rule against a run that carries no new signal. The correction lives in the two
+documents the deploy step is actually run from, and the comment can travel with the next change to
+that file that legitimately rebuilds the core.
 
 **Not done, and why.** Nothing was deployed and no credential was used: the page says what the
 *rules* mean, not what a deployment *serves*, so every `curl` in that table is still the check for
