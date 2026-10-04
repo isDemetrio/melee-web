@@ -268,7 +268,7 @@ jobs:
       # the operator's own disc. Off for every pull request, off by default, three days.
       # See docs/PHASE0_TASKS.md D3.
       - name: Upload the Node module (opt-in private artifact)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_module }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.upload_module }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.NODE_ARTIFACT }}
@@ -279,7 +279,7 @@ jobs:
           if-no-files-found: error
       # Otherwise no guest-derived build products or caches are uploaded: only Actions logs.
       - name: Upload the spike page with its core (opt-in private artifact)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_spike }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.upload_spike }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SPIKE_ARTIFACT }}
