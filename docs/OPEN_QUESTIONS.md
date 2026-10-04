@@ -48,6 +48,14 @@ job deletes it and the generated tree at the end of the run.
 
 ## Q3 — Cloudflare and Supabase
 
+**Phase 0 asks for a subset of this, and only the subset blocks the go/no-go.** The Phase 0
+deploy plan needs the ten items O1–O10 of `docs/PHASE0_DEPLOY_PLAN.md` section 3 and nothing
+else: the O1 decision, a Cloudflare account with R2, a private bucket, S3 keys scoped to it for
+one upload, the Pages API token and account ID, an Access application over the preview address,
+two Pages preview variables, the R2 binding, an optional Access service token for the agent, and
+the exact Android model. No domain, no TURN, no Supabase — those belong to the product's online
+play, not to the spike. That table is the ask for Phase 0; the paragraphs below are the wider one.
+
 Deploy needs: a Cloudflare API token (Pages + R2 + Realtime TURN permissions), the
 account ID, the domain, and a Supabase project URL plus anon and service keys. The TURN
 key ID and API token are needed for `/api/turn-credentials`.
