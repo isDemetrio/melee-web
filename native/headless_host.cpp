@@ -613,6 +613,14 @@ static void record_sim_time() {
   uint32_t major = 0, minor = 0, match_frame = 0;
   current_scene(&major, &minor, &match_frame);
   const double sim_ms = std::chrono::duration<double, std::milli>(now - g_sim_resume).count();
+#ifdef MELEE_PROFILE_INTERVALS
+  // Linux steady_clock and perf --clockid mono share CLOCK_MONOTONIC. Emitted
+  // after the measured interval, before checkpoint bookkeeping; no guest writes.
+  if (match_frame > 0)
+    std::fprintf(stderr, "PROFILE_INTERVAL %u %lld %lld\n", g_retraces,
+        (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(g_sim_resume.time_since_epoch()).count(),
+        (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+#endif
   std::fprintf(g_sim_times, "%u,%.4f,%u\n", g_retraces, sim_ms, match_frame);
 #ifdef MELEE_OFFLINE_COST
   record_decoder_cost(sim_ms, match_frame);
