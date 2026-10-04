@@ -3054,3 +3054,13 @@ PREV: black); `render.spec.ts`'s probe 30 becomes [65,32,16,96], GX's integer MO
   `// alpha test:` marker the preprocessor strips from the EM_JS body, so it never ran there.
 - Not verified by this agent: the phone (the user's eye is the verdict on colour), the canvas
   path on a real GPU, and iPhone pipeline compile time for the larger shaders.
+
+
+### 2026-10-04 — finite TEV schedule candidate (fix/lit-tev-flow)
+
+Read/printed the original WGSL: all four loops terminate; TEV count is 1..16,
+not zero or unbounded. Prior constant-stages and no-continue probes also stalled.
+`docs/LIT_TEV_FLOW.md` records the evidence and its limits. Candidate change:
+expand only the TEV loop into 16 uniform-guarded blocks, retaining the one shader
+and lit channels. No harness changes. One Actions build/harness cycle pending,
+followed by the unchanged private replay only if the build passes. No merge.
