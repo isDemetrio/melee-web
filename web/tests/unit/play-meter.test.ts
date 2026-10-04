@@ -323,3 +323,49 @@ describe('queue hook verification', () => {
     expect(meter.notes.join()).toContain('Queue hook probe failed');
   });
 });
+
+
+describe('native / JS residual boundaries', () => {
+  // A 100 ms JS callback (including presentation waits) is also 100 ms of native elapsed
+  // time, NOT 100 ms of native work. Only the disjoint boundary intervals explain residual.
+  it.each([0, 15])('separates a %i ms post-callback interval from time inside JS', (gap) => {
+    let now = 0;
+    const meter = new FrameMeter(createFlight(), () => now);
+    const finish = () => { meter.bitmapDone(); meter.ackDone(); return meter.cycleEnd(); };
+    now = 5;
+    meter.coreEnd(1, 0, null, { entered: 5, readDone: 5,
+      core: { retrace: 1, simMs: 0, csvMs: 0 },
+      bridge: { entered: 4, nativePreMs: 0, previousRetrace: 0, nativeRoundtripMs: 0 } });
+    now = 100; finish();
+    now = 104; meter.heartbeatReturned(1); // JS span = 100, tail = 4
+    now += gap; meter.heartbeatResuming(1);
+    // Native roundtrip = JS span + gap + 2 ms outside both JS probes.
+    // Next frame: sim 20, CSV 3, native pre 7, ingress 1, read 2, finish 1.
+    now = 140 + gap;
+    meter.coreEnd(2, 1, null, { entered: 137 + gap, readDone: 139 + gap,
+      core: { retrace: 2, simMs: 20, csvMs: 3 },
+      bridge: { entered: 136 + gap, nativePreMs: 7, previousRetrace: 1, nativeRoundtripMs: 102 + gap } });
+    const record = finish();
+    expect(cell(record, 'core_unattributed_ms')).toBe(10 + gap);
+    expect(cell(record, 'native_pre_heartbeat_ms')).toBe(7);
+    expect(cell(record, 'previous_native_roundtrip_ms')).toBe(102 + gap);
+    expect(cell(record, 'previous_js_heartbeat_ms')).toBe(100);
+    expect(cell(record, 'previous_js_return_to_resume_probe_ms')).toBe(gap);
+    expect(cell(record, 'previous_bridge_outside_js_ms')).toBe(2);
+    expect(cell(record, 'bridge_entry_ms')).toBe(1);
+    expect(cell(record, 'residual_unexplained_ms')).toBe(0);
+  });
+
+  it('leaves missing bridge telemetry null even when old reconciliation works', () => {
+    let now = 0;
+    const meter = new FrameMeter(createFlight(), () => now);
+    meter.coreEnd(1, 0, null); meter.bitmapDone(); meter.ackDone(); meter.cycleEnd();
+    meter.heartbeatReturned(1); meter.heartbeatResuming(1);
+    now = 20;
+    meter.coreEnd(2, 1, null, { entered: 20, readDone: 20, core: { retrace: 2, simMs: 5, csvMs: 0 } });
+    meter.bitmapDone(); meter.ackDone();
+    const record = meter.cycleEnd();
+    expect(cell(record, 'core_unattributed_ms')).toBe(15);
+    expect(cell(record, 'residual_unexplained_ms')).toBeNull();
+  });
+});

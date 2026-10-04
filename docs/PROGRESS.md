@@ -3054,3 +3054,12 @@ PREV: black); `render.spec.ts`'s probe 30 becomes [65,32,16,96], GX's integer MO
   `// alpha test:` marker the preprocessor strips from the EM_JS body, so it never ran there.
 - Not verified by this agent: the phone (the user's eye is the verdict on colour), the canvas
   path on a real GPU, and iPhone pipeline compile time for the larger shaders.
+
+## 2026-10-04 — attack residual instrumentation
+
+Branch `perf/attack-residual`, based on `b97787c`. Added native pre-heartbeat and
+roundtrip timers, paired JS entry/return/resume probes, signed interval reconciliation
+and separate native clock calibration. Existing report columns remain. Renderer
+untouched; no gameplay optimisation. Details and limitations: `ATTACK_RESIDUAL.md`.
+CI/checkpoint results pending. Next: run Actions, compare the full 2400-row SHA-1,
+then obtain a new phone report; old D/E/F reports cannot localize their 14.9 ms.

@@ -38,6 +38,9 @@ static std::chrono::steady_clock::time_point g_sim_resume;
 uint32_t timing_retrace = 0;
 double timing_sim_ms = 0;
 double timing_csv_ms = 0;
+double timing_native_pre_ms = 0, timing_native_roundtrip_ms = 0;
+uint32_t timing_roundtrip_retrace = 0;
+static std::chrono::steady_clock::time_point g_csv_end;
 static uint32_t g_fst_offset, g_fst_size, g_fst_max;
 static std::deque<Completion> g_completions;
 static bool g_pe_finish_pending = false;
@@ -615,8 +618,8 @@ static void record_sim_time() {
   record_decoder_cost(sim_ms, match_frame);
 #endif
   std::fflush(g_sim_times);
-  timing_csv_ms = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - now).count();
+  g_csv_end = std::chrono::steady_clock::now();
+  timing_csv_ms = std::chrono::duration<double, std::milli>(g_csv_end - now).count();
   timing_sim_ms = sim_ms;
   timing_retrace = g_retraces;
 }
@@ -646,8 +649,18 @@ void retrace() {
   if (offline_cost_mode == 1) reset_decoder_cost();
 #endif
   // Before the resume stamp, so a beat's cost is in no frame's sim_ms, like the hashing above.
+  const auto bridge_start = g_sim_times ? std::chrono::steady_clock::now()
+                                       : std::chrono::steady_clock::time_point{};
+  if (g_sim_times) timing_native_pre_ms =
+      std::chrono::duration<double, std::milli>(bridge_start - g_csv_end).count();
   if (retrace_heartbeat) retrace_heartbeat(g_retraces);
-  if (g_sim_times) g_sim_resume = std::chrono::steady_clock::now();
+  if (g_sim_times) {
+    g_sim_resume = std::chrono::steady_clock::now();
+    // Publish on the NEXT retrace: the callback just completed cannot see its own return.
+    timing_native_roundtrip_ms =
+        std::chrono::duration<double, std::milli>(g_sim_resume - bridge_start).count();
+    timing_roundtrip_retrace = g_retraces;
+  }
   if (options.frames && g_retraces >= options.frames) request_exit(0);
   if (g_exit) throw ExitRequested{g_exit_code.load()};
 }

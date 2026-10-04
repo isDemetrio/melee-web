@@ -16,6 +16,7 @@ interface Core {
   _gx_webgpu_selftest?(argb: number, copies: number, geometry: number): number;
   _gx_webgpu_attach?(): number;
   _melee_live_input_version?(): number;
+  _melee_residual_clock_cost_ns?(): number;
   _melee_decoder_cost?(mode: number): number;
 }
 /**
@@ -100,8 +101,10 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
       printErr: (line: string) => scope.postMessage({ type: 'log', line }),
       gxWebgpu: gpu,
       livePad: () => readPad(shared),
+      heartbeatResuming: (retraces: number) => meter.heartbeatResuming(retraces),
       heartbeatReturned: (retraces: number) => meter.heartbeatReturned(retraces),
-      heartbeat: (retraces: number, timingRetrace?: number, simMs?: number, csvMs?: number) => {
+      heartbeat: (retraces: number, timingRetrace?: number, simMs?: number, csvMs?: number,
+        nativePreMs?: number, previousRetrace?: number, nativeRoundtripMs?: number, bridgeEntered?: number) => {
         const entered = retraces >= 0 ? performance.now() : 0;
         if (gpu.failure) throw new Error(gpu.failure);
         beat(retraces);
@@ -116,7 +119,10 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         const coreTiming = timingRetrace === retraces && Number.isFinite(simMs) && Number.isFinite(csvMs)
           ? { retrace: timingRetrace, simMs: simMs!, csvMs: csvMs! } : null;
         meter.coreEnd(retraces, matchFrameOf(simLines, retraces), coreSplitOf(decoderLines, retraces),
-          { entered, readDone, core: coreTiming });
+          { entered, readDone, core: coreTiming,
+            bridge: [nativePreMs, previousRetrace, nativeRoundtripMs, bridgeEntered].every(Number.isFinite)
+              ? { nativePreMs: nativePreMs!, previousRetrace: previousRetrace!,
+                nativeRoundtripMs: nativeRoundtripMs!, entered: bridgeEntered! } : undefined });
         // callMain never yields. Explicit bitmap presentation releases the WebGPU canvas
         // image every retrace, instead of waiting for the worker's task to return.
         const bitmap = canvas.transferToImageBitmap();
@@ -147,6 +153,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     // itself costs about two of the second per WebGPU call.
     const resolution = timerResolutionMs();
     const clockNs = clockCostNs();
+    const nativeClockCostNs = core._melee_residual_clock_cost_ns?.() ?? null;
     let split = false;
     if (event.data.selftest) {
       if (event.data.split) notes.push('core split not available in the selftest: it runs no simulation');
@@ -160,7 +167,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         else split = true;
       }
     }
-    scope.postMessage({ type: 'perf-meta', commit, opt, queueProbe, timerResolutionMs: resolution, clockCostNs: clockNs, split, notes,
+    scope.postMessage({ type: 'perf-meta', commit, opt, queueProbe, timerResolutionMs: resolution, clockCostNs: clockNs, nativeClockCostNs, split, notes,
       crossOriginIsolated: scope.crossOriginIsolated });
     if (event.data.selftest) {
       if (!core._gx_webgpu_selftest) throw new Error('Core has no renderer selftest');
