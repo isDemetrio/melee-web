@@ -987,6 +987,14 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         for(auto& c:r.tev_colors) for(auto& v:c) v=int32_t(next()%2048)-1024;
         for(auto& c:r.tev_kcolors) for(auto& v:c) v=int32_t(next()%256);
         for(auto& f:r.postMatrices) f=unit();
+        // Eight lights (gx_wgsl.cpp's light block layout): colour, cosine and distance attenuation
+        // (distance terms kept away from zero), position, direction.
+        for(auto& L:r.lights) {
+          const uint32_t colour=next()<<8 | next()%256; std::memcpy(L+12,&colour,4);
+          float f[12]; for(int k=0;k<12;k++) f[k]=2*unit();
+          for(int k=3;k<6;k++) f[k]=0.1f+std::fabs(f[k]);
+          std::memcpy(L+16,f,sizeof f);
+        }
         r.first_vertex=frame.vertices.size(); r.first_segment=frame.segments.size(); r.segment_count=1;
         // Clip x is position x + 0.5 (position matrix 3), y is position y.
         const float x0=float(k%8)*0.25f-1.0f, y0=1.0f-float(k/8)*(1.0f/3.0f), w=0.25f, h=1.0f/3.0f;
@@ -1003,6 +1011,21 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         frame.segments.push_back({r.first_vertex,6,r.primitive});
         frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
       }
+    }
+    // 56: a lit colour channel (gx_wgsl.cpp's gen_lighting / gen_light). Channel 0's colour: the
+    // material register (200), lit by light 0 with the ambient register (50), diffuse clamped, no
+    // attenuation. Light 0 is grey 100 far along +z, so the normal (0,0,1) faces it: the accumulator
+    // is 50 + round(100 * 0.99999976) = 150, and the channel (200 * (150 + (150 >> 7))) >> 8 = 117.
+    // The TEV outputs the channel. A backend that does not light the channel draws the material, 200.
+    if (geometry==56) {
+      dc.xf_regs[0x0E]=1u<<1 | 1u<<2 | 2u<<7;
+      dc.xf_regs[0x0A]=0x323232FFu; dc.xf_regs[0x0C]=0xC8C8C8FFu;
+      const uint32_t colour=0x646464FFu; std::memcpy(dc.lights[0]+12,&colour,4);
+      const float light[12]={1,0,0, 1,0,0, 0,0,1000, 0,0,1};
+      std::memcpy(dc.lights[0]+16,light,sizeof light);
+      dc.bp.reg[gx::BP_TEV_COLOR_ENV]=10 | 15u<<4 | 15u<<8 | 15u<<12 | 1u<<19;
+      dc.bp.reg[gx::BP_TEV_ALPHA_ENV]=5u<<4 | 7u<<7 | 7u<<10 | 7u<<13 | 1u<<19;
+      dc.bp.reg[gx::BP_TREF]=0;                                        // no texture, channel 0
     }
     // 50: an EFB copy to a texture (gxw_copy). A green triangle; a 4x4 copy from inside it to guest
     // address 0x100000, with a clear; then the triangle again, white, textured from that address.
