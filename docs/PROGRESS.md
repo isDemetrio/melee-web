@@ -3216,3 +3216,56 @@ documents, 0 violations), `python3 -m unittest discover -s scripts/tests` (Ran 2
 `bash scripts/tests/test_deploy_guard.sh` (all guards hold), `bash
 scripts/tests/test_phase0_runner.sh` (44 guards hold), `bash scripts/tests/test_device_test_serve.sh`
 (6 cases passed). CI decides the rest.
+
+## 2026-10-04 — what a "private" artifact protects on a public repository (cron, `docs/artifact-exposure`)
+
+**Why this and not something else.** The deploy plan's remaining steps are the operator's
+(`docs/PHASE0_DEPLOY_PLAN.md` section 6: O1, O2–O9, M1/M2/M5, Q10(a), Q10(b)), and the renderer,
+the plan's only autonomous work, is held by the branches that own its files (PR #70, #100, #101,
+#104 and `fix/lit-hang`) and by an unresolved merge in the `melee-web-litonly` worktree
+(`wasm/render/gx_webgpu.cpp`, `gx_wgsl.cpp`, `gx_wgsl.h`, `pixel_pipeline_check.mjs`) — the same
+conclusion the two previous cron sessions reached. What was left is a claim the repository makes
+about its own build products, and that the previous session deliberately did not touch because it
+had not verified it: Q11's "the compiled core stays in private artifacts (D3)" and D3's "nothing is
+public", on a repository Q11 itself establishes is world-readable.
+
+**Measured 2026-10-04, each fact with the check that produced it.** `curl
+https://api.github.com/repos/isDemetrio/melee-web/actions/artifacts?per_page=1` answers `200` with
+**no token at all**, and `total_count` 601; the single-artifact endpoint answers `200` the same way,
+so the name, size, expiry date and workflow run of `melee-core-headless`, `melee-core-wasm-node`
+(11 present, 3,483,581 bytes each) and `melee-spike-dist` (8 present) are world-readable.
+`…/actions/artifacts/11290896351/zip` answers `401` with `{"message": "Requires authentication"}`
+and `…/actions/runs/37195793595/logs` answers `403`, so no anonymous visitor downloads anything;
+the run page HTML answers `200`. The retention the repository actually asks for is the three days
+in the workflows themselves (`retention-days: 3` at
+`.github/workflows/phase0-build.yml:247,278,287`, `phase0-native-headless.yml:72`,
+`wasm-probe.yml:113,122`). What closes the gap between "401
+anonymous" and "collaborators only" is documentation rather than this session's measurement:
+GitHub's REST documentation says of these endpoints "Anyone with read access to the repository can
+use this endpoint" (`docs.github.com/en/rest/actions/artifacts`, read that day; the download
+endpoint's own revision carries the same sentence,
+`docs.github.com/en/enterprise-server@3.4/rest/actions/artifacts`), every GitHub account has read
+access to a public repository, GitHub staff call the authentication requirement deliberate
+(`github.com/actions/upload-artifact/issues/51`, "Currently it's by design"), and that thread has a
+non-collaborator downloading a public repository's artifact with a token that grants it nothing
+else. **Not measured from here**: a download with a credential that is not a collaborator's — this
+VPS holds only the operator's token.
+
+**Changed.** `docs/PHASE0_TASKS.md` D3 no longer says "nothing is public": it says what the switch
+and the retention are worth, and carries the correction with its numbers. `docs/OPEN_QUESTIONS.md`
+Q11 stops asserting that the core "stays in private artifacts" and gains the measurement above, the
+three links it rests on, and the consequence — for O1, which asks for the legal judgement on
+publishing game-derived code, and for Q8's "private artifact exception", which was granted when the
+repository was believed private. `docs/PROGRESS.md` is this entry. No workflow, script, simulation
+or renderer file is touched: the exposure is the operator's to weigh, and closing it would mean
+changing how CI stores the build products, which is the operator's call and not a worker session's.
+
+**Not done, and why.** No build, no game data, no CI dispatch. On the VPS: `python3 -m unittest
+discover -s scripts/tests` (207 tests, `OK (skipped=1)`), `python3 scripts/check_no_game_data.py
+--all` (264 tracked files, clean), `bash scripts/tests/test_deploy_guard.sh` (all guards hold),
+`bash scripts/tests/test_device_test_serve.sh` (6 cases passed). `python3 scripts/check_docs.py`
+could not run here — it needs the upstream submodule checkout, which this worktree does not have —
+so the citations gate is CI's to decide. The remaining undone item of the plan's own PR 6 is small
+and still open: `docs/PHASE0_DEPLOY_PLAN.md` section 5 asks for Q3 to be narrowed to the Phase 0
+subset (the O1–O10 table of its section 3), and Q3 still reads as the full Cloudflare/Supabase/TURN
+ask.
