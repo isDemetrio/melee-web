@@ -1,10 +1,6 @@
 name: Beyond core — measured WASM candidates
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'experiments/beyond-core/**'
-      - '.github/workflows/beyond-core.yml'
 permissions:
   contents: read
 concurrency:

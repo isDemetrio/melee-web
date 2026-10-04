@@ -65,3 +65,37 @@ Sono tempi WASM/V8 senza WebGPU: non convertibili in millisecondi iPhone.
 
 Stato: nessun risultato nuovo ancora acquisito. Nessuna somma di accelerazioni
 ipotetiche, nessuna promessa di 60 fps, nessun no-go assoluto.
+
+## Primo risultato: SIMD esplicito e thread (run 37228977884)
+
+[CI](https://github.com/isDemetrio/melee-web/actions/runs/37228977884),
+[JSON e macchina](measurements/beyond-kernels-37228977884/). WASM/V8 Node 22,
+`-O2 -msimd128`, pool persistente di 2 pthread. Input sintetici immutabili, risultati
+consumati nell'ordine originale dopo join. 1386 casi differenziali (11 formati,
+3 palette, dimensioni anche incomplete), uguaglianza byte per byte.
+
+| Batch 128×128 | Serial reference ms | SIMD ms | 2 worker ms | SIMD+worker ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 RGBA8 | 0,016835 | 0,004657 | 0,042870 | 0,030601 |
+| 8 RGBA8 | 0,122974 | 0,032591 | 0,099512 | 0,043435 |
+| 64 RGBA8 | 0,985637 | 0,264961 | 0,548006 | 0,178678 |
+| 64 RGB565 | 1,671389 | 1,611978 | 0,853513 | 0,858720 |
+| 64 CMPR | 1,259124 | 1,275621 | 1,015278 | 1,179972 |
+
+**Verdetto locale:** shuffle intero RGBA8 funziona, circa 3,7× sul batch grande;
+non è un 3,7× sul gioco. RGB565/CMPR non hanno un kernel SIMD esplicito in questa
+variante: le differenze fra seriale e SIMD lì sono rumore/contesto, non ottimizzazione.
+Thread: 1,80× su 64 RGBA8, 1,96× su 64 RGB565, appena 1,24× su CMPR; regressione
+2,55× su una sola RGBA8. Pool+barriera costano troppo sui task piccoli. Non moltiplicare
+il fattore SIMD per quello thread: la combinazione è misurata separatamente (5,52×
+rispetto a seriale su 64 RGBA8, 0,807 ms risparmiati per quel batch).
+
+Non è ancora un prototipo di gioco valido: l'integrazione RGBA8 è nel workflow core,
+con la traccia completa e un oracolo distinto che confronta in ordine vertici,
+registri/matrici, comandi, copie e tutti i mip delle texture decodificate. Le misure
+con hashing grafico sono separate dalle prove di velocità. Tutti i dati di gioco
+restano sul runner. Produzione: scegliere il kernel per formato/dimensione, fallback
+sui blocchi incompleti; per i thread servono snapshot immutabili, output disgiunti,
+join prima del primo upload/draw dipendente, backpressure e limite memoria. Non
+spostare FIFO/interrupt né leggere RAM live da un worker. Il costo di questi ultimi
+requisiti sul browser di destinazione non è misurato dal pool Node.
