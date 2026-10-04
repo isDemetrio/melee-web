@@ -39,6 +39,9 @@ modules after processing and fails the job if either stops compiling.
   not on Safari or Chrome on a phone, and the web module is a different link from the node module
   (`-sENVIRONMENT=web,worker`, `workerfs`) even though the objects are the same. A device run is
   what would turn the 4.6% into a claim.
-- **Not the lever that matters most:** a 2016 phone at 13.94–16.06 ms is not made fast by 4.6%.
-  This buys size headroom and a small, free gain; the ranked levers remain those in
-  `docs/FRAME_TIME_CONSULT.md`.
+- **Not the lever that matters most:** the device that measured 13.94–16.06 ms is not made fast by
+  4.6%. Those runs are Android with "Request desktop site" on — the result JSON's own user agent is
+  `Mozilla/5.0 (X11; Linux x86_64 …)`, which is not a Linux desktop — on the operator's 2025
+  OnePlus tablet (`docs/PROGRESS.md`, "the spike is published, the OPFS path costs nothing, and the
+  optimisation campaign finds its ceiling"). This buys size headroom and a small, free gain; the
+  ranked levers remain those in `docs/CORE_BUDGET_DECISION.md` section 2.

@@ -129,10 +129,12 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/scripts/phase0/time_compile.sh"
           echo "opt_level=$MELEE_OPT" | tee -a "$GITHUB_STEP_SUMMARY"
-          # The two hot translation units are moved to -O2 by a source property, and the whole
-          # mechanism is that CMake appends source options after the target's own and interface
-          # options. Read the real compile commands instead of trusting that ordering: if it ever
-          # changes, -Oz would win and the experiment would measure nothing (docs/FRAME_TIME_CONSULT.md).
+          # The five hot translation units (MELEE_HOT_SOURCES, wasm/core/CMakeLists.txt) are moved
+          # to -O2 by a source property, and the whole mechanism is that CMake appends source
+          # options after the target's own and interface options. Read the real compile commands
+          # instead of trusting that ordering: if it ever changes, -Oz would win and the experiment
+          # would measure nothing (docs/PROGRESS.md, "Three levers, measured: two merge, one is
+          # closed by size").
           bash scripts/phase0/assert_hot_opt.sh "$RUNNER_TEMP/wasm/compile_commands.json" -O2 \
             | tee -a "$GITHUB_STEP_SUMMARY"
           SECONDS=0
