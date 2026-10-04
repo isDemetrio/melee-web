@@ -3522,3 +3522,14 @@ scripts/check_no_game_data.py --all` (271 tracked files, clean), `python3 script
 documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh` (all deploy and upload guards
 hold), `bash scripts/tests/test_phase0_runner.sh` (44 checkpoint runner guards hold) and `bash
 scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
+
+## 2026-10-04 — the core's in-match time is emulator, not guest: profiled on V8 (`measure/core-cost-browser`)
+
+V8 sampling profile of the web core built with function names (new opt-in dispatch input
+`profiling_funcs`), exactly the 762 in-match retraces, stack-based zones: the translated guest
+code's own body is **15.1%** of the frame with the renderer attached (26.2% headless). The rest is
+GPU emulation (FIFO decode, 28.4%), renderer (31.1%, mock WebGPU) and CPU emulation helpers
+(memory 12.6%, software `fma` 7.0%, entry bookkeeping 1.7%). The native profile's
+`HSD_JObjDisp` 70–73% is reproduced (70.98% headless) but 31.8 of those points are GX FIFO
+decoding reached through guest stores. Trace of the named module: `c79c53b9…`. Limits (V8 not
+JSC, mock WebGPU, two players): [CORE_COST_BROWSER](CORE_COST_BROWSER.md).
