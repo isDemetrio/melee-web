@@ -419,8 +419,9 @@ P/I on a 1–3 scale. "Earliest measurement" names the first point at which a nu
 - How it bites: 67 MB of C++ across 145 TUs (sample tree) plus a 2.4 MB trampoline table
   (`port/generated.before-shake/guest_table.cpp`) at `-O3`; upstream needed `/bigobj` and warns
   of "several GB of objects" (`port/CMakeLists.txt`, target `guest` and the
-  `MELEE_PREBUILT_GUEST` comment). A GitHub-hosted runner for a private repo has limited RAM,
-  disk and a 6 h job cap, and private-repo minutes are metered.
+  `MELEE_PREBUILT_GUEST` comment). A standard GitHub-hosted runner has limited RAM,
+  disk and a 6 h job cap; on this repository, which is public, those minutes are not metered
+  (`docs/AGENT_RULES.md`, "CI budget"), so the limits that bite are RAM, disk and the cap.
 - Where: emcc per-TU compile of `guest_*.cpp`, then `wasm-ld` linking one module.
 - Mitigation: `-O2` for guest TUs if `-O3` blows memory; `ninja -j` tuned to RAM, not cores;
   cache objects keyed by generated-file hash (`actions/cache`); build the guest as a static
