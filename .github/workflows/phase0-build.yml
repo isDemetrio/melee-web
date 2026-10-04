@@ -2,6 +2,10 @@ name: Phase 0 — WASM core
 on:
   workflow_dispatch:
     inputs:
+      diagnostic_build_run:
+        description: Temporary private spike artifact source for hang diagnosis
+        type: string
+        default: ""
       upload_module:
         description: 'Upload the linked Node module as a private artifact (game-derived; see docs/PHASE0_TASKS.md D3)'
         type: boolean
@@ -66,6 +70,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
+    if: ${{ !inputs.diagnostic_build_run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -330,3 +335,30 @@ jobs:
           scripts/deploy.sh --branch phase0-spike --repo-dir "$RUNNER_TEMP/clean" --dist-dir "$RUNNER_TEMP/spike-dist" | tee "$RUNNER_TEMP/deploy.log"
           url=$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' "$RUNNER_TEMP/deploy.log" | tail -1)
           echo "spike preview: ${url:-not reported by wrangler}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  diagnose:
+    permissions:
+      contents: read
+      actions: read
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_build_run != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/download-artifact@v4
+        with:
+          name: melee-spike-dist
+          path: ${{ runner.temp }}/spike-dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.diagnostic_build_run }}
+      - working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Controlled shader experiments on the same built module
+        env:
+          SPIKE_DIST: ${{ runner.temp }}/spike-dist
+        run: node scripts/diagnostic/lit-hang.mjs
