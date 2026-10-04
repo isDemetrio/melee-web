@@ -5,6 +5,7 @@ import { neutralPad, padStatusBytes } from '../input/pad.js';
 import type { TouchControls } from '../input/touch.js';
 import { storeHeartbeat } from '../spike/heartbeat.js';
 import { createFlight, FLIGHT_HIDDEN } from './frame-meter.js';
+import { RecipeStore } from './pipelines.js';
 import { PLAY_STORAGE_KEY, type PlayReport } from './report.js';
 import { createSharedPad, PRESENTED, publishPad } from './shared-pad.js';
 
@@ -24,6 +25,8 @@ export class PlaySession {
   private worker: Worker | null = null;
   private readonly abort = new AbortController();
   private closeStore: (() => void) | null = null;
+  /** The render pipelines this session compiled in a frame, kept for the next (pipelines.ts). */
+  private recipes: RecipeStore | null = null;
   private input: InputController | null = null;
   private shared: Int32Array | null = null;
   private animation = 0;
@@ -108,6 +111,11 @@ export class PlaySession {
         }
         else if (message.type === 'ended') this.fail(`Game ended (code ${message.exitCode}).`);
         else if (message.type === 'ready') this.status('Core ready · starting game…');
+        else if (message.type === 'warming') this.status(`Compiling ${message.count} render pipelines…`);
+        else if (message.type === 'pipeline') {
+          this.recipes ??= new RecipeStore(globalThis.indexedDB, String(message.commit));
+          this.recipes.add(message.recipe).catch((error) => this.log(`render pipeline not kept: ${String(error)}`));
+        }
       };
       worker.postMessage({ iso, discIdentity, pad: this.shared.buffer, flight: this.flight.buffer, split: this.perf.split });
     } catch (error) {
@@ -155,6 +163,7 @@ export class PlaySession {
     this.abort.abort();
     this.closeStore?.();
     this.closeStore = null;
+    this.recipes?.close();
     cancelAnimationFrame(this.animation);
     this.input?.detachKeyboard();
     window.removeEventListener('blur', this.release);

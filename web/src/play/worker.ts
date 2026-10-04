@@ -4,6 +4,7 @@ import { heartbeatSender } from '../spike/heartbeat.js';
 import { openCachedDisc, readDiscThrough, type OpfsDirectory, type SyncReadHandle } from './disc-reader.js';
 import { coreSplitOf, CsvTail, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, type FrameRecord,
   type TailFs, verifyQueueHooks } from './frame-meter.js';
+import { loadRecipes, warmNote, warmPipelines, type PipelineRecipe, type WarmableGpu } from './pipelines.js';
 import { PRESENTED, readPad } from './shared-pad.js';
 
 interface Core {
@@ -144,6 +145,21 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     const core = await factory(options);
     if (core._melee_live_input_version?.() !== 1) throw new Error('This deployed core predates live input; rebuild it in CI.');
     if (core._gx_webgpu_attach?.() !== 1) throw new Error(`Renderer attach failed: ${gpu.failure ?? opening.reason}`);
+    // The render pipelines this device's earlier sessions of this core compiled inside a frame,
+    // compiled now, before callMain, where the worker can still await (pipelines.ts says why).
+    if (!event.data.selftest && commit) {
+      const warmable = gpu as unknown as WarmableGpu;
+      let recipes: PipelineRecipe[] = [];
+      try {
+        recipes = await loadRecipes(scope.indexedDB, commit);
+      } catch (error) {
+        notes.push(`render pipelines: earlier sessions' unreadable (${error})`);
+      }
+      if (recipes.length) scope.postMessage({ type: 'warming', count: recipes.length });
+      notes.push(warmNote(await warmPipelines(warmable, recipes, () => performance.now()), recipes.length));
+      const forCommit = commit;
+      warmable.onPipeline = (recipe) => scope.postMessage({ type: 'pipeline', commit: forCommit, recipe });
+    }
     // The disc's reads go through an OPFS sync access handle when there is one (disc-reader.ts says
     // why), installed before the meter so the meter wraps the read the core really uses.
     const disc = event.data.selftest ? null : await routeDiscReads(core.FS.filesystems, event.data, notes);

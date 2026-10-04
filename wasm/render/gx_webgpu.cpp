@@ -80,7 +80,39 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
     gpu.pipelineLayout = gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.textureLayout]});
     gpu.pipelines = new Map();
     gpu.shaders = new Map();
+    gpu.shaderText = new Map();
     gpu.samplers = new Map();
+    // A pipeline's descriptor from its draw state. gxw_draw builds every pipeline it creates with it,
+    // and so does a page that compiles pipelines before the game starts (web/src/play/pipelines.ts):
+    // a pipeline it puts in gpu.warm is the one gxw_draw would have created.
+    gpu.pipelineDescriptor = (module, label, lines, cull, zmode, blendBits, efbAlpha) => {
+      // GX source and destination factors, in BLENDMODE order.
+      const src = ["zero","one","dst","one-minus-dst","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
+      const dst = ["zero","one","src","one-minus-src","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
+      const noDstAlpha = (f) => efbAlpha ? f : f === "dst-alpha" ? "one" : f === "one-minus-dst-alpha" ? "zero" : f;
+      let blend;
+      if (blendBits & 1) {
+        const c = blendBits & 0x800 ? {srcFactor:"one",dstFactor:"one",operation:"reverse-subtract"}
+          : {srcFactor:noDstAlpha(src[(blendBits >>> 8) & 7]),dstFactor:noDstAlpha(dst[(blendBits >>> 5) & 7]),operation:"add"};
+        blend = {color:c, alpha:c};
+      }
+      // GPUColorWrite: RED|GREEN|BLUE = 7, ALPHA = 8.
+      const writeMask = (blendBits & 8 ? 7 : 0) | (blendBits & 16 && efbAlpha ? 8 : 0);
+      const attributes = [
+        {shaderLocation:0,offset:0,format:"float32x3"},
+        {shaderLocation:1,offset:12,format:"float32x3"},
+        {shaderLocation:2,offset:24,format:"unorm8x4"},
+        {shaderLocation:3,offset:28,format:"unorm8x4"}];
+      for (let i=0;i<8;i++) attributes.push({shaderLocation:4+i,offset:32+8*i,format:"float32x2"});
+      for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
+      // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
+      return {label,layout:gpu.pipelineLayout,
+        vertex:{module,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
+        fragment:{module,entryPoint:"fs",targets:[blend ? {format:gpu.format,blend,writeMask} : {format:gpu.format,writeMask}]},
+        primitive:{topology:lines ? "line-list":"triangle-list",frontFace:"cw",cullMode:["none","back","front","back"][cull]},
+        depthStencil:{format:"depth32float",depthWriteEnabled:!!((zmode&1)&&(zmode&16)),
+          depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}};
+    };
     // Views have no destroy(): one per persistent texture, made here or when its texture is.
     gpu.efbView = gpu.efb.createView();
     gpu.depthView = gpu.depth.createView();
@@ -89,7 +121,7 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
     // arenas: each draw of a batch appends its data at its own offset to a staging copy, and the
     // batch writes them with one writeBuffer each just before its single submit (gpu.flush).
     // A draw's uniforms are the rows its shader reads (draw_segment's `u`, gxw::uniform_rows), at an
-    // aligned offset; every binding is the whole block a shader declares, which may run past the
+    // aligned offset; every binding is the largest block a shader declares, which may run past the
     // draw's own rows into the next draw's (never read) but never past the arena.
     gpu.uniformAlign = (gpu.device.limits && gpu.device.limits.minUniformBufferOffsetAlignment) || 256;
     gpu.uniformBinding = max_rows*16;
@@ -365,7 +397,7 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
     const d = gpu.device;
     const r = HEAPF32.slice(raster >> 2, (raster >> 2) + 10);
     zmode &= 31;
-    if (code) gpu.shaders.set(shader, d.createShaderModule({label:"gx shader " + shader, code:UTF8ToString(code)}));
+    if (code) gpu.shaderText.set(shader, UTF8ToString(code));
     const blendmode = HEAPU32[(bp >> 2) + 0x41];
     const efbAlpha = (HEAPU32[(bp >> 2) + 0x43] & 7) === 1 ? 1 : 0;   // RGBA6_Z24
     // Enable, colour/alpha update, and -- only when blending -- the factors and subtract.
@@ -373,34 +405,20 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
     const key = [lines,cull,zmode,blendBits,efbAlpha,shader].join(":");
     let pipeline = gpu.pipelines.get(key);
     if (!pipeline) {
-      const module = gpu.shaders.get(shader);
-      if (!module) throw new Error("no WGSL for shader " + shader);
-      // GX source and destination factors, in BLENDMODE order.
-      const src = ["zero","one","dst","one-minus-dst","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
-      const dst = ["zero","one","src","one-minus-src","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
-      const noDstAlpha = (f) => efbAlpha ? f : f === "dst-alpha" ? "one" : f === "one-minus-dst-alpha" ? "zero" : f;
-      let blend;
-      if (blendBits & 1) {
-        const c = blendBits & 0x800 ? {srcFactor:"one",dstFactor:"one",operation:"reverse-subtract"}
-          : {srcFactor:noDstAlpha(src[(blendBits >>> 8) & 7]),dstFactor:noDstAlpha(dst[(blendBits >>> 5) & 7]),operation:"add"};
-        blend = {color:c, alpha:c};
+      const text = gpu.shaderText.get(shader);
+      if (text === undefined) throw new Error("no WGSL for shader " + shader);
+      // A pipeline compiled before the game started (gpu.warm, keyed by draw state and WGSL text:
+      // shader ids are only this session's), else one compiled here, inside the frame, and reported
+      // (gpu.onPipeline) so that a later session can compile it before it starts instead.
+      const warmKey = [lines,cull,zmode,blendBits,efbAlpha].join(":") + "\n" + text;
+      pipeline = gpu.warm ? gpu.warm.get(warmKey) : undefined;
+      if (pipeline) gpu.warmHits = (gpu.warmHits || 0) + 1;
+      else {
+        let module = gpu.shaders.get(shader);
+        if (!module) gpu.shaders.set(shader, module = d.createShaderModule({label:"gx shader " + shader, code:text}));
+        pipeline = d.createRenderPipeline(gpu.pipelineDescriptor(module,key,lines,cull,zmode,blendBits,efbAlpha));
+        if (gpu.onPipeline) gpu.onPipeline({lines,cull,zmode,blendBits,efbAlpha,code:text});
       }
-      // GPUColorWrite: RED|GREEN|BLUE = 7, ALPHA = 8.
-      const writeMask = (blendBits & 8 ? 7 : 0) | (blendBits & 16 && efbAlpha ? 8 : 0);
-      const attributes = [
-        {shaderLocation:0,offset:0,format:"float32x3"},
-        {shaderLocation:1,offset:12,format:"float32x3"},
-        {shaderLocation:2,offset:24,format:"unorm8x4"},
-        {shaderLocation:3,offset:28,format:"unorm8x4"}];
-      for (let i=0;i<8;i++) attributes.push({shaderLocation:4+i,offset:32+8*i,format:"float32x2"});
-      for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
-      // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
-      pipeline = d.createRenderPipeline({label:key,layout:gpu.pipelineLayout,
-        vertex:{module,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
-        fragment:{module,entryPoint:"fs",targets:[blend ? {format:gpu.format,blend,writeMask} : {format:gpu.format,writeMask}]},
-        primitive:{topology:lines ? "line-list":"triangle-list",frontFace:"cw",cullMode:["none","back","front","back"][cull]},
-        depthStencil:{format:"depth32float",depthWriteEnabled:!!((zmode&1)&&(zmode&16)),
-          depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}});
       gpu.pipelines.set(key,pipeline);
     }
     // Room in the batch's arenas, or submit the batch first: a batch is flushed, never
@@ -910,6 +928,21 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         frame.segments.push_back({r.first_vertex,3,r.primitive});
         frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
       }
+    }
+    // 56: a lit colour channel (gx_wgsl.cpp's gen_lighting / gen_light). Channel 0's colour: the
+    // material register (200), lit by light 0 with the ambient register (50), diffuse clamped, no
+    // attenuation. Light 0 is grey 100 far along +z, so the normal (0,0,1) faces it: the accumulator
+    // is 50 + round(100 * 0.99999976) = 150, and the channel (200 * (150 + (150 >> 7))) >> 8 = 117.
+    // The TEV outputs the channel. A backend that does not light the channel draws the material, 200.
+    if (geometry==56) {
+      dc.xf_regs[0x0E]=1u<<1 | 1u<<2 | 2u<<7;
+      dc.xf_regs[0x0A]=0x323232FFu; dc.xf_regs[0x0C]=0xC8C8C8FFu;
+      const uint32_t colour=0x646464FFu; std::memcpy(dc.lights[0]+12,&colour,4);
+      const float light[12]={1,0,0, 1,0,0, 0,0,1000, 0,0,1};
+      std::memcpy(dc.lights[0]+16,light,sizeof light);
+      dc.bp.reg[gx::BP_TEV_COLOR_ENV]=10 | 15u<<4 | 15u<<8 | 15u<<12 | 1u<<19;
+      dc.bp.reg[gx::BP_TEV_ALPHA_ENV]=5u<<4 | 7u<<7 | 7u<<10 | 7u<<13 | 1u<<19;
+      dc.bp.reg[gx::BP_TREF]=0;                                        // no texture, channel 0
     }
     // 50: an EFB copy to a texture (gxw_copy). A green triangle; a 4x4 copy from inside it to guest
     // address 0x100000, with a clear; then the triangle again, white, textured from that address.

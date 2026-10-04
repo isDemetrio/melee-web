@@ -13,19 +13,18 @@
 //   - Texture coordinate generation (generate_vertex_shader, gx_shader.cpp:256-307): source row,
 //     input form, regular / emboss / colour texgens, ST or STQ projection, the dual post-transform
 //     with its normalisation; and the projective divide of the pixel shader (:443-446).
-//   - Colour channels without lights (gen_lighting, gx_shader.cpp:102-153): the material colour from
-//     the vertex or from the XF register, per channel and separately for alpha.
+//   - Colour channels (gen_lighting and gen_light, gx_shader.cpp:70-153): the material colour from the
+//     vertex or from the XF register, per channel and separately for alpha, times the light
+//     accumulator: the ambient colour plus each light in the channel's mask, with its attenuation
+//     (none, spot or specular) and diffuse function, on the vertex normal through the normal matrix.
 //
 // What is not, and what happens instead (each is stated where it is generated):
-//   - Lighting. A channel with lighting enabled is given its material colour, which is what the
-//     channel computes when its lights add up to full intensity. The lit draws measured in the menus
-//     and in a match all have a white material, so this is the colour the backend drew before. The
-//     lights themselves are PR #70's (render/webgpu-lighting).
 //   - Indirect texturing (no draw in the measured menu and match frames uses an indirect stage), and
 //     the texture coordinate scale registers (SU_SSIZE): coordinates are sampled normalised, which is
 //     what GX does when it sets that scale to the texture's size itself.
 //   - Z textures (ZTEX), the zfreeze slope and dither.
 #include "gx_wgsl.h"
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -164,10 +163,12 @@ ShaderUid make_uid(const gx::DrawCall& dc) {
   const bool dual = dc.xf_regs[0x12] & 1;
   uint32_t components = dc.components & (gx::VB_HAS_COL0 | gx::VB_HAS_COL1 | gx::VB_HAS_NRM0);
   u.w[U_NUMCHANS] = nchan;
-  // Only the bit the channels are generated from (no lights here; see the top of the file).
+  // The channel controls the colour channels read (upstream's lighting_uid): the material source,
+  // and for a lit channel its ambient source, lights, diffuse and attenuation functions too.
   for (uint32_t j = 0; j < nchan && j < 2; ++j) {
-    u.w[U_CHANS + j] = dc.xf_regs[0x0E + j] & 1;
-    u.w[U_CHANS + 2 + j] = dc.xf_regs[0x10 + j] & 1;
+    const uint32_t color = dc.xf_regs[0x0E + j], alpha = dc.xf_regs[0x10 + j];
+    u.w[U_CHANS + j] = color & 2 ? color & 0x7FFF : color & 1;
+    u.w[U_CHANS + 2 + j] = alpha & 2 ? alpha & 0x7FFF : alpha & 1;
   }
   u.w[U_NUMTEXGENS] = ntex;
   u.w[U_DUALTEX] = dual;
@@ -197,7 +198,47 @@ ShaderUid make_uid(const gx::DrawCall& dc) {
   return u;
 }
 
-int uniform_rows(const ShaderUid& uid) { return ROW_TEXGEN + 3 * int(uid.w[U_NUMTEXGENS]); }
+namespace {
+// Whether a colour channel the draw uses has lighting enabled (bit 1 of a channel control).
+bool lit(const ShaderUid& uid) {
+  bool any = false;
+  for (uint32_t j = 0; j < uid.w[U_NUMCHANS] && j < 2; ++j) any = any || ((uid.w[U_CHANS + j] | uid.w[U_CHANS + 2 + j]) & 2);
+  return any;
+}
+
+// gen_light (gx_shader.cpp:70-100), the attenuation and diffuse functions of a channel resolved when
+// the shader is generated: the factor light `i`'s colour is scaled by before it is rounded into the
+// accumulator, from the vertex position `p` and its normal `n0`.
+std::string light_factor(int i, uint32_t attn_fn, uint32_t diffuse_fn) {
+  const int l = ROW_LIGHTS + 5 * i;
+  Code o;
+  o.w("    var ldir = u.rows[%d].xyz - p.xyz;\n    var attn = 1.0;\n", l + 3);
+  if (attn_fn == 1) {
+    o.w("    ldir = normalize(ldir);\n"
+        "    attn = select(0.0, max(0.0, dot(n0, u.rows[%d].xyz)), dot(n0, ldir) >= 0.0);\n"
+        "    let q = vec3f(1.0, attn, attn * attn);\n", l + 4);
+    if (diffuse_fn != 0) o.w("    attn = max(0.0, dot(u.rows[%d].xyz, q)) / dot(normalize(u.rows[%d].xyz), q);\n", l + 1, l + 2);
+    else o.w("    attn = max(0.0, dot(u.rows[%d].xyz, q)) / dot(u.rows[%d].xyz, q);\n", l + 1, l + 2);
+  } else if (attn_fn == 3) {
+    o.w("    let dist2 = dot(ldir, ldir);\n    let dist = sqrt(dist2);\n    ldir = ldir / dist;\n"
+        "    attn = max(0.0, dot(ldir, u.rows[%d].xyz));\n"
+        "    attn = max(0.0, dot(u.rows[%d].xyz, vec3f(1.0, attn, attn * attn))) / dot(u.rows[%d].xyz, vec3f(1.0, dist, dist2));\n",
+        l + 4, l + 1, l + 2);
+  } else {
+    o.w("    ldir = normalize(ldir);\n    if (length(ldir) == 0.0) { ldir = n0; }\n");
+  }
+  if (diffuse_fn == 0) o.w("    let factor = attn;\n");
+  else if (diffuse_fn == 1) o.w("    let factor = attn * dot(ldir, n0);\n");
+  else o.w("    let factor = attn * max(0.0, dot(ldir, n0));\n");
+  return o.s;
+}
+
+// The light mask of a channel control: lights 0-3 in bits 2-5, 4-7 in bits 11-14.
+uint32_t light_mask(uint32_t control) { return ((control >> 2) & 15) | (((control >> 11) & 15) << 4); }
+}  // namespace
+
+// A lit draw reads the light rows, which come last.
+int uniform_rows(const ShaderUid& uid) { return lit(uid) ? MAX_ROWS : ROW_TEXGEN + 3 * int(uid.w[U_NUMTEXGENS]); }
 
 std::string generate_wgsl(const ShaderUid& uid) {
   const Uid g{uid};
@@ -205,8 +246,9 @@ std::string generate_wgsl(const ShaderUid& uid) {
   const uint32_t ntex = uid.w[U_NUMTEXGENS];
   const bool dual = uid.w[U_DUALTEX];
   const int stages = int(uid.w[U_STAGES]);
+  const bool lighting = lit(uid);
   Code o;
-  o.w("struct Constants { rows: array<vec4f, %d> }\n@group(0) @binding(0) var<uniform> u: Constants;\n", MAX_ROWS);
+  o.w("struct Constants { rows: array<vec4f, %d> }\n@group(0) @binding(0) var<uniform> u: Constants;\n", lighting ? MAX_ROWS : ROW_LIGHTS);
   for (int n = 0; n < 8; ++n)
     o.w("@group(0) @binding(%d) var tex%d: texture_2d<f32>;\n@group(0) @binding(%d) var samp%d: sampler;\n", 1 + 2 * n, n, 2 + 2 * n, n);
   o.w("struct Out {\n  @builtin(position) pos: vec4f,\n  @location(0) clip: vec4f,\n  @location(1) colors_0: vec4f,\n  @location(2) colors_1: vec4f,\n");
@@ -234,23 +276,53 @@ std::string generate_wgsl(const ShaderUid& uid) {
       "  o.clip = clip;\n"
       // Emulate the D3D viewport in clip space, allowing viewports outside the EFB.
       "  o.pos = vec4f(clip.xy * u.rows[102].xy + clip.w * u.rows[102].zw, clip.zw);\n");
-  // ---- vertex: colour channels (gen_lighting without lights) ---------------------------------------
+  // ---- vertex: colour channels (gen_lighting) -------------------------------------------------------
   if (nchan == 0) {
     o.w("  o.colors_0 = %s;\n", components & gx::VB_HAS_COL0 ? "color0" : "vec4f(1.0)");
     o.w("  o.colors_1 = %s;\n", components & gx::VB_HAS_COL1 ? "color1" : "o.colors_0");
   } else {
     o.w("  var mtl = vec4f(0.0);\n");
+    if (lighting) {
+      // The normal through the normal matrix of the position matrix (Dolphin: index & 31).
+      o.w("  var lacc = vec4f(255.0);\n  let ni = select(m, m - 32u, m >= 32u);\n");
+      if (components & gx::VB_HAS_NRM0)
+        o.w("  let n0 = normalize(vec3f(dot(u.rows[70u + ni].xyz, normal), dot(u.rows[71u + ni].xyz, normal), dot(u.rows[72u + ni].xyz, normal)));\n");
+      else o.w("  let n0 = vec3f(0.0);\n");
+    }
     for (uint32_t j = 0; j < nchan && j < 2; ++j) {
-      const bool color_vertex = uid.w[U_CHANS + j], alpha_vertex = uid.w[U_CHANS + 2 + j];
+      const uint32_t color = uid.w[U_CHANS + j], alpha = uid.w[U_CHANS + 2 + j];
+      const bool color_vertex = color & 1, alpha_vertex = alpha & 1;
       if (color_vertex) vertex_colour(o, components, int(j), false, "  mtl");
       else o.w("  mtl = u.rows[%d];\n", ROW_MATERIALS + 2 + int(j));
       if (alpha_vertex != color_vertex) {
         if (alpha_vertex) vertex_colour(o, components, int(j), true, "  mtl.w");
         else o.w("  mtl.w = u.rows[%d].a;\n", ROW_MATERIALS + 2 + int(j));
       }
-      // Lighting disabled: the light accumulator is 255, and (mtl * 256) >> 8 is the material. A lit
-      // channel is given the same: its lights are not generated here (see the top of the file).
-      o.w("  o.colors_%u = mtl / 255.0;\n", j);
+      if (!((color | alpha) & 2)) {
+        // Lighting disabled: the light accumulator is 255, and (mtl * 256) >> 8 is the material.
+        o.w("  o.colors_%u = mtl / 255.0;\n", j);
+        continue;
+      }
+      // The accumulator starts at the ambient colour (from the vertex or the XF register) of a lit
+      // channel, 255 for an unlit one; each light in the mask adds its rounded contribution.
+      if (color & 2) {
+        if (color & 64) vertex_colour(o, components, int(j), false, "  lacc");
+        else o.w("  lacc = u.rows[%d];\n", ROW_MATERIALS + int(j));
+      } else o.w("  lacc = vec4f(255.0);\n");
+      if (alpha & 2) {
+        if (alpha & 64) vertex_colour(o, components, int(j), true, "  lacc.w");
+        else o.w("  lacc.w = u.rows[%d].a;\n", ROW_MATERIALS + int(j));
+      } else o.w("  lacc.w = 255.0;\n");
+      for (int i = 0; i < 8; ++i) {
+        if ((color & 2) && (light_mask(color) & (1u << i)))
+          o.w("  {\n%s    lacc = vec4f(lacc.rgb + round(factor * u.rows[%d].rgb), lacc.a);\n  }\n",
+              light_factor(i, (color >> 9) & 3, (color >> 7) & 3).c_str(), ROW_LIGHTS + 5 * i);
+        if ((alpha & 2) && (light_mask(alpha) & (1u << i)))
+          o.w("  {\n%s    lacc.w = lacc.w + round(factor * u.rows[%d].a);\n  }\n",
+              light_factor(i, (alpha >> 9) & 3, (alpha >> 7) & 3).c_str(), ROW_LIGHTS + 5 * i);
+      }
+      o.w("  { let il = clamp(vec4i(lacc), vec4i(0), vec4i(255));\n"
+          "    o.colors_%u = vec4f((vec4i(mtl) * (il + (il >> vec4u(7u)))) >> vec4u(8u)) / 255.0; }\n", j);
     }
     if (nchan < 2) o.w("  o.colors_1 = %s;\n", components & gx::VB_HAS_COL1 ? "color1" : "o.colors_0");
   }
@@ -436,6 +508,26 @@ void fill_tev_rows(const gx::DrawCall& dc, float (*u)[4]) {
     f0[0] = ssc; f0[1] = 2.0f * vp[0]; f0[2] = float((bp.fogrange(5) >> 12) & 0xFFF) / 256.0f; f0[3] = 0;
   } else {
     f0[0] = 0; f0[1] = 1; f0[2] = 1; f0[3] = 0;
+  }
+  // The lights, for a draw with a lit channel (fill_vs_constants, gx_shader.cpp:756-779). A light
+  // block is XF 0x600 + 16i as xf_load stored it: three unused words, the colour (R in the high
+  // byte), then cosine and distance attenuation, position and direction, three floats each.
+  bool lit = false;
+  for (uint32_t j = 0; j < (dc.xf_regs[0x09] & 3) && j < 2; ++j) lit = lit || ((dc.xf_regs[0x0E + j] | dc.xf_regs[0x10 + j]) & 2);
+  for (int i = 0; lit && i < 8; ++i) {
+    const uint8_t* L = dc.lights[i];
+    float* row = u[ROW_LIGHTS + 5 * i];
+    uint32_t colour; std::memcpy(&colour, L + 12, 4);
+    for (int c = 0; c < 4; ++c) row[c] = float((colour >> (24 - 8 * c)) & 0xFF);
+    float f[9]; std::memcpy(f, L + 16, sizeof f);
+    for (int k = 0; k < 3; ++k) { u[ROW_LIGHTS + 5 * i + 1][k] = f[k]; u[ROW_LIGHTS + 5 * i + 2][k] = f[3 + k]; u[ROW_LIGHTS + 5 * i + 3][k] = f[6 + k]; }
+    // A distance attenuation of zero divides by zero: upstream's (and Dolphin's) small constant.
+    if (std::fabs(f[3]) < 0.00001f && std::fabs(f[4]) < 0.00001f && std::fabs(f[5]) < 0.00001f) u[ROW_LIGHTS + 5 * i + 2][0] = 0.00001f;
+    float d[3]; std::memcpy(d, L + 52, sizeof d);
+    const double norm = double(d[0]) * d[0] + double(d[1]) * d[1] + double(d[2]) * d[2];
+    const float nf = norm > 0 ? float(1.0 / std::sqrt(norm)) : 0.0f;
+    for (int k = 0; k < 3; ++k) u[ROW_LIGHTS + 5 * i + 4][k] = d[k] * nf;
+    for (int r = 1; r <= 4; ++r) u[ROW_LIGHTS + 5 * i + r][3] = 0.0f;
   }
   // Each texgen's post-transform matrix (XF 0x500 + 4 * index), three rows.
   const uint32_t ntex = dc.xf_regs[0x3F] & 15;
