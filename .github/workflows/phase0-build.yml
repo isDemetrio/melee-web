@@ -317,8 +317,12 @@ jobs:
           # /spike-core/* must not inherit the site-wide immutable rule for *.wasm. The module keeps
           # a fixed file name, so a cached copy outlives a rebuild and a phone would run the previous
           # core while core.json announces the new commit (deploy plan section 0, first defect).
-          # Whether Pages merges two matching rules or lets the later one win is unverified; the `!`
-          # line detaches the header either way. Verify after the first deploy with
+          # Pages merges matching rules -- "If a header is applied twice in the _headers file, the
+          # values are joined with a comma separator" -- and the `!` line is the documented way to
+          # detach one (developers.cloudflare.com/pages/configuration/headers/, read 2026-10-04), so
+          # without it the module would be served `public, max-age=31536000, immutable, no-store`.
+          # Whether a `!` inside the same rule that re-sets the header is applied in order is not
+          # stated on that page. Verify after the first deploy with
           # curl -sI .../spike-core/melee_core_web.wasm: it must not show `immutable`.
           printf '\n/spike-core/*\n  ! Cache-Control\n  Cache-Control: no-store\n' >> "$RUNNER_TEMP/spike-dist/_headers"
           # deploy.sh refuses a dirty tree, so the deployed shell is a commit rather than somebody's

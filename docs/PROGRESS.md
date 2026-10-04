@@ -3407,3 +3407,53 @@ build: `python3 -m unittest discover -s scripts/tests` (Ran 207 tests, `OK (skip
 (210 citations in 4 documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh`,
 `bash scripts/tests/test_phase0_runner.sh` and `bash scripts/tests/test_device_test_serve.sh`. CI
 decides the rest.
+
+## 2026-10-04 — the two `_headers` rules the deploy plan left unverified are read (cron, `cron/f5-headers-rules`)
+
+**Why this and not something else.** Every autonomous step of the deploy plan is done
+(`docs/PHASE0_DEPLOY_PLAN.md` section 6: PR 1–6 landed, `go_no_go.py` landed, `disc-chunks.json`
+computed, and `docs/PHASE0_REPORT.md` waiting on the operator's device rows), and the renderer — the
+plan's only other autonomous work — is held by the branches that own its files (PR #70, #100, #101,
+#104, and the two in flight today, #112 and #113). What was left is the plan's section 3
+requirement table, which still carried two "**da verificare**" that need no account, no credential,
+no device and no decision: how Pages combines two `_headers` rules that match the same request, and
+whether a Pages Function receives the `_headers` rules at all. Both are questions about documented
+behaviour, the same kind the 2026-10-01 night session read out of section 1's limits table.
+
+**Verified 2026-10-04, each fact with the check that produced it.** Read on
+`https://developers.cloudflare.com/pages/configuration/headers/`, with no credential and no account:
+"If a header is applied twice in the `_headers` file, the values are joined with a comma separator",
+with the page's own worked example — `X-Robots-Tag: nosnippet` from one rule and
+`X-Robots-Tag: noindex` from another come back on one request as `nosnippet, noindex`; and detaching
+a header is documented: "You may wish to remove a default header or a header which has been added by
+a more pervasive rule. This can be done by prepending the header name with an exclamation mark and
+space (`!`)", shown on `Content-Security-Policy`. The same page scopes the file to static assets:
+`_headers` "will be parsed by Cloudflare Pages and its rules will be applied to static asset
+responses". The repository's side of both answers: `web/public/_headers` gives `/*.wasm`
+`Cache-Control: public, max-age=31536000, immutable`, and the spike deploy appends `/spike-core/*`
+with `! Cache-Control` then `Cache-Control: no-store` (`.github/workflows/phase0-build.yml` line
+327); the disc Function sets its own `Cache-Control: no-store` and
+`Cross-Origin-Resource-Policy: same-origin`, and `functions/_middleware.ts` writes
+`Cache-Control: no-store` by hand on its own `503` (line 94) and `403` (line 96) — which is the
+plan's "the middleware annotates the limit" claim, cited there at line 56, where there is no such
+annotation and no mention of `_headers` anywhere in that file.
+
+**Changed.** `docs/PHASE0_DEPLOY_PLAN.md`, three places: the section 3 row "Niente cache immutabile"
+now carries both quotes and says what the `!` line buys (without it the module would be served
+`public, max-age=31536000, immutable, no-store`), the paragraph under the table answers the Functions
+question in the page's own words and drops the stale line citation, and section 1's note keeps the
+served headers unverified while the rules that produce them are read. `docs/DEPLOY.md`, one bullet:
+"the header rules" states the merge and the detach instead of "unverified", and adds that `_headers`
+does not reach `/phase0/disc`. `.github/workflows/phase0-build.yml`, the comment above the appended
+rule, same correction. No rule, no header and no build behaviour changes: the appended rule is the
+documented remedy either way.
+
+**Not done, and why.** Nothing was deployed and no credential was used: the page says what the
+*rules* mean, not what a deployment *serves*, so every `curl` in that table is still the check for
+step 11. One thing the page does not state — and only the first deploy can show — is whether a `!`
+inside the same rule that then re-sets the header is applied in order, since the page's example
+detaches in a separate rule; both documents now say so rather than implying the question is closed.
+On the VPS, without a build: `python3 -m unittest discover -s scripts/tests` (Ran 207 tests,
+`OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (266 tracked files, clean) and
+`python3 scripts/check_docs.py --submodule …/upstream/melee-unlocked` (210 citations in 4 documents,
+0 violations). CI decides the rest.
