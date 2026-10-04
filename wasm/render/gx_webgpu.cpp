@@ -7,8 +7,9 @@
 // So the colour a frame clears to is on screen from the NEXT XFB copy on, as on the console. A colour
 // copy to RAM is kept as a texture that draws sampling its address read (gxw_copy, as upstream).
 //
-// Geometry is drawn with WGSL generated per draw state by gx_wgsl.cpp -- the TEV, texture coordinate
-// generation, colour channels, alpha test and fog -- then GX's blend state (gxw_draw). Lighting and
+// Geometry is drawn with gx_wgsl.cpp's WGSL -- the TEV, texture coordinate generation, colour
+// channels, alpha test and fog; one shader that reads each draw's state from uniforms (g_specialized
+// says why) -- then GX's blend state (gxw_draw). Lighting and
 // indirect texturing remain open (gx_wgsl.cpp says what each falls back to). Clears cover the whole
 // EFB; half-scale, Y scale, gamma, copy formats and depth copies remain open (priorities 2-5).
 //
@@ -137,6 +138,44 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
       gpu.batchSubmits++;
       for (const t of gpu.copyGarbage) t.destroy();
       gpu.copyGarbage = [];
+    };
+    // The pipeline of a draw state, made the first time it is drawn (gxw_draw) or prepared
+    // (gxw_prepare). Blending follows Dolphin's BlendingState::Generate (gxw_draw says how).
+    gpu.pipelineFor = (lines, cull, zmode, blendBits, efbAlpha, shader) => {
+      const d = gpu.device;
+      const key = [lines,cull,zmode,blendBits,efbAlpha,shader].join(":");
+      let pipeline = gpu.pipelines.get(key);
+      if (pipeline) return pipeline;
+      const module = gpu.shaders.get(shader);
+      if (!module) throw new Error("no WGSL for shader " + shader);
+      // GX source and destination factors, in BLENDMODE order.
+      const src = ["zero","one","dst","one-minus-dst","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
+      const dst = ["zero","one","src","one-minus-src","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
+      const noDstAlpha = (f) => efbAlpha ? f : f === "dst-alpha" ? "one" : f === "one-minus-dst-alpha" ? "zero" : f;
+      let blend;
+      if (blendBits & 1) {
+        const c = blendBits & 0x800 ? {srcFactor:"one",dstFactor:"one",operation:"reverse-subtract"}
+          : {srcFactor:noDstAlpha(src[(blendBits >>> 8) & 7]),dstFactor:noDstAlpha(dst[(blendBits >>> 5) & 7]),operation:"add"};
+        blend = {color:c, alpha:c};
+      }
+      // GPUColorWrite: RED|GREEN|BLUE = 7, ALPHA = 8.
+      const writeMask = (blendBits & 8 ? 7 : 0) | (blendBits & 16 && efbAlpha ? 8 : 0);
+      const attributes = [
+        {shaderLocation:0,offset:0,format:"float32x3"},
+        {shaderLocation:1,offset:12,format:"float32x3"},
+        {shaderLocation:2,offset:24,format:"unorm8x4"},
+        {shaderLocation:3,offset:28,format:"unorm8x4"}];
+      for (let i=0;i<8;i++) attributes.push({shaderLocation:4+i,offset:32+8*i,format:"float32x2"});
+      for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
+      // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
+      pipeline = d.createRenderPipeline({label:key,layout:gpu.pipelineLayout,
+        vertex:{module,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
+        fragment:{module,entryPoint:"fs",targets:[blend ? {format:gpu.format,blend,writeMask} : {format:gpu.format,writeMask}]},
+        primitive:{topology:lines ? "line-list":"triangle-list",frontFace:"cw",cullMode:["none","back","front","back"][cull]},
+        depthStencil:{format:"depth32float",depthWriteEnabled:!!((zmode&1)&&(zmode&16)),
+          depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}});
+      gpu.pipelines.set(key,pipeline);
+      return pipeline;
     };
     gpu.backendDevice = gpu.device;
     return 1;
@@ -335,9 +374,10 @@ EM_JS(int, gxw_texture_count, (), {
 // collection): 1024, above the 817 distinct keys of a measured 2400-frame run (<=164 per frame),
 // where 256 missed 2383 times. The pipeline key keeps only the bits the pipeline descriptor reads.
 //
-// The shader is gx_wgsl.cpp's, generated in C++ once per shader uid: `shader` names it, and `code`
-// is its WGSL the first time that uid is drawn (0 afterwards). The TEV, texgen, colour channels,
-// alpha test and fog are in it; what stays here is the pipeline state around it.
+// The shader is gx_wgsl.cpp's: `shader` names it, and `code` is its WGSL the first time it is drawn
+// (0 afterwards, and always for the one shader, which gxw_prepare made). The TEV, texgen, colour
+// channels, alpha test and fog are in it; what stays here is the pipeline state around it
+// (gpu.pipelineFor).
 //
 // Blending. `bp` is the draw's BP register file. Until this was read, no pipeline had blend state,
 // so every fragment was written: a quad whose vertex alpha the blend makes faint was drawn opaque.
@@ -370,39 +410,7 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
     const efbAlpha = (HEAPU32[(bp >> 2) + 0x43] & 7) === 1 ? 1 : 0;   // RGBA6_Z24
     // Enable, colour/alpha update, and -- only when blending -- the factors and subtract.
     const blendBits = blendmode & 1 ? blendmode & 0xFF9 : blendmode & 0x18;
-    const key = [lines,cull,zmode,blendBits,efbAlpha,shader].join(":");
-    let pipeline = gpu.pipelines.get(key);
-    if (!pipeline) {
-      const module = gpu.shaders.get(shader);
-      if (!module) throw new Error("no WGSL for shader " + shader);
-      // GX source and destination factors, in BLENDMODE order.
-      const src = ["zero","one","dst","one-minus-dst","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
-      const dst = ["zero","one","src","one-minus-src","src-alpha","one-minus-src-alpha","dst-alpha","one-minus-dst-alpha"];
-      const noDstAlpha = (f) => efbAlpha ? f : f === "dst-alpha" ? "one" : f === "one-minus-dst-alpha" ? "zero" : f;
-      let blend;
-      if (blendBits & 1) {
-        const c = blendBits & 0x800 ? {srcFactor:"one",dstFactor:"one",operation:"reverse-subtract"}
-          : {srcFactor:noDstAlpha(src[(blendBits >>> 8) & 7]),dstFactor:noDstAlpha(dst[(blendBits >>> 5) & 7]),operation:"add"};
-        blend = {color:c, alpha:c};
-      }
-      // GPUColorWrite: RED|GREEN|BLUE = 7, ALPHA = 8.
-      const writeMask = (blendBits & 8 ? 7 : 0) | (blendBits & 16 && efbAlpha ? 8 : 0);
-      const attributes = [
-        {shaderLocation:0,offset:0,format:"float32x3"},
-        {shaderLocation:1,offset:12,format:"float32x3"},
-        {shaderLocation:2,offset:24,format:"unorm8x4"},
-        {shaderLocation:3,offset:28,format:"unorm8x4"}];
-      for (let i=0;i<8;i++) attributes.push({shaderLocation:4+i,offset:32+8*i,format:"float32x2"});
-      for (let i=0;i<3;i++) attributes.push({shaderLocation:12+i,offset:96+4*i,format:"uint8x4"});
-      // 15 attributes, 108-byte stride: within WebGPU's baseline 16 / 2048 limits.
-      pipeline = d.createRenderPipeline({label:key,layout:gpu.pipelineLayout,
-        vertex:{module,entryPoint:"vs",buffers:[{arrayStride:108,attributes}]},
-        fragment:{module,entryPoint:"fs",targets:[blend ? {format:gpu.format,blend,writeMask} : {format:gpu.format,writeMask}]},
-        primitive:{topology:lines ? "line-list":"triangle-list",frontFace:"cw",cullMode:["none","back","front","back"][cull]},
-        depthStencil:{format:"depth32float",depthWriteEnabled:!!((zmode&1)&&(zmode&16)),
-          depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}});
-      gpu.pipelines.set(key,pipeline);
-    }
+    const pipeline = gpu.pipelineFor(lines, cull, zmode, blendBits, efbAlpha, shader);
     // Room in the batch's arenas, or submit the batch first: a batch is flushed, never
     // overwritten. Textures already bound for this draw were marked with the batch just
     // submitted; they move to the next one, which this draw opens. The arena that overflowed
@@ -490,6 +498,27 @@ EM_JS(int, gxw_flush, (), {
   const gpu = Module["gxWebgpu"];
   try { gpu.flush(); return 1; }
   catch(error) { gpu.recordFailure("submit", error); gpu.failure = "submit: " + error; return 0; }
+});
+
+// Whether this page asked for the generated shader of each draw state (Module.gxWebgpu.specializedShaders)
+// instead of the one shader: wasm/render/pixel_pipeline_check.mjs draws the same states both ways.
+EM_JS(int, gxw_specialized, (), {
+  const gpu = Module["gxWebgpu"]; return gpu && gpu.specializedShaders ? 1 : 0;
+});
+
+// The one shader (gxw::generate_uber_wgsl) as shader `shader`, and the pipeline of the draw state the
+// game draws most: blending SRC_ALPHA / INV_SRC_ALPHA, colour update, no depth test. Made when the
+// backend attaches, before the game's first frame, so that the shader's compile -- on WebKit a Metal
+// library compiled inside the GPU process -- is paid while the game loads rather than by the first
+// frame that draws. Every other pipeline has the same WGSL; measured on the operator's iPhone, such a
+// pipeline costs 1-8 ms, against ~450 ms for a new WGSL text (docs/PROGRESS.md). 1 on success.
+EM_JS(int, gxw_prepare, (int shader, const char* code), {
+  const gpu = Module["gxWebgpu"];
+  try {
+    gpu.shaders.set(shader, gpu.device.createShaderModule({label:"gx shader " + shader, code:UTF8ToString(code)}));
+    gpu.pipelineFor(0, 0, 0, 1 | 8 | (5 << 5) | (4 << 8), 0, shader);
+    return 1;
+  } catch(error) { gpu.recordFailure("prepare", error); gpu.failure = "prepare: " + error; return 0; }
 });
 
 EM_JS(int, gxw_pipeline_count, (), {
@@ -582,10 +611,19 @@ bool upload_textures(const gx::DrawCall& dc) {
   return true;
 }
 
-// The shaders gxw_draw has been given: gx_wgsl.cpp's uid of the draw state each was generated from,
-// and the id gxw_draw knows it by. A uid is generated and its WGSL handed over once; every later
-// draw with the same uid names the id alone. Bounded by the shader state the game uses (the
-// pipelines map in gxw_draw holds as many), like the pipelines themselves.
+// Which shader a draw uses. Normally the one shader (gxw::generate_uber_wgsl), id UBER_SHADER, given to
+// gxw_draw when the backend attaches (gxw_prepare): a draw state is then uniform values (its uid in
+// rows 122-140), and a new one creates at most a pipeline, never a new WGSL text.
+//
+// With `specialized` (gxw_specialized), each draw state's own generated WGSL instead: g_shaders maps
+// gx_wgsl.cpp's uid of the draw state each was generated from to the id gxw_draw knows it by. A uid
+// is generated and its WGSL handed over once; every later draw with the same uid names the id alone.
+// Bounded by the shader state the game uses (the pipelines map in gxw_draw holds as many). That was
+// the backend until the one shader: on the operator's iPhone each new text blocked the GPU process
+// for ~450 ms, 31 freezes and 56 s of them in a 149 s session (docs/PROGRESS.md). It stays as the
+// reference the one shader is checked against (wasm/render/pixel_pipeline_check.mjs).
+constexpr int UBER_SHADER = 0;
+bool g_specialized = false;
 std::unordered_map<gxw::ShaderUid, int, gxw::ShaderUidHash> g_shaders;
 
 // Baseline projection/viewport rules transcribed from gx_shader.cpp:671-748 and
@@ -633,16 +671,21 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
   u[105][0]=float(gx::bits(alpha_compare,0,8)); u[105][1]=float(gx::bits(alpha_compare,8,8));
   gxw::fill_tev_rows(dc,u);
   const gxw::ShaderUid uid=gxw::make_uid(dc);
-  auto shader=g_shaders.find(uid);
+  gxw::fill_uid_rows(uid,u);
+  int shader=UBER_SHADER;
   std::string code;
-  if (shader==g_shaders.end()) {
-    shader=g_shaders.emplace(uid,int(g_shaders.size())+1).first;
-    code=gxw::generate_wgsl(uid);
+  if (g_specialized) {
+    auto found=g_shaders.find(uid);
+    if (found==g_shaders.end()) {
+      found=g_shaders.emplace(uid,int(g_shaders.size())+1).first;
+      code=gxw::generate_wgsl(uid);
+    }
+    shader=found->second;
   }
   if (!upload_textures(dc)) return false;
   return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
                   &u[0][0],gxw::uniform_rows(uid),r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),
-                  dc.bp.reg,shader->second,code.empty() ? nullptr : code.c_str());
+                  dc.bp.reg,shader,code.empty() ? nullptr : code.c_str());
 }
 
 
@@ -695,6 +738,8 @@ WebGpuBackend* g_webgpu = nullptr;
 extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_attach() {
   if (g_webgpu) return 1;
   if (!gxw_open(gx::EFB_WIDTH, gx::EFB_HEIGHT, gxw::MAX_ROWS)) return 0;
+  g_specialized=gxw_specialized();
+  if (!g_specialized && !gxw_prepare(UBER_SHADER, gxw::generate_uber_wgsl().c_str())) return 0;
   g_webgpu = new WebGpuBackend();
   host::gx_set_backend(g_webgpu);
   return 1;
@@ -911,6 +956,77 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
       }
     }
+    // 52-55: the one shader against the generated ones. wasm/render/pixel_pipeline_check.mjs draws each
+    // twice, once with Module.gxWebgpu.specializedShaders, and requires the same bytes in every cell.
+    // 48 pseudo-random draw states, as 49's, each a quad filling its own 80x80 cell of the 640x480
+    // frame (column k % 8, row k / 8), with its own vertex colours, normals and texture coordinates,
+    // eight textures of different formats, materials and an alpha test that passes half the time.
+    // Each geometry is another set of states (its own seed).
+    if (geometry>=52 && geometry<=55) {
+      uint32_t seed=0x9E3779B9u*uint32_t(geometry);
+      auto next=[&seed]() { seed=seed*1664525u+1013904223u; return seed>>8; };
+      auto unit=[&next]() { return float(next()%2001)/1000.0f-1.0f; };   // -1..1
+      static const uint32_t formats[]={0,1,2,3,4,5,6,14};
+      for(int i=0;i<8;i++) { dc.textures[i]=fixture_texture(formats[i],false,false,true); dc.textures[i].mode0=1u | 1u<<2 | 16u; }
+      for(int k=0;k<48;k++) {
+        gx::DrawCall r=dc;
+        const uint32_t stages=1+next()%16;
+        r.bp.reg[gx::BP_GENMODE]=1 | 1u<<4 | (stages-1)<<10;
+        for(uint32_t i=0;i<stages;i++) { r.bp.reg[gx::BP_TEV_COLOR_ENV+2*i]=next(); r.bp.reg[gx::BP_TEV_ALPHA_ENV+2*i]=next(); }
+        for(int i=0;i<8;i++) { r.bp.reg[gx::BP_TREF+i]=next(); r.bp.reg[gx::BP_TEV_KSEL+i]=next(); }
+        r.bp.reg[gx::BP_ALPHACOMPARE]=next()%2 ? next() : (7u<<16)|(7u<<19);
+        r.bp.reg[gx::BP_FOGPARAM3]=next(); r.bp.reg[gx::BP_FOGRANGE]=next()&0x7FF;
+        r.bp.reg[gx::BP_FOGPARAM0]=next(); r.bp.reg[gx::BP_FOGBMAGNITUDE]=next(); r.bp.reg[gx::BP_FOGBEXPONENT]=next()&31;
+        r.bp.reg[gx::BP_FOGCOLOR]=next();
+        r.xf_regs[0x09]=next()%3;
+        for(int i=0x0A;i<=0x0D;i++) r.xf_regs[i]=next()<<8 | next()%256;
+        for(int i=0x0E;i<=0x11;i++) r.xf_regs[i]=next()&0x7FFF;
+        r.xf_regs[0x3F]=next()%9; r.xf_regs[0x12]=next()&1;
+        for(int i=0;i<8;i++) { r.xf_regs[0x40+i]=next()&0x3FFFF; r.xf_regs[0x50+i]=next()&0x13F; }
+        r.components=next()&(gx::VB_HAS_COL0 | gx::VB_HAS_COL1 | gx::VB_HAS_NRM0 | 0xFFu*gx::VB_HAS_UV0 | 0x1FEu);
+        for(auto& c:r.tev_colors) for(auto& v:c) v=int32_t(next()%2048)-1024;
+        for(auto& c:r.tev_kcolors) for(auto& v:c) v=int32_t(next()%256);
+        for(auto& f:r.postMatrices) f=unit();
+        // Eight lights (gx_wgsl.cpp's light block layout): colour, cosine and distance attenuation
+        // (distance terms kept away from zero), position, direction.
+        for(auto& L:r.lights) {
+          const uint32_t colour=next()<<8 | next()%256; std::memcpy(L+12,&colour,4);
+          float f[12]; for(int k=0;k<12;k++) f[k]=2*unit();
+          for(int k=3;k<6;k++) f[k]=0.1f+std::fabs(f[k]);
+          std::memcpy(L+16,f,sizeof f);
+        }
+        r.first_vertex=frame.vertices.size(); r.first_segment=frame.segments.size(); r.segment_count=1;
+        // Clip x is position x + 0.5 (position matrix 3), y is position y.
+        const float x0=float(k%8)*0.25f-1.0f, y0=1.0f-float(k/8)*(1.0f/3.0f), w=0.25f, h=1.0f/3.0f;
+        const float quad[6][2]={{x0,y0},{x0+w,y0},{x0,y0-h},{x0+w,y0},{x0+w,y0-h},{x0,y0-h}};
+        for(int i=0;i<6;i++) {
+          gx::Vertex v{}; v.pos[0]=quad[i][0]-0.5f; v.pos[1]=quad[i][1]; v.pos[2]=-0.3f+0.2f*unit(); v.posmtx=3;
+          for(auto& n:v.nrm) n=unit();
+          for(auto& c:v.col0) c=uint8_t(next());
+          for(auto& c:v.col1) c=uint8_t(next());
+          for(auto& uv:v.uv) { uv[0]=1.5f*unit()+0.5f; uv[1]=1.5f*unit()+0.5f; }
+          for(auto& m:v.texmtx) m=60;
+          frame.vertices.push_back(v);
+        }
+        frame.segments.push_back({r.first_vertex,6,r.primitive});
+        frame.draws.push_back(r); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
+      }
+    }
+    // 56: a lit colour channel (gx_wgsl.cpp's gen_lighting / gen_light). Channel 0's colour: the
+    // material register (200), lit by light 0 with the ambient register (50), diffuse clamped, no
+    // attenuation. Light 0 is grey 100 far along +z, so the normal (0,0,1) faces it: the accumulator
+    // is 50 + round(100 * 0.99999976) = 150, and the channel (200 * (150 + (150 >> 7))) >> 8 = 117.
+    // The TEV outputs the channel. A backend that does not light the channel draws the material, 200.
+    if (geometry==56) {
+      dc.xf_regs[0x0E]=1u<<1 | 1u<<2 | 2u<<7;
+      dc.xf_regs[0x0A]=0x323232FFu; dc.xf_regs[0x0C]=0xC8C8C8FFu;
+      const uint32_t colour=0x646464FFu; std::memcpy(dc.lights[0]+12,&colour,4);
+      const float light[12]={1,0,0, 1,0,0, 0,0,1000, 0,0,1};
+      std::memcpy(dc.lights[0]+16,light,sizeof light);
+      dc.bp.reg[gx::BP_TEV_COLOR_ENV]=10 | 15u<<4 | 15u<<8 | 15u<<12 | 1u<<19;
+      dc.bp.reg[gx::BP_TEV_ALPHA_ENV]=5u<<4 | 7u<<7 | 7u<<10 | 7u<<13 | 1u<<19;
+      dc.bp.reg[gx::BP_TREF]=0;                                        // no texture, channel 0
+    }
     // 50: an EFB copy to a texture (gxw_copy). A green triangle; a 4x4 copy from inside it to guest
     // address 0x100000, with a clear; then the triangle again, white, textured from that address.
     // The probe reads the copied green. A backend that samples guest RAM there draws the snapshot
@@ -948,7 +1064,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
       frame.segments.push_back({dc.first_vertex,3,dc.primitive});
       frame.draws.push_back(dc); frame.commands.push_back({gx::FrameCommand::Draw,uint32_t(frame.draws.size()-1)});
     }
-    for(int layer=0;layer<(geometry==49 || geometry==50 || geometry==51 ? 0 : 3);layer++) {
+    for(int layer=0;layer<(geometry>=49 && geometry<=55 ? 0 : 3);layer++) {
       if (geometry>=10) {
         static const uint32_t formats[]={0,1,2,3,4,5,6,8,9,10,14};
         const bool alpha_probe=geometry>=40 && geometry<=44;
