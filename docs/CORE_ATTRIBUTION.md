@@ -1,4 +1,4 @@
-# Core attribution — experiment in progress
+# Core attribution — measured result (2026-10-04)
 
 Baseline: 1844f42. No optimization has been applied. Renderer and web play code are excluded.
 The 14.9 ms unassigned phone interval is outside this investigation.
@@ -13,8 +13,11 @@ C++, DOL, disc and traces stay in RUNNER_TEMP and are removed. Three trials quan
 Native attribution is evidence about this workload, not an iPhone timing prediction or a
 four-player benchmark. Inclusive stack percentages must not be summed.
 
-Pending: measured attribution, reducibility bounds, and project decision. The existing
-600-frame unnamed V8 hotspot (53%, PROGRESS.md) is insufficient to name the simulation bottleneck.
+Result: no demonstrated factor-three path. Simulation/GX changes alone are bounded below
+2× on profiled phone E/F, even at zero cost for both blocks. Native sampling identifies
+guest display preparation and vertex decoding as the priorities, but proves no production
+speedup. The complete-project possibility remains unproven, not mathematically impossible.
+The old 600-frame unnamed V8 hotspot is superseded here by named, in-match native samples.
 
 ## Phone attribution already available (2026-10-04)
 
@@ -147,3 +150,77 @@ Amdahl limit of this intervention scope, not a theorem that Melee in a browser i
 The checkpoint digest proves equality of the entire CPU/RAM/ARAM/event trace in this replay.
 A future GX optimization additionally needs identical decoded vertices/state/texture snapshots
 (or an equivalent rendering oracle): a visually wrong decoder can preserve CPU checkpoints.
+
+## Resolved GX attribution — run 37225043674
+
+[CI run](https://github.com/isDemetrio/melee-web/actions/runs/37225043674), source
+`9e0661c`; [persistent selected aggregates](measurements/core-native-37225043674.json).
+Same AMD EPYC 7763 model, separate runner. Only `gx_core.cpp` gains `-g` for inline
+symbolization; no optimization was added. Do not call the time difference from the first
+runner a speedup. Three unprofiled means: **7.375/7.401/7.423 ms**; paired sampled means:
+**7.528/7.464/7.500 ms**, respectively +2.07%, +0.85%, +1.04%. Unprofiled p99:
+**7.920/7.856/7.827 ms**. 8,537 retained samples. All six full checkpoint traces pass again:
+**12 successful replays across the two measurement runs**.
+
+The following uses **nested stack counts**, not the coarse heuristic area labels. Each
+subtraction removes a strict descendant: `write_fifo > drain_fifo > parse_command >
+decode_vertices`. This avoids assigning vector constructors to the wrong owner just because
+they mention `gx::` in their symbol. Percentages refer to the whole native headless interval.
+Approximate native ms are the fraction times the paired unprofiled mean, not phase timers.
+
+| Disjoint GX portion | % of native headless interval | Approx. native ms/frame |
+| --- | ---: | ---: |
+| FIFO feeding outside drain | 5.55–5.74% | 0.412–0.423 |
+| Drain management outside command parser | 1.61–2.05% | 0.119–0.152 |
+| Command parsing and callees excluding vertices (includes draw/snapshot) | 11.45–12.22% | 0.847–0.901 |
+| Vertices including allocation/conversion | **13.76–14.13%** | **1.021–1.046** |
+| **Entire write_fifo call tree** | **32.92–33.57%** | **2.444–2.476** |
+
+`drain_fifo` alone is **27.38–27.83%**; vertices are **50.26–51.15% of that subtree**.
+The FIFO-feeding row lies *outside* the phone's timed decoder scope, so it belongs to the
+phone's non-decode bucket. These native proportions must not be multiplied by the phone's
+15.5 ms decode field, which additionally includes the WebGPU backend and profiling clocks.
+
+Inside vertices, `read_component` costs **4.91–5.48% of total inclusive**, nested in the
+vertex row (about 0.36–0.41 native ms); vertex vector initialization/resize about **2.1%**
+(also nested). Descriptor construction `build_desc` costs **1.12–1.58% inclusive** (0.083–0.116
+native ms). These resolve why naming only `parse_command` was insufficient.
+`record_draw` has both inline and outlined spellings in perf; their separate counts are
+retained, **not summed**, because the report does not preserve their sample-set union.
+Use the phone's exclusive record/texture/observer timers for those exact boundaries.
+
+Simulation attribution is confirmed: `HSD_JObjDisp` **72.80–73.19% inclusive**;
+`SetupEnvelopeModelMtx` **15.51–15.80%**, `PSMTXConcat` **6.86–7.69%**, all overlapping.
+Largest exclusive helpers: `st32` **7.86–8.41%**, `ld32` **4.90–5.30%**, exact software
+FMA **2.22–2.35%**. Guest/helper group **59.99–61.39%**, HLE/audio/OS **5.44–5.85%**.
+The percentages identify targets; x86/GCC does not predict JavaScriptCore's optimizer.
+
+Additional bounded opportunities from the resolved decoder:
+
+- Specializing format conversion has at most the **1.02–1.05 native ms** vertex container
+  available. A hypothetical 2× acceleration of the entire container saves **0.51–0.52 ms**,
+  about **7% of headless core**, not 3×. This is a scenario, not an observed improvement.
+- Descriptor caching has an elimination ceiling **0.08–0.12 native ms**, conditional on
+  preserving every CP/VAT invalidation. Some lookup/invalidation work would remain.
+- Zero initialization cannot simply be removed: missing vertex attributes must keep their
+  defined defaults. Matrix indices, endian formats, signed values and fractional conversion
+  must remain identical. Cache keys based only on vertex/texture addresses are insufficient.
+
+## Decision and limits
+
+**No-go for claiming 60 fps / four players on the evidence measured here. No: a 3× core gain
+cannot come from the requested simulation/GX scope alone in phone E/F.** Even eliminating it
+leaves 22.16–22.33 ms against the 13 ms core budget; at least another **9.16–9.33 ms** would
+have to disappear elsewhere in that already-impossible zero-cost scenario. E/F actually need
+**3.37–3.40×**, not merely 3×, to reach 13 ms.
+
+**Whether the whole project can eventually achieve it is still undetermined.** The renderer
+and the separate 14.9 ms attribution are intentionally outside this work; neither receives a
+savings assumption. No four-player load is measured. Therefore these results justify a
+no-go on the present performance promise, not an assertion that all future implementations
+are impossible. A numeric irreversible floor for simulation has not been established.
+
+No behavior optimization is delivered: no clear positive A/B gain was established. Delivered
+instead: repeatable CI attribution, named hotspots, reduction ceilings, and 12 identical
+2400-checkpoint replays. Renderer and `web/src/play/*` are unchanged. No builds/tests ran on
+the VPS, no game data was committed, no merge was performed, no Monid calls/costs occurred.
