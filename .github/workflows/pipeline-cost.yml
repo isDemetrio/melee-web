@@ -1,0 +1,65 @@
+name: Pipeline cost (specialized vs one shader)
+
+# A measurement, not a gate: what a draw state costs to compile and to draw with the generated
+# shader of each state (main) against the one shader of #101 (loop) and #104 (unrolled), on the
+# same states and rows. scripts/bench/pipeline-cost/ says how. Chromium on Linux is SwiftShader (the
+# CI harness's GPU); macOS runners give Metal, under Chromium and under WebKit.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['measure/pipeline-cost']
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, engine: chromium }
+          - { os: macos-15, engine: chromium }
+          - { os: macos-15, engine: webkit }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Upstream GX headers
+        run: git submodule update --init --depth 1 upstream/melee-unlocked
+      - name: Generate the states and both one-shader texts
+        run: |
+          set -e
+          B=scripts/bench/pipeline-cost
+          for c in 0eee79e938653a4184f6a1f7494b39a8558f422a 35538f2f5ae5ad3e5900b5884318a65ea19da5d2; do
+            mkdir -p "$RUNNER_TEMP/$c"
+            git show "$c:wasm/render/gx_wgsl.cpp" > "$RUNNER_TEMP/$c/gx_wgsl.cpp"
+            git show "$c:wasm/render/gx_wgsl.h" > "$RUNNER_TEMP/$c/gx_wgsl.h"
+            c++ -std=c++17 -O1 -I"$RUNNER_TEMP/$c" -Iupstream/melee-unlocked/port/runtime/gx \
+              -o "$RUNNER_TEMP/$c/gen" "$B/gen.cpp" "$RUNNER_TEMP/$c/gx_wgsl.cpp"
+          done
+          "$RUNNER_TEMP/0eee79e938653a4184f6a1f7494b39a8558f422a/gen" > "$RUNNER_TEMP/states.json"
+          "$RUNNER_TEMP/0eee79e938653a4184f6a1f7494b39a8558f422a/gen" uber > "$RUNNER_TEMP/loop.json"
+          "$RUNNER_TEMP/35538f2f5ae5ad3e5900b5884318a65ea19da5d2/gen" uber > "$RUNNER_TEMP/unrolled.json"
+          wc -c "$RUNNER_TEMP"/*.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright
+        run: |
+          cd "$RUNNER_TEMP" && npm init -y >/dev/null && npm install playwright@latest >/dev/null
+          npx playwright install --with-deps ${{ matrix.engine }}
+      - name: Measure
+        timeout-minutes: 30
+        run: |
+          cd "$RUNNER_TEMP"
+          node "$GITHUB_WORKSPACE/scripts/bench/pipeline-cost/run.mjs" ${{ matrix.engine }} states.json loop.json unrolled.json out.json
+          node "$GITHUB_WORKSPACE/scripts/bench/pipeline-cost/summary.mjs" out.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pipeline-cost-${{ matrix.os }}-${{ matrix.engine }}
+          path: ${{ runner.temp }}/out.json

@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>pipeline cost</title>
+<script>
+window.runBench = (data) => new Promise((resolve) => {
+  const w = new Worker('bench-worker.js');
+  w.onmessage = (e) => { resolve(e.data); w.terminate(); };
+  w.onerror = (e) => resolve({ fatal: 'worker error: ' + e.message });
+  w.postMessage(data);
+});
+</script>
