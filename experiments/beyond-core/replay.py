@@ -22,3 +22,18 @@ for trial in range(3):
     results['pairs'].append(pair)
     (tmp/'results/replay.json').write_text(json.dumps(results, indent=2)+'\n')
 print(json.dumps(results, indent=2))
+
+# Separate instrumented runs: hashing/decoding is deliberately outside performance trials.
+results['texture_decode']={}
+for variant in ('baseline', 'candidate'):
+    out=tmp/'replay'
+    env=dict(os.environ, MELEE_GFX_ORACLE=str(tmp/f'{variant}-graphics.csv'))
+    subprocess.run(['bash', str(root/'scripts/phase0/run_checkpoints.sh'), str(tmp/variant/'melee_core_node.js'), str(tmp/'disc.iso'), str(out), '2400'], env=env, check=True)
+    assert hashlib.sha1((out/'trace.csv').read_bytes()).hexdigest() == 'c79c53b9cdf81426fa0277e7497a69e55bc5f571'
+    line=next(s for s in (out/'stdout.log').read_text().splitlines() if s.startswith('graphics decode: '))
+    results['texture_decode'][variant]=json.loads(line.removeprefix('graphics decode: '))
+a=(tmp/'baseline-graphics.csv').read_bytes()
+b=(tmp/'candidate-graphics.csv').read_bytes()
+assert a and a==b, 'ordered graphics output differs'
+results['graphics']={'equal':True,'frames':len(a.splitlines()),'sha256':hashlib.sha256(a).hexdigest()}
+(tmp/'results/replay.json').write_text(json.dumps(results,indent=2)+'\n')

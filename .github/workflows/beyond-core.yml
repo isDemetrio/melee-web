@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [inline, simd, hot]
+        variant: [inline, simd, hot, rgba8]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -39,6 +39,7 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
+          python3 experiments/beyond-core/install_oracle.py
           npm install -g binaryen@132.0.0
           mkdir -p "$RUNNER_TEMP/results"
           lscpu > "$RUNNER_TEMP/results/machine.txt"
@@ -46,7 +47,7 @@ jobs:
             flags=''
             if [ "$label" = candidate ]; then
               python3 experiments/beyond-core/configure.py "$VARIANT"
-              if [ "$VARIANT" = simd ]; then flags='-msimd128'; fi
+              if [ "$VARIANT" = simd ] || [ "$VARIANT" = rgba8 ]; then flags='-msimd128'; fi
             fi
             emcmake cmake -S wasm/core -B "$RUNNER_TEMP/build" -G Ninja \
               -DMELEE_GEN="$RUNNER_TEMP/generated" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \

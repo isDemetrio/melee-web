@@ -24,5 +24,12 @@ elif variant == 'hot':
         for p in hot:
             f.write(f'\nset_source_files_properties("{p}" PROPERTIES COMPILE_OPTIONS "-O2")\n')
     print('hot translation units:', len(hot), [p.name for p in hot])
+elif variant == 'rgba8':
+    p = root / 'upstream/melee-unlocked/port/runtime/gx/gx_texture.cpp'
+    s=p.read_text()
+    assert s.count('void decode_texture(')==1
+    s=s.replace('void decode_texture(', 'void decode_reference(')
+    s += '\n#define decode_texture decode_reference\n#include "experiments/kernels/rgba8.h"\n#undef decode_texture\nnamespace gx {\nvoid decode_texture(const uint8_t* src,uint32_t w,uint32_t h,uint32_t fmt,const uint8_t* pal,uint32_t pf,std::vector<uint8_t>& out) { decode_candidate(src,w,h,fmt,pal,pf,out); }\n}\n'
+    p.write_text(s)
 elif variant not in ('baseline', 'simd'):
     raise ValueError(variant)
