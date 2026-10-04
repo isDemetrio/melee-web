@@ -22,7 +22,6 @@ jobs:
         include:
           - { os: ubuntu-latest, engine: chromium }
           - { os: macos-15, engine: chromium }
-          - { os: macos-15, engine: safari }
           - { os: macos-26, engine: safari }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40

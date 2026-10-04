@@ -1,6 +1,15 @@
 <!doctype html><meta charset="utf-8"><title>pipeline cost</title>
 <script>
-window.runBench = (data) => new Promise((resolve) => {
+window.runBench = async (data) => {
+  // Whether the page itself (not only the worker) gets an adapter: tells a worker gap from no GPU.
+  let main;
+  try { const a = await navigator.gpu?.requestAdapter(); main = { gpu: !!navigator.gpu, adapter: !!a, info: a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture } : null }; }
+  catch (e) { main = { gpu: !!navigator.gpu, error: String(e) }; }
+  const r = await runWorker(data);
+  r.mainThread = main;
+  return r;
+};
+const runWorker = (data) => new Promise((resolve) => {
   const w = new Worker('bench-worker.js');
   w.onmessage = (e) => { resolve(e.data); w.terminate(); };
   w.onerror = (e) => resolve({ fatal: 'worker error: ' + e.message });
