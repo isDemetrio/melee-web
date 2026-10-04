@@ -29,8 +29,10 @@ The prior controlled run [37169761081](https://github.com/isDemetrio/melee-web/a
 completed specialized and constant-fragment variants; original, constant-stages
 (`stages = 1u`) and no-continue timed out after 30 s, with compilation messages
 empty and the worker responsive. This excludes a missing source increment and
-makes the fragment path the target; it does not identify a particular compiler
-pass or prove an infinite machine-code loop rather than slow compilation.
+motivated trying the fragment loop first; it does not identify a particular
+compiler pass or prove an infinite machine-code loop rather than slow compilation.
+The constant fragment also makes colour varyings unused: an optimizer can prune
+vertex lighting, so that variant alone does not exonerate the vertex loops.
 
 The candidate workaround changes only generation of the fragment TEV schedule:
 
@@ -46,6 +48,27 @@ packing. Text remains independent of draw state and is compiled at backend attac
 The expanded text is 72,674 bytes; phone compilation latency has not been measured.
 No test, expected pixel, timeout or replay oracle has been modified.
 
-Validation: pending the single authorized Actions build/harness cycle, then the
-existing 2400-checkpoint replay against SHA-1
-`c79c53b9cdf81426fa0277e7497a69e55bc5f571` if the build succeeds.
+## Single-cycle result: incomplete, not ready to merge
+
+[Run 37181434299](https://github.com/isDemetrio/melee-web/actions/runs/37181434299),
+source `35538f2f5ae5ad3e5900b5884318a65ea19da5d2`:
+
+- WASM compilation, linking, wasm-opt, all 144 release guest TUs, Node smoke and
+  the spike page build passed.
+- The formerly stalled transformed-triangle test passed in 8.0 s. All subsequent
+  individual geometry/texture cases through test 34 passed, mostly in 8.0 s.
+- Test 35, `resources stay bounded through 384 synchronous textured draws`, failed
+  after 1.8 minutes (the existing result wait is 110 s). No final resource result
+  was printed. The run was cancelled at 06:14:21 UTC to bound cost; the browser
+  step began at 06:07:27. The final assertion stack was not printed before cancel.
+- The complete harness did **not** pass. Pixel-pipeline/lighting differential
+  checks did not run. No private Node artifact was produced, and the 2400-checkpoint
+  replay did not run. The required SHA-1 remains
+  `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; parity is **unverified** for this branch.
+
+This is evidence that removing the dynamic TEV loop restores completion for the
+original simple draws, without any change to their state or expected pixels.
+It is not evidence of acceptable throughput or of a specific compiler defect.
+The expanded schedule is an incomplete workaround, left in a draft PR, not a
+production-ready correction. Resolving the repeated-draw failure without the
+expanded shader's cost remains outstanding. No second CI attempt was made.

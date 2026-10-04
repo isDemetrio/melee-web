@@ -3062,5 +3062,11 @@ Read/printed the original WGSL: all four loops terminate; TEV count is 1..16,
 not zero or unbounded. Prior constant-stages and no-continue probes also stalled.
 `docs/LIT_TEV_FLOW.md` records the evidence and its limits. Candidate change:
 expand only the TEV loop into 16 uniform-guarded blocks, retaining the one shader
-and lit channels. No harness changes. One Actions build/harness cycle pending,
-followed by the unchanged private replay only if the build passes. No merge.
+and lit channels. No harness changes. The single build cycle,
+[37181434299](https://github.com/isDemetrio/melee-web/actions/runs/37181434299),
+compiled/linked and built the page. The previously stalled triangle now passes
+in 8 s, as do all individual geometry/texture cases through test 34. Test 35
+(384 synchronous draws) failed after 1.8 min; the run was cancelled to bound cost.
+The full harness and pixel-pipeline checks are not green. No Node artifact or
+2400-checkpoint replay; parity is unverified. Candidate stays draft: remove the
+remaining repeated-draw bottleneck before acceptance. One CI attempt, no merge.
