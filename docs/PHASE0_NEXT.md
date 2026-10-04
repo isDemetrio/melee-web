@@ -968,7 +968,9 @@ compile time; `-O1` already peaked at 7.0 GiB with 4 jobs, so start `-O2` with t
 | S11 `-O2` (only if not GO) | S9 | unknown, possibly D2 | as S4 |
 
 About **280 runner-minutes** without S11, all on the standard runner. The repository is
-private, so these count against the plan's Actions minutes.
+**public** (verified 2026-10-04, `docs/OPEN_QUESTIONS.md` Q11), so the standard runners consume
+no monthly allowance; the minutes are avoided for time and signal, never for a bill that was not
+being spent (`docs/AGENT_RULES.md`, "CI budget").
 
 ## 7. Items that could not be verified today
 

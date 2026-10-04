@@ -3165,3 +3165,54 @@ flipping it is the operator's call, not a worker session's.
 no game data is involved. On the VPS: `python3 -m unittest discover -s scripts/tests` (207 tests,
 `OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (264 tracked files, clean) and
 `bash scripts/tests/test_deploy_guard.sh` (all guards hold). CI decides the rest.
+
+## 2026-10-04 — the three places that still said the repository is private (cron, `docs/private-repo-leftovers`)
+
+**Why this and not something else.** The deploy plan's remaining steps are the operator's
+(`docs/PHASE0_DEPLOY_PLAN.md` section 6: O1, O2-O9, M1/M2/M5, Q10(a), Q10(b)), and the renderer,
+which is the plan's only autonomous work, is held by five open branches whose touched files are the
+renderer's own set (`wasm/render/gx_webgpu.cpp`, `wasm/render/gx_wgsl.cpp`, `wasm/render/gx_wgsl.h`,
+`wasm/render/pixel_pipeline_check.mjs`, `web/src/spike/gpu.ts`, `web/src/spike/main.ts`,
+`web/src/spike/worker.ts`, `web/tests/spike/render.spec.ts` — PR #70, #100, #101, #104 and
+`fix/lit-hang`, which also holds `.github/workflows/phase0-build.yml`), so it is not this session's to
+touch either. What was left is the tail of the previous session's correction (PR #105,
+`docs/repo-is-public`): that session fixed five places which stated the repository was private, and
+recorded that an earlier draft of it had left three others unfixed. A sweep for the claim found
+exactly three still standing, all in live documents rather than in dated log entries:
+`docs/PHASE0_NEXT.md` section 6, `docs/PHASE0_TASKS.md` D3 and `docs/PLAN_BREAKDOWN.md` R2.
+
+**Verified 2026-10-04, each fact with the check that produced it.** `gh api
+repos/isDemetrio/melee-web --jq '{visibility,private}'` answers
+`{"private":false,"visibility":"public"}`, and `curl -s -o /dev/null -w '%{http_code}'
+https://api.github.com/repos/isDemetrio/melee-web` answers `200` with no token, so the repository is
+readable anonymously. Every `runs-on` in `.github/workflows/` is one of `ubuntu-latest`,
+`ubuntu-24.04` or `ubuntu-24.04-arm` — all standard GitHub-hosted labels, whose minutes GitHub's
+billing documentation states are free in public repositories (`docs/AGENT_RULES.md`, "CI budget",
+which cites the page). The three sentences were found by unwrapping each document before matching
+(`tr '\n' ' ' < docs/PHASE0_NEXT.md`, and the same over the other two): one of them, in
+`docs/PLAN_BREAKDOWN.md`, is wrapped across two lines, which is why a line-based search had missed it.
+
+**Changed.** `docs/PHASE0_NEXT.md` section 6: "The repository is private, so these count against the
+plan's Actions minutes" becomes the verified fact plus the reason that survives it — the standard
+runners consume no monthly allowance, and the minutes are avoided for time and signal. The 280
+runner-minutes it reports are untouched. `docs/PHASE0_TASKS.md` D3: the clause "in a private repo" is
+dropped from the sentence about what `docs/AGENT_RULES.md` rule 1 does and does not cover; D3's
+decision, its narrowest-form reasoning and its reversal are unchanged. `docs/PLAN_BREAKDOWN.md` R2:
+"A GitHub-hosted runner for a private repo has limited RAM, disk and a 6 h job cap, and private-repo
+minutes are metered" becomes the same runner limits without the visibility, plus the fact that the
+minutes are not metered here, so what bites is RAM, disk and the cap. No number changes in any of the
+three: the numbers were right, the consequence drawn from them was not.
+
+**Not done, and why.** No simulation, renderer, workflow or deploy file is touched; no build and no
+game data is involved. The dated entries of this file are left as written — they record what was
+believed on their day, and the 2026-10-04 entry above them is the correction. One sentence was
+deliberately not touched, and the reason: `docs/PHASE0_TASKS.md` D3 says of the uploaded build
+products "nothing is public", and whether an Actions artifact of a **public** repository is readable
+outside its collaborators is not something this session verified; that is a claim about the exposure
+of game-derived data, so it belongs with Q11 and O1, not with a sweep for a false sentence about
+visibility. On the VPS, all without a build: `python3 scripts/check_docs.py` (210 citations in 4
+documents, 0 violations), `python3 -m unittest discover -s scripts/tests` (Ran 207 tests,
+`OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (264 tracked files, clean),
+`bash scripts/tests/test_deploy_guard.sh` (all guards hold), `bash
+scripts/tests/test_phase0_runner.sh` (44 guards hold), `bash scripts/tests/test_device_test_serve.sh`
+(6 cases passed). CI decides the rest.

@@ -341,7 +341,7 @@ item 4). Cost of waiting: none until P0-04 has measured; decide on its numbers.
 
 **D3 — May game-derived build products be cached or kept as artifacts?** Guest objects and
 the `.wasm` are derived from the DOL. `docs/AGENT_RULES.md` rule 1 forbids committing them
-but says nothing about Actions caches or artifacts in a private repo. Allowing a short-lived
+but says nothing about Actions caches or artifacts. Allowing a short-lived
 cache of guest objects keyed on the image digest saves the full P0-04 compile on every run
 (duration unknown until measured); refusing costs CI time only, not correctness.
 
