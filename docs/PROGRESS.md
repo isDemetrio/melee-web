@@ -3382,9 +3382,12 @@ counts; `grep -rln "from '.*assets/" web/src` finds only `web/src/spike/disc-cac
 imports `sha256Hex`, so the shell itself still reads the disc and the asset path is not exercised
 end to end.
 
-**Changed.** `docs/DEPLOY.md`, seven places: the opening paragraph, the §1 core row, the §3 comment
-on the assets step, the first and third bullets of §5, the §6 bullet on the address format and the
-sentence closing §6. Each correction names the check above and says what the text claimed before
+**Changed.** `docs/DEPLOY.md`, eight places: the opening paragraph, the §1 core row, the §2 point 8
+paragraph on what gates the shell deploy, the §3 comment on the assets step, the first and third
+bullets of §5, the §6 bullet on the address format and the sentence closing §6. The §2 correction
+cites the job's own notice — `deploy skipped: credentials are present but the shell deploy is off`,
+run `37222100034` — because the credentials being set means the old sentence, true only "while they
+are absent", now describes nothing that can happen. Each correction names the check above and says what the text claimed before
 2026-10-04. `docs/PHASE0_DEPLOY_PLAN.md`, three places: §1's closing sentence, §3's paragraph on
 the address format, and §3's "Accesso protetto" row, which now carries the wildcard measurement,
 the apex limit and what follows from it (O6 must cover the apex before the production shell is

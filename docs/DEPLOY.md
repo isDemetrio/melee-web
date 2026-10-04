@@ -57,7 +57,16 @@ from that binding; the blobs themselves are **not** served through Pages.
 8. **GitHub**: repository secrets `CLOUDFLARE_API_TOKEN` (Pages + R2 + Realtime TURN
    permissions) and `CLOUDFLARE_ACCOUNT_ID`; repository variable `CF_PAGES_PROJECT`
    (`melee-web`). The deploy job in `.github/workflows/ci.yml` skips itself with a notice
-   while they are absent, so the workflow is green before they exist.
+   while they are absent, so the workflow is green before they exist. **They are present
+   now (2026-10-04, the note at the top of this file), and the job still skips** — on the
+   repository variable `CF_DEPLOY_SHELL`, which gates publishing the shell separately
+   because a shell that cannot load a game should not sit on the project's production
+   address. The run's own notice says so: `deploy skipped: credentials are present but the
+   shell deploy is off; set the repository variable CF_DEPLOY_SHELL=true when the shell can
+   actually load a game` (run `37222100034`, job *Cloudflare Pages (skips without
+   credentials)*). That gate is also why `https://melee-web.pages.dev/` answers Pages'
+   `404` "Deployment Not Found": `docs/PHASE0_DEPLOY_PLAN.md` section 3 records it in the
+   "Accesso protetto" row, and section 1 carries the measurement.
 
 ## 3. The deploy path, in order
 
