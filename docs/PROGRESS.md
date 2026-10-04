@@ -3416,3 +3416,15 @@ del prossimo report operatore; `beyond-core.yml` avvia A/B WASM con gate complet
 inlining memoria, SIMD automatico e ottimizzazione selettiva dei guest hotspot.
 Risultati ancora pendenti; thread/renderer e oracolo grafico da completare.
 Nessun file `wasm/render/*` modificato, nessuna build/test sul VPS, nessun merge.
+
+## 2026-10-04 — oltre GX, secondo pezzo misurato
+
+#113: kernel RGBA8 SIMD 3,7× sul batch sintetico, 1386 confronti esatti; due worker
+pagano sui batch grandi e peggiorano su una texture. Tre ripetizioni confermano.
+Backend reale Oz/O2 su Chromium software: nessun guadagno CPU ripetibile (0,907× /
+0,787×), pixel identici; non trasferire i tempi GPU software al telefono.
+Raw e limiti in [BEYOND_CORE.md](BEYOND_CORE.md). Core A/B con 2400 checkpoint e
+oracolo grafico ancora nel run 37229144679; accessi inline, SIMD, hot-O2, RGBA8.
+Il nuovo script residuo è testato dalla CI; il report operatore aggiornato manca.
+Preparato carico separato a quattro porte, da validare tramite quattro HUD reali.
+Banco memoria corretto dopo OOM mascherato da tee: nessun dato dal run fallito.

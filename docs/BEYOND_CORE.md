@@ -105,3 +105,51 @@ prossimo report: un solo cohort completo, segni preservati, errore di riconcilia
 media/p95/max dei valori assoluti. `closed` significa attribuzione temporale, **non**
 che la componente grande sia lavoro eliminabile. I test includono +15/−15 ms che
 si cancellano nella media firmata e un vecchio report privo dei nuovi campi.
+
+## Renderer: primo A/B reale, run 37229538592
+
+[CI](https://github.com/isDemetrio/melee-web/actions/runs/37229538592),
+[raw](measurements/beyond-renderer-37229538592/renderer.json). Nessun file in
+`wasm/render/*` modificato. Backend e generatore WGSL originali compilati Oz/O2;
+texture decoder mantenuto O2 su entrambi. Un host sintetico esegue soltanto i sei
+registri BP di copia/clear della selftest originale; non pretende di essere il core.
+Chromium 141 con software WebGPU, 3 coppie AB/BA/AB, 100 iterazioni × 3 draw ciascuna.
+Tempi **per intero batch**, non per frame del gioco:
+
+| Carico | CPU Oz (ms) | CPU O2 (ms) | API intercettate Oz/O2, medie ms |
+| --- | --- | --- | --- |
+| texture riusata | 40,7 / 32,6 / 42,6 | 45,5 / 43,9 / 38,4 | 8,23 / 13,60 |
+| snapshot nuova ogni draw | 46,4 / 44,1 / 59,3 | 70,0 / 66,0 / 54,4 | 18,40 / 23,53 |
+
+Rapporti delle medie CPU: **0,907×** su cache hit, **0,787×** con snapshot nuove.
+Nessun vantaggio ripetibile: **zero risparmio accreditato**, non una strada da portare
+in produzione sulla base di questo banco. Le misure API sono inclusive dell'overhead
+delle sonde; il residuo CPU meno API comprende C++ e JS, non soltanto C++.
+Tutti i 12 campioni danno pixel `[128,64,32,192]`, nessun errore WebGPU.
+
+Il drain dopo submit varia **196–328 ms** per 300 draw: il runner software rende
+questa misura inadatta a predire la GPU iPhone. Il tempo CPU non esaurisce il costo
+end-to-end e il drain non va sommato come costo per ogni singolo frame. Il banco usa
+un target texture e non misura composizione/display del telefono. Per quest'ultimo
+restano i confini esterni del report operatore, non un numero inventato.
+
+I limiti contano: selftest sintetica con un segmento/draw, non il carico del gioco
+con più segmenti. Non prova che il riuso di preparazione per DrawCall sia inutile;
+prova solo che il cambio Oz→O2 misurato qui non dimostra un guadagno. L'altro agente
+mantiene la proprietà del renderer. Il lavoro di decodifica texture ha invece un
+prototipo SIMD separato in verifica sul replay reale.
+
+## Ripetizione kernel e errore del banco memoria
+
+Run [37229535867](https://github.com/isDemetrio/melee-web/actions/runs/37229535867),
+[tre JSON](measurements/beyond-kernels-37229535867/): RGBA8/64 seriale
+**1,782–1,791 ms**, SIMD **0,482–0,487 ms**, pool **0,949–0,978 ms**, combinazione
+**0,288–0,346 ms**. Runner diverso: non confrontare questi valori assoluti col run
+precedente. Vantaggio SIMD ripetuto; thread piccoli ancora peggiorano.
+
+Il banco memoria in quel run **non ha prodotto una misura**: OOM perché il modulo
+aveva meno dei 24 MiB necessari per la RAM emulata. Il workflow risultava verde
+perché `tee` mascherava il fallimento Node. Correzione: 64 MiB iniziali e
+`set -euo pipefail`; JSON vuoti esclusi dai risultati. Nessun guadagno attribuito
+al banco fallito. Questa anomalia non riguarda il workflow replay, che usa
+`subprocess.run(check=True)` e verifica ogni digest.

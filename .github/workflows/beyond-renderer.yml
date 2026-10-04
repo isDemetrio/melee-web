@@ -1,10 +1,6 @@
 name: Beyond core — actual renderer compiler A-B
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'experiments/renderer/**'
-      - '.github/workflows/beyond-renderer.yml'
 permissions:
   contents: read
 jobs:

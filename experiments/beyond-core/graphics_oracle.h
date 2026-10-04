@@ -11,7 +11,7 @@
 namespace experiment {
 class GraphicsOracle {
   FILE* file=nullptr;
-  double decode_ms=0;uint64_t decode_bytes=0,frames=0,match_frames=0;
+  double decode_ms=0;uint64_t decode_bytes=0,frames=0,match_frames=0,four_hud_frames=0;
   std::vector<uint8_t> bytes;
   using TextureKey=std::tuple<std::shared_ptr<const gx::TextureSnapshot>,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t>;
   std::map<TextureKey,std::array<uint8_t,20>> cache;
@@ -21,10 +21,11 @@ class GraphicsOracle {
   void blob(const std::vector<uint8_t>& v) {add(uint64_t(v.size()));bytes.insert(bytes.end(),v.begin(),v.end());}
 public:
   GraphicsOracle() {if(auto* p=std::getenv("MELEE_GFX_ORACLE")){file=std::fopen(p,"w");if(!file)std::abort();}}
-  ~GraphicsOracle() {if(file){std::fclose(file);std::printf("graphics decode: {\"decode_ms\":%.6f,\"decoded_bytes\":%llu,\"unique_keys\":%zu,\"frames\":%llu,\"match_frames\":%llu}\n",decode_ms,(unsigned long long)decode_bytes,cache.size(),(unsigned long long)frames,(unsigned long long)match_frames);}}
+  ~GraphicsOracle() {if(file){std::fclose(file);std::printf("graphics decode: {\"decode_ms\":%.6f,\"decoded_bytes\":%llu,\"unique_keys\":%zu,\"frames\":%llu,\"match_frames\":%llu,\"four_hud_frames\":%llu}\n",decode_ms,(unsigned long long)decode_bytes,cache.size(),(unsigned long long)frames,(unsigned long long)match_frames,(unsigned long long)four_hud_frames);}}
   void frame(const gx::Frame& f) {
     if(!file)return;
     ++frames;if(f.scene_major==2 && f.scene_minor==2)++match_frames;
+    if(f.scene_major==2 && f.scene_minor==2 && std::all_of(f.hud_players.begin(),f.hud_players.end(),[](const auto& h){return h.present;}))++four_hud_frames;
     bytes.clear();add(f.sequence);add(f.scene_major);add(f.scene_minor);add(f.discontinuous);
     add(uint64_t(f.vertices.size()));
     for(auto& v:f.vertices){add(v.pos);add(v.nrm);add(v.col0);add(v.col1);add(v.uv);add(v.posmtx);add(v.texmtx);}

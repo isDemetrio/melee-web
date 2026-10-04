@@ -1,0 +1,111 @@
+# Four-port experimental workload. Canonical parity script remains unchanged.
+# M7 lockstep parity script. Boot path from boot_to_menu.txt (A dismisses the "no memory card"
+# prompt, START skips the intro movie/title once each) plus a fixed frame gap that both builds
+# were measured reaching GameModeKind GM_MENU (1) inside (vanilla at retrace 403, native at 702
+# per run-source/resume-items -- the numbers differ but the gap between presses is wide enough
+# that both land the same button on the same screen). The menu entries after @scene 1:0 are
+# relative to the retrace where the host first observes GM_MENU. The @match section is silent
+# until the VS match reports frame 1, then its entries follow simulated match frames.
+# This keeps the CSS/SSS sequence aligned despite different opening-movie and disc-read timing,
+# and keeps the in-match inputs aligned despite different host retrace counts before match start.
+#
+# Compare with: python tools/lockstep_compare.py native.csv vanilla.csv --align match
+130 A
+140
+400 START
+410
+520 START
+530
+700 START
+710
+
+@scene 1:0
+# From here, frame 0 = the retrace GM_MENU was first observed. Move to VS Mode, confirm, pick
+# characters on two human ports, confirm CSS, pick a stage, confirm SSS.
+100 sy=-127
+106
+160 A
+168
+230 A
+238
+240 p=2
+240 p=3
+240 p=4
+400 sx=61 sy=127
+400 p=2 sx=61 sy=127
+400 p=3 sx=61 sy=127
+400 p=4 sx=61 sy=127
+430
+430 p=2
+430 p=3
+430 p=4
+440 A
+440 p=2 A
+440 p=3 A
+440 p=4 A
+450
+450 p=2
+450 p=3
+450 p=4
+500 START
+510
+700 sy=100
+740
+760 A
+770
+
+# Match: walk in and jab (Ness p1, Pikachu p2 per the CSS picks above).
+@match
+@loop 360
+0 p=1 
+0 p=2 
+0 p=3 
+0 p=4 
+30 p=1 sx=80
+30 p=2 sx=80
+30 p=3 sx=80
+30 p=4 sx=80
+70 p=1 A
+70 p=2 A
+70 p=3 A
+70 p=4 A
+75 p=1 
+75 p=2 
+75 p=3 
+75 p=4 
+100 p=1 X
+100 p=2 X
+100 p=3 X
+100 p=4 X
+105 p=1 
+105 p=2 
+105 p=3 
+105 p=4 
+150 p=1 sx=-80
+150 p=2 sx=-80
+150 p=3 sx=-80
+150 p=4 sx=-80
+190 p=1 B
+190 p=2 B
+190 p=3 B
+190 p=4 B
+195 p=1 
+195 p=2 
+195 p=3 
+195 p=4 
+230 p=1 cx=127
+230 p=2 cx=127
+230 p=3 cx=127
+230 p=4 cx=127
+235 p=1 
+235 p=2 
+235 p=3 
+235 p=4 
+280 p=1 L
+280 p=2 L
+280 p=3 L
+280 p=4 L
+300 p=1 
+300 p=2 
+300 p=3 
+300 p=4 

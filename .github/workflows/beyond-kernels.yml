@@ -21,11 +21,12 @@ jobs:
           version: ${{ env.EMSDK_VERSION }}
       - name: Build and measure exact kernels in WASM
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/results"
           scripts/apply_patches.sh
           for opt in Oz O2; do
             em++ experiments/kernels/memory.cpp -I. -Iwasm/compat -Iupstream/melee-unlocked/port/runtime/ppc \
-              -std=c++17 "-$opt" -ffp-contract=off -fno-fast-math -sENVIRONMENT=node \
+              -std=c++17 "-$opt" -ffp-contract=off -fno-fast-math -sENVIRONMENT=node -sINITIAL_MEMORY=64MB \
               -o "$RUNNER_TEMP/memory.js"
             node "$RUNNER_TEMP/memory.js" | tee "$RUNNER_TEMP/results/memory-$opt.json"
           done
