@@ -3464,3 +3464,61 @@ On the VPS, without a build: `python3 -m unittest discover -s scripts/tests` (Ra
 `OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (266 tracked files, clean) and
 `python3 scripts/check_docs.py --submodule …/upstream/melee-unlocked` (210 citations in 4 documents,
 0 violations). CI decides the rest.
+
+## 2026-10-04 — the plan's §3 asked two questions the repository and the documentation had already
+answered (cron, `cron/f6-deploy-o-rows`)
+
+**Why this and not something else.** Every autonomous step of `docs/PHASE0_DEPLOY_PLAN.md` section
+6 is done or held by the operator (O1, O2–O9, M1/M2/M5, Q10(a), Q10(b)), and the renderer — the
+plan's only other autonomous work — is in flight on the branches that own its files (PR #70, #100,
+#101, #104, #112, #113, #117). What was left is the plan's own §3 requirement table, the table the
+previous cron session worked in: two of its rows still carried a "**da verificare**" that needs no
+account, no credential, no device and no decision, and one of the two had already been answered
+*inside this repository* two days earlier. That session left PR #115 (the two `_headers` rows of
+the same table) green, mergeable and unmerged — its run ended between the pull request and the
+merge — so this run landed it first (`gh pr merge 115`, merge commit `29b22f1`, read back with `gh
+pr view 115` → `MERGED`) and then took the rows that were still open.
+
+**Verified 2026-10-04, each fact with the check that produced it.** *O8 — does `wrangler.toml`
+suffice for the preview's binding?* It already does, and the answer is in the repository:
+`wrangler.toml` declares `[[env.preview.r2_buckets]]` for `ASSETS_R2` and `PHASE0_DISC` (commit
+`824cdd6`, on `main`), and `docs/DEPLOY.md` §6 records the measurement of 2026-10-02 — declaring
+only `[env.preview.vars]` made the preview's configuration explicit, the top-level
+`[[r2_buckets]]` stopped reaching it, and the published preview answered `503 {"error":"Disc
+storage unavailable"}`, the status `functions/phase0/[[path]].ts` returns when `env.PHASE0_DISC`
+is absent. The documentation states the same rule, and `r2_buckets` is among the keys it applies
+to: "Non-inheritable keys are configurable at the top-level, but, if any one non-inheritable key
+is overridden for any environment (for example, `[[env.production.kv_namespaces]]`), all
+non-inheritable keys must also be specified in the environment configuration and overridden"
+(`developers.cloudflare.com/pages/functions/wrangler-configuration/`, "Non-inheritable keys", read
+today). *O2 — does R2 ask for a card?* Yes, on the documentation's own terms: R2 is added to an
+account as a **subscription** rather than switched on — "You need a Cloudflare account with an R2
+subscription ... Complete the checkout flow to add an R2 subscription to your account"
+(`developers.cloudflare.com/r2/get-started/`, read today) — and "If you currently subscribe to any
+add-on services, Cloudflare must always have a payment method on file"
+(`developers.cloudflare.com/billing/get-started/update-billing-info/`), with add-on subscriptions
+billed monthly to the designated payment method
+(`developers.cloudflare.com/billing/understand/billing-policy/`). §1's free-tier row of the same
+plan already said a card is needed (2026-10-01), so the two rows of one document disagreed with
+each other; the free tier itself is unchanged: 10 GB-month of storage, 1 M Class A operations, 10
+M Class B, free egress.
+
+**Changed.** `docs/PHASE0_DEPLOY_PLAN.md`, three places: §1's closing paragraph, which listed the
+preview's R2 binding among the things only a deploy can show; the §3 row O2; the §3 row O8. Each
+says what it claimed before and names the check above. No number changes: the 25 MiB per-file
+limit, the module's 16,323,255 bytes at `-Oz`, the ISO's size and hash, the 88 chunks and the free
+tier were already right; what was stale were two questions the plan was still asking.
+`docs/PROGRESS.md` is this entry. No workflow, script, renderer, simulation or test-semantics file
+is touched, and `phase0-build.yml`'s path filter does not list `docs/`, so this pull request costs
+no WASM core build.
+
+**Not done, and why.** Nothing was deployed, uploaded or built and no Cloudflare credential was
+used: every external fact above came from an anonymous page read. The bucket does not exist yet
+(O3), so whether the disc Function serves the disc end to end is still unverified, and both rows
+now say that instead of claiming a deploy would show it. On the VPS, all without a build: `python3
+-m unittest discover -s scripts/tests` (Ran 207 tests, `OK (skipped=1)`), `python3
+scripts/check_no_game_data.py --all` (271 tracked files, clean), `python3 scripts/check_docs.py
+--submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` (210 citations in 4
+documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh` (all deploy and upload guards
+hold), `bash scripts/tests/test_phase0_runner.sh` (44 checkpoint runner guards hold) and `bash
+scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
