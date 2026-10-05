@@ -1,0 +1,75 @@
+name: Four-player load — two and four human controllers
+# Builds the shipped core with experiments/four-player/oracle.h spliced into the runner's
+# native/real_fifo.cpp (never into git), then runs the same match with two and with four human
+# controllers and writes per-frame counts and timings. The oracle is a reader: it cannot change
+# the guest, and every run gates its 2400-retrace trace against the project reference, so a
+# splice that perturbed the core would fail the job instead of reporting a number.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'experiments/four-player/**'
+      - '.github/workflows/four-player-load.yml'
+permissions:
+  contents: read
+concurrency:
+  group: four-player-load-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+      - name: Generate guest outside checkout
+        env:
+          GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
+        run: scripts/phase0/fetch_and_recompile.sh offline "$RUNNER_TEMP/generated"
+      - name: Build the node core with the four-player oracle
+        run: |
+          set -euo pipefail
+          python3 experiments/four-player/install_oracle.py
+          npm install -g binaryen@132.0.0
+          mkdir -p "$RUNNER_TEMP/results"
+          lscpu > "$RUNNER_TEMP/results/machine.txt"
+          emcmake cmake -S wasm/core -B "$RUNNER_TEMP/build" -G Ninja \
+            -DMELEE_GEN="$RUNNER_TEMP/generated"
+          cmake --build "$RUNNER_TEMP/build" --target melee_core_node --parallel 3
+          mkdir -p "$RUNNER_TEMP/module"
+          cp "$RUNNER_TEMP/build/melee_core_node.js" "$RUNNER_TEMP/module/"
+          # Same post-processing as phase0-build.yml's node module, so the core measured here is
+          # the shipped one plus a read-only hook.
+          wasm-opt --enable-bulk-memory --enable-mutable-globals \
+            --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
+            -O2 "$RUNNER_TEMP/build/melee_core_node.wasm" \
+            -o "$RUNNER_TEMP/module/melee_core_node.wasm"
+          node -e 'WebAssembly.compile(require("fs").readFileSync(process.argv[1])).then(() => console.log("module compiles")).catch(e => { console.error(e.message); process.exit(1); })' "$RUNNER_TEMP/module/melee_core_node.wasm"
+      - name: Read private disc
+        working-directory: ${{ runner.temp }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote --file "$RUNNER_TEMP/disc.iso"
+      - name: Two and four human controllers, same match
+        run: python3 experiments/four-player/measure.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: four-player-load
+          path: |
+            ${{ runner.temp }}/results/four-player.json
+            ${{ runner.temp }}/results/machine.txt
+          retention-days: 7
+      - name: Remove private data
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/build" "$RUNNER_TEMP/module" "$RUNNER_TEMP"/run-* "$RUNNER_TEMP"/*-graphics.csv "$RUNNER_TEMP"/*-frames.csv
