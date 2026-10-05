@@ -277,7 +277,8 @@ jobs:
           node wasm-probe/out/wasm/bench.js > wasm-probe/arm64-wasm-bench.json
           # The upstream tests and the shim test, unchanged, under this engine, from their own
           # directory, as ctest runs them in the x86 job.
-          for test in fma_shim_test port_load_test ram_watch_test ax_ucode_test texture_snapshot_test; do
+          for test in fma_shim_test port_load_test ram_watch_test ax_ucode_test texture_snapshot_test \
+                      texture_compare_test_O2 texture_compare_test_Oz; do
             echo "== ${test}"
             (cd wasm-probe/out/wasm && node "${test}.js")
           done

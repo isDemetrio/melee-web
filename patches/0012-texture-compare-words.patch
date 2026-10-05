@@ -1,0 +1,66 @@
+diff --git a/port/runtime/gx/texture_snapshot.h b/port/runtime/gx/texture_snapshot.h
+index df7730f..e71ccbf 100644
+--- a/port/runtime/gx/texture_snapshot.h
++++ b/port/runtime/gx/texture_snapshot.h
+@@ -23,6 +23,26 @@ struct TextureCaptureCounts {
+ inline bool texture_capture_counting = false;
+ inline TextureCaptureCounts texture_capture_counts{};
+ #endif
++// Whether `size` bytes at `a` and `b` are equal: the same answer as !memcmp(a, b, size). Not memcmp:
++// Emscripten's musl compares one byte at a time (~1.9 ns/byte, docs/RENDERER_JS_COST.md), and this
++// compare runs over every byte of a texture whose RAM-version shortcut missed. Eight bytes per load,
++// unaligned through memcpy, four loads per step; the last eight bytes are compared as one word that
++// overlaps the words before it, so no tail byte is left out and none is read past `size`.
++inline bool same_bytes(const uint8_t* a, const uint8_t* b, size_t size) {
++  if (size < 8) {
++    for (size_t i = 0; i < size; ++i)
++      if (a[i] != b[i]) return false;
++    return true;
++  }
++  const auto word = [](const uint8_t* p) { uint64_t v; std::memcpy(&v, p, 8); return v; };
++  size_t i = 0;
++  for (; i + 32 <= size; i += 32)
++    if ((word(a + i) ^ word(b + i)) | (word(a + i + 8) ^ word(b + i + 8)) |
++        (word(a + i + 16) ^ word(b + i + 16)) | (word(a + i + 24) ^ word(b + i + 24))) return false;
++  for (; i + 8 <= size; i += 8)
++    if (word(a + i) != word(b + i)) return false;
++  return word(a + size - 8) == word(b + size - 8);
++}
+ struct TextureSnapshot {
+   std::vector<uint8_t> image, palette;
+   uint64_t hash;
+@@ -47,13 +67,13 @@ class TextureSnapshotCache {
+     }
+ #endif
+     return s.image.size() == image_size && s.palette.size() == palette_size &&
+-        !std::memcmp(s.image.data(), image, image_size) &&
+-        (!palette_size || !std::memcmp(s.palette.data(), palette, palette_size));
++        same_bytes(s.image.data(), image, image_size) &&
++        (!palette_size || same_bytes(s.palette.data(), palette, palette_size));
+   }
+ public:
+   void clear() { entries.clear(); last_source.clear(); }
+   // End of a simulation frame. The cache survives it: Melee reuses the same texture memory every
+-  // frame, so keeping the entries makes an unchanged texture cost one vectorized memcmp instead of
++  // frame, so keeping the entries makes an unchanged texture cost one word-wise compare instead of
+   // a full rehash and copy (that rehash was costing whole milliseconds per simulation frame).
+   // Entries not seen for a few frames are dropped, so memory stays bounded.
+   void end_frame() {
+@@ -67,7 +87,7 @@ public:
+                                                 const uint8_t* palette, size_t palette_size,
+                                                 uint64_t source_version = 0,
+                                                 uint64_t palette_version = 0) {
+-    // Most draws reuse their source. Vectorized memcmp avoids rehashing
++    // Most draws reuse their source. A word-wise compare avoids rehashing
+     // every byte with a serial hash recurrence; changes still receive a new copy.
+     auto previous = last_source.find(image);
+ #ifdef MELEE_OFFLINE_COST
+@@ -89,7 +109,7 @@ public:
+     // memory in place, so any draw after such a write rendered the bytes from before it: a texture
+     // or palette animated within a single frame showed its previous contents, which is one way a
+     // draw ends up looking wrong for exactly one frame. Correctness needs the comparison, and the
+-    // comparison below is a vectorized memcmp of a few KB, so the cost is bounded.
++    // comparison below is a word-wise compare of a few KB, so the cost is bounded.
+     if (source_version && previous != last_source.end() &&
+         previous->second.source_version == source_version &&
+         previous->second.palette_version == palette_version &&
