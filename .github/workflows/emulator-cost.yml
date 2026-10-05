@@ -32,8 +32,10 @@ jobs:
         run: scripts/phase0/fetch_and_recompile.sh offline "$RUNNER_TEMP/generated"
       - name: Build named web module
         run: |
+          # Measurement-only name section: append after the normal -g0 link options.
+          printf '\ntarget_link_options(core_options INTERFACE --profiling-funcs)\n' >> wasm/core/CMakeLists.txt
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/build" -G Ninja \
-            -DMELEE_GEN="$RUNNER_TEMP/generated" -DCMAKE_EXE_LINKER_FLAGS=--profiling-funcs
+            -DMELEE_GEN="$RUNNER_TEMP/generated"
           cmake --build "$RUNNER_TEMP/build" --target melee_core_web --parallel 3
           npm install -g binaryen@132.0.0
           wasm-opt --enable-bulk-memory --enable-mutable-globals \
@@ -41,6 +43,7 @@ jobs:
             --enable-simd -g -O2 "$RUNNER_TEMP/build/melee_core_web.wasm" \
             -o "$RUNNER_TEMP/build/optimized.wasm"
           mv "$RUNNER_TEMP/build/optimized.wasm" "$RUNNER_TEMP/build/melee_core_web.wasm"
+          node -e 'const fs = require("fs"); const m = new WebAssembly.Module(fs.readFileSync(process.argv[1])); if (!WebAssembly.Module.customSections(m, "name").length) throw Error("missing profiling names");' "$RUNNER_TEMP/build/melee_core_web.wasm"
       - name: Install browser on runner
         working-directory: web
         run: |

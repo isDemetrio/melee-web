@@ -17,6 +17,7 @@ for await (const chunk of createReadStream(disc)) hash.update(chunk);
 if (hash.digest('hex') !== 'd4e70c064cc714ba8400a849cf299dbd1aa326fc') throw new Error('wrong disc revision');
 const files = new Map([
   ['/page.mjs', [resolve(here, 'page.mjs'), 'text/javascript']],
+  ['/worker.mjs', [resolve(here, 'worker.mjs'), 'text/javascript']],
   ['/fake-gpu.mjs', [resolve(here, 'fake-gpu.mjs'), 'text/javascript']],
   ['/core/melee_core_web.js', [resolve(coreDir, 'melee_core_web.js'), 'text/javascript']],
   ['/core/melee_core_web.wasm', [resolve(coreDir, 'melee_core_web.wasm'), 'application/wasm']],
@@ -49,23 +50,43 @@ try {
   for (const mode of ['trace', 'attached', 'headless']) {
     const page = await browser.newPage();
     page.setDefaultTimeout(300000);
+    const cdp = await page.context().newCDPSession(page);
+    let started = 0, finished = 0, profile, workerError;
+    let commandId = 0;
+    const pending = new Map();
+    const workerCommand = (sessionId, method, params = {}) => new Promise((resolve, reject) => {
+      const id = ++commandId;
+      pending.set(id, {resolve, reject});
+      cdp.send('Target.sendMessageToTarget', {sessionId, message: JSON.stringify({id, method, params})})
+        .catch(reject);
+    });
+    cdp.on('Target.receivedMessageFromTarget', ({message}) => {
+      const event = JSON.parse(message);
+      if (event.id && pending.has(event.id)) {
+        const p = pending.get(event.id); pending.delete(event.id);
+        if (event.error) p.reject(new Error(JSON.stringify(event.error))); else p.resolve(event.result);
+      }
+      if (event.method === 'Profiler.consoleProfileStarted' && event.params.title === 'inmatch') started++;
+      if (event.method === 'Profiler.consoleProfileFinished' && event.params.title === 'inmatch') {
+        finished++; profile = event.params.profile;
+      }
+    });
+    cdp.on('Target.attachedToTarget', async ({sessionId, targetInfo}) => {
+      try {
+        if (targetInfo.type === 'worker' && mode !== 'trace') {
+          await workerCommand(sessionId, 'Profiler.enable');
+          await workerCommand(sessionId, 'Profiler.setSamplingInterval', {interval: 100});
+        }
+        await workerCommand(sessionId, 'Runtime.runIfWaitingForDebugger');
+      } catch (error) { workerError = error; }
+    });
+    await cdp.send('Target.setAutoAttach', {autoAttach: true, waitForDebuggerOnStart: true, flatten: false});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(() => typeof globalThis.run === 'function');
-    const cdp = await page.context().newCDPSession(page);
-    let started = 0, finished = 0, profile;
-    if (mode !== 'trace') {
-      await cdp.send('Profiler.enable');
-      await cdp.send('Profiler.setSamplingInterval', {interval: 100});
-      cdp.on('Profiler.consoleProfileStarted', event => {
-        if (event.title === 'inmatch') started++;
-      });
-      cdp.on('Profiler.consoleProfileFinished', event => {
-        if (event.title === 'inmatch') { finished++; profile = event.profile; }
-      });
-    }
     const result = await page.evaluate(opts => globalThis.run(opts), {
       size, trace: mode === 'trace', attached: mode !== 'headless', profile: mode !== 'trace',
     });
+    if (workerError) throw workerError;
     const digest = result.trace ? createHash('sha1').update(result.trace).digest('hex') : null;
     if (mode === 'trace' && (digest !== 'c79c53b9cdf81426fa0277e7497a69e55bc5f571' || result.trace.trim().split('\n').length !== 2401))
       throw new Error(`2400 checkpoint oracle failed: ${digest}`);
