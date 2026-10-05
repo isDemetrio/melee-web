@@ -20,6 +20,8 @@ import { COLUMN, FLIGHT_CALL, FLIGHT_DRAWS, FLIGHT_FRAME, FLIGHT_MATCH, FLIGHT_P
 export const PLAY_STORAGE_KEY = 'melee-play-heartbeat';
 /** Frame rows kept for the report: the last ten minutes at 60 Hz. Totals cover the whole session. */
 export const ROWS_KEPT = 36_000;
+/** Frame rows in the stored record: the last two seconds at 60 Hz, as long as the page waits between writes. */
+export const STORED_ROWS = 120;
 /** No new frame for this long, with the page visible, is a freeze. */
 export const FREEZE_MS = 250;
 export const SLOW_FRAMES_KEPT = 200;
@@ -354,7 +356,8 @@ export class PlayReport {
     for (const note of meta.notes) this.note(note);
   }
 
-  onBatch(batch: PerfBatch): void {
+  /** True when the batch brings a WebGPU error not seen before: the page persists at once (session.ts). */
+  onBatch(batch: PerfBatch): boolean {
     const split = this.meta?.split ?? false;
     for (const record of batch.rows) {
       this.rows.push(record.row);
@@ -374,7 +377,9 @@ export class PlayReport {
     this.decoder.push(...batch.decoder);
     keepLast(this.decoder, ROWS_KEPT);
     this.totals = batch.totals;
-    for (const note of batch.notes) this.note(note);
+    let error = false;
+    for (const note of batch.notes) if (this.note(note) && note.startsWith('webgpu error')) error = true;
+    return error;
   }
 
   onBeat(beat: Beat, now: number): void {
@@ -397,8 +402,11 @@ export class PlayReport {
     keepLast(this.transfers, ROWS_KEPT);
   }
 
-  note(text: string): void {
-    if (!this.notes.includes(text)) this.notes.push(text);
+  /** False when the note was already there. */
+  note(text: string): boolean {
+    if (this.notes.includes(text)) return false;
+    this.notes.push(text);
+    return true;
   }
 
   end(reason: string, now: number): void {
@@ -543,6 +551,12 @@ export class PlayReport {
         freezes: { total: this.freezesTotal, last: this.freezes.slice(-20) },
         queue_probe: this.meta?.queueProbe ?? null,
       webgpu_methods: this.totals, notes: this.notes, errors,
+        // What a session that closed the page was doing in its last seconds (the bgra-probe crash,
+        // docs/PRESENTATION_COST.md): the mode, the probe's table so far, and the last frames as
+        // they were, probe canvas included.
+        presentation: presentationSummary(this.rows.slice(-600), this.meta?.presentation ?? null, this.display),
+        last_frames_csv: [FRAME_COLUMNS.join(','),
+          ...this.rows.slice(-STORED_ROWS).map((row) => row.map((cell) => cell ?? '').join(','))].join('\n'),
       },
     };
   }

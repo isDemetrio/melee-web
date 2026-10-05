@@ -52,6 +52,19 @@ export function presentationMode(name: string | undefined): PresentationMode {
   return PRESENTATION_MODES.find((mode) => mode.name === name) ?? PRESENTATION_MODES[0]!;
 }
 
+/**
+ * The modes the Game screen lists. The probe's two (`probe`, `bgra-probe`) only with `?probe` in the
+ * page's address: on the iPhone (Safari, iOS 18.7) bgra-probe closed the page soon after the match
+ * began, with no report, and nothing CI can run reproduces it (docs/PRESENTATION_COST.md, "The
+ * bgra-probe crash"). The probe is bgra-probe's only difference from bgra, and the same six canvases
+ * in `probe`. A tool that closes the page is worse than none, so it is not one tap away; whoever
+ * opens it on purpose gets the record of the session that died (report.ts, `stored`).
+ */
+export function offeredModes(search: string): readonly PresentationMode[] {
+  if (new URLSearchParams(search).has('probe')) return PRESENTATION_MODES;
+  return PRESENTATION_MODES.filter((mode) => mode.schedule !== 'probe');
+}
+
 /** Frames per block of `alternate`: about 6 s at 40 fps, so a 3-minute match is ~15 pairs. */
 export const ALTERNATE_BLOCK = 240;
 /** `present_mode`: as today, one frame late, and the first frame of a late block (shown at once). */

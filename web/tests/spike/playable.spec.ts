@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 test.use({ launchOptions: { args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] } });
 
@@ -23,8 +23,9 @@ interface Presentation {
  * of render.spec.ts's THE GAP -- so CI asserts the presentation, and the pixel test below runs
  * only where SPIKE_CANVAS_READBACK=1 says the GPU survives presenting.
  */
-async function playSelftest(page: Page, presentation = 'direct', alternateBlock?: number): Promise<Presentation> {
-  await page.addInitScript((block) => {
+async function playSelftest(page: Page, presentation = 'direct', alternateBlock?: number,
+  selftestFrames?: number): Promise<Presentation> {
+  await page.addInitScript(({ block, frames }) => {
     const NativeWorker = window.Worker;
     const probe = window as unknown as { padWords?: Int32Array; frames?: unknown[] };
     probe.frames = [];
@@ -44,18 +45,20 @@ async function playSelftest(page: Page, presentation = 'direct', alternateBlock?
         });
       }
       override postMessage(message: unknown, transfer?: Transferable[] | StructuredSerializeOptions): void {
-        const request = message as { pad?: SharedArrayBuffer; selftest?: boolean; alternateBlock?: number };
+        const request = message as { pad?: SharedArrayBuffer; selftest?: boolean; alternateBlock?: number;
+          selftestFrames?: number };
         if (request.pad) {
           request.selftest = true;
           if (block) request.alternateBlock = block;
+          if (frames) request.selftestFrames = frames;
           probe.padWords = new Int32Array(request.pad);
         }
         if (Array.isArray(transfer)) super.postMessage(message, transfer);
         else super.postMessage(message, transfer);
       }
     };
-  }, alternateBlock);
-  await page.goto('/');
+  }, { block: alternateBlock, frames: selftestFrames });
+  await page.goto('/?probe');
   await page.click('button:has-text("Game")');
   await page.selectOption('#game-presentation', presentation);
   await page.setInputFiles('#game-disc', { name: 'synthetic.iso', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
@@ -118,23 +121,49 @@ test('main page presents consecutive real core frames while worker stays synchro
   }
 });
 
+/** The report of the session just played, and its WebGPU errors (worker.ts notes each one). */
+async function savedReport(page: Page) {
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('#game-report')]);
+  const report = JSON.parse(await readFile(await download.path(), 'utf8'));
+  const errors = (report.notes as string[]).filter((note) => note.startsWith('webgpu error'));
+  return { report, errors };
+}
+
+/**
+ * The WebGPU errors of a `direct` session on a page of its own: the control an experiment is judged
+ * against. CI's Chromium loses the device after a canvas is presented (spike/gpu.ts, run
+ * 36898914442), and c22a70a let the experiments through by filtering that one message by name. That
+ * filter could not tell a loss the experiment causes from the browser's, and the iPhone then closed
+ * the page in bgra-probe (docs/PRESENTATION_COST.md, "The bgra-probe crash"). An experiment now passes
+ * only if every WebGPU error it reports is one the control reports too, in the same CI run.
+ */
+async function controlErrors(context: BrowserContext): Promise<string[]> {
+  const page = await context.newPage();
+  try {
+    await playSelftest(page);
+    const { errors } = await savedReport(page);
+    console.log(`direct control: ${JSON.stringify(errors)}`);
+    return errors;
+  } finally {
+    await page.close();
+  }
+}
+
 // The presentation experiments (web/src/play/presentation.ts) on a real device: an exception in their
 // paths ends the session with an error instead of code 0, and a validation error is a report note.
 const EXPERIMENTS: [presentation: string, block: number | undefined, modes: number[]][] = [
   ['bgra-probe', undefined, [0, 0, 0]], ['alternate', 1, [0, 2, 0]], ['bgra-alternate', 1, [0, 2, 0]]];
 for (const [presentation, block, modes] of EXPERIMENTS) {
-  test(`presentation ${presentation} presents every selftest frame`, async ({ page }) => {
+  test(`presentation ${presentation} presents every selftest frame`, async ({ page, context }) => {
     const { presented, frames } = await playSelftest(page, presentation, block);
     expect(frames.map(({ serial, width, height }) => ({ serial, width, height }))).toEqual(
       [1, 2, 3].map((serial) => ({ serial, width: 640, height: 480 })));
     expect(presented).toBe(3);
-    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#game-report')]);
-    const report = JSON.parse(await readFile(await download.path(), 'utf8'));
+    const { report, errors } = await savedReport(page);
     expect(report.presentation.mode).toBe(presentation);
-    // CI's Chromium loses the device when the task that presented a canvas ends (spike/gpu.ts, run
-    // 36898914442), which the selftest's wait for GPU events now reaches; any other error counts.
-    expect((report.notes as string[]).filter((note) => note.startsWith('webgpu error') &&
-      !note.includes('device lost: A valid external Instance reference no longer exists'))).toEqual([]);
+    console.log(`${presentation}: ${JSON.stringify(errors)}`);
+    const control = await controlErrors(context);
+    expect(errors.filter((error) => !control.includes(error))).toEqual([]);
     const [header, ...lines] = (report.frames_csv as string).split('\n');
     const columns = header!.split(',');
     const rows = lines.map((line) => Object.fromEntries(line.split(',').map((cell, i) => [columns[i], cell])));
@@ -144,6 +173,28 @@ for (const [presentation, block, modes] of EXPERIMENTS) {
     // The probe runs after every second frame: frame 2 only, of three.
     if (presentation.endsWith('probe')) expect(rows.map((row) => row.probe_px)).toEqual(['', '76800', '']);
   });
+}
+
+// The probe as the phone ran it, past its first canvas: 36 frames are 18 probes, three on each of the
+// six canvases (three sizes, two formats), against the main canvas in both formats.
+for (const presentation of ['probe', 'bgra-probe']) {
+  test(`presentation ${presentation} transfers every probe canvas without a WebGPU error the control lacks`,
+    async ({ page, context }) => {
+      const FRAMES = 36;
+      const { presented, frames } = await playSelftest(page, presentation, undefined, FRAMES);
+      expect(frames).toHaveLength(FRAMES);
+      expect(presented).toBe(FRAMES);
+      const { report, errors } = await savedReport(page);
+      console.log(`${presentation} x${FRAMES}: ${JSON.stringify(errors)}`);
+      const [header, ...lines] = (report.frames_csv as string).split('\n');
+      const columns = header!.split(',');
+      const rows = lines.map((line) => Object.fromEntries(line.split(',').map((cell, i) => [columns[i], cell])));
+      const probes = rows.filter((row) => row.probe_px !== '').map((row) => `${row.probe_px}/${row.probe_bgra}`);
+      expect(probes).toHaveLength(FRAMES / 2);
+      expect(new Set(probes).size).toBe(6);
+      const control = await controlErrors(context);
+      expect(errors.filter((error) => !control.includes(error))).toEqual([]);
+    });
 }
 
 test('the presented frames carry the selftest colour, on a GPU that survives presenting', async ({ page }) => {

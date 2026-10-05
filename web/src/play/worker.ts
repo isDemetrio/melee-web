@@ -32,6 +32,8 @@ interface PlayRequest {
   presentation?: string;
   /** Frames per `alternate` block; a test's 3-frame selftest asks for 1. */
   alternateBlock?: number;
+  /** Frames of the selftest; 3 when absent. A test asks for more to run every probe canvas. */
+  selftestFrames?: number;
 }
 /** How often the frame records are posted to the page; a slow frame is posted at once. */
 const FLUSH_MS = 250;
@@ -212,7 +214,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     if (event.data.selftest) {
       if (!core._gx_webgpu_selftest) throw new Error('Core has no renderer selftest');
       meter.start();
-      for (let frame = 1; frame <= 3; frame++) {
+      for (let frame = 1; frame <= (event.data.selftestFrames ?? 3); frame++) {
         // Geometry 1 draws three triangles, so the renderer's per-draw beats run here too.
         core._gx_webgpu_selftest(0xff2080c0, 2, 1);
         options.heartbeat(frame);
