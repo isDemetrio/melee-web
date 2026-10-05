@@ -332,10 +332,20 @@ L'agente li verifica con i controlli C1–C8 di `docs/PHASE0_DEVICE_PLAN.md` §5
 
 Un file per riga. Ogni gruppo è una PR piccola (una modifica logica per volta).
 
+**Stato al 2026-10-05.** Questa sezione è la specifica di ogni PR, scritta il 2026-10-01, e cinque
+delle sei sono atterrate (la sesta a metà). Il testo sotto resta quello di allora — è la specifica,
+non un diario — e ogni gruppo porta ora una riga **Fatta** con la prova. Due frasi sono invece
+istruzioni e non storia, e sono corrette nel testo: il file della Function è
+`functions/phase0/[[path]].ts` e non `disc.ts`, e `scripts/phase0/go_no_go.py` esiste.
+
 **PR 1 — il modulo piccolo in `main`**
 
 - `phase0/oz-size-experiment` → `main`: nessun file nuovo, solo il merge (porta `-Oz -g0`, la
   correzione di `core.json` in `phase0-build.yml` righe 125–129, e `scripts/phase0/serve_spike.py`).
+
+**Fatta** il 2026-09-30 (PR #13, `phase0/oz-size-experiment`): `wasm/core/CMakeLists.txt` riga 23
+tiene `MELEE_OPT` a `-Oz` e la riga 32 aggiunge `-g0`; il modulo che CI spedisce è di 15.278.441
+byte (`docs/PROGRESS.md`, riga "Recompiled core").
 
 **PR 2 — il disco pronto per R2 (solo script, nessuna credenziale per scriverli)**
 
@@ -351,9 +361,16 @@ Un file per riga. Ogni gruppo è una PR piccola (una modifica logica per volta).
 - `scripts/tests/test_deploy_guard.sh` (modifica): casi di rifiuto per `upload_disc.sh` (niente
   credenziali, ISO sbagliata).
 
+**Fatta** il 2026-09-30 da `3de2ed3` (PR #14): `scripts/phase0/disc_chunks.py`,
+`scripts/phase0/upload_disc.sh` e i suoi casi di rifiuto in `scripts/tests/test_deploy_guard.sh`
+esistono. `rclone` **non** è installato su questa VPS (`which rclone` non trova nulla), quindi il
+percorso è il fallback `curl --aws-sigv4` che `upload_disc.sh` riga 10 nomina. Che R2 accetti un PUT
+singolo da 1,46 GB resta non verificato: serve il bucket (O3).
+
 **PR 3 — la Function del disco**
 
-- `functions/phase0/disc.ts` (nuovo): `GET` e `HEAD` su `/phase0/disc` (il disco) e
+- `functions/phase0/[[path]].ts` (nuovo, il piano diceva `disc.ts`): `GET` e `HEAD` su
+  `/phase0/disc` (il disco) e
   `/phase0/disc-chunks` (il JSON dei pezzi), chiavi fisse (mai un nome di file preso dalla
   richiesta), risposte `206` con `Content-Range` per le richieste parziali, `Cache-Control:
   no-store`, `Cross-Origin-Resource-Policy: same-origin`. Protetta dalla middleware esistente.
@@ -363,6 +380,10 @@ Un file per riga. Ogni gruppo è una PR piccola (una modifica logica per volta).
 - test unitario della Function accanto a quelli che `npm test` esegue in
   `.github/workflows/functions.yml`: richiesta intera, parziale, parziale fuori dai limiti,
   senza token Access (403).
+
+**Fatta** il 2026-09-30 da `2208884` (PR #16): la Function serve `/phase0/disc` e
+`/phase0/disc-chunks` (`functions/phase0/[[path]].ts` righe 4 e 14) e il binding `PHASE0_DISC` sta
+in `functions/types.ts` riga 31 e in `wrangler.toml` righe 33 e 56.
 
 **PR 4 — la pagina che popola OPFS**
 
@@ -381,6 +402,10 @@ Un file per riga. Ogni gruppo è una PR piccola (una modifica logica per volta).
   un pezzo corrotto rifiutato, e la corsa che arriva allo stesso errore atteso di oggi
   (`FATAL: cannot read full Melee DOL`, `docs/PROGRESS.md` S6).
 
+**Fatta** in quattro passi, una PR ciascuno: #26 (ogni pezzo è verificato prima che ne venga
+scritto uno), #28 (un solo worker OPFS, un pezzo alla volta), #29 (il JSON nomina `disc_source`,
+`storage_persisted` e `core_load_ms`) e #30 (il bottone che scarica il disco nella pagina).
+
 **PR 5 — il deploy dalla CI**
 
 - `.github/workflows/phase0-build.yml` (modifica): input `deploy_spike` (boolean, `false`), passo
@@ -391,13 +416,21 @@ Un file per riga. Ogni gruppo è una PR piccola (una modifica logica per volta).
   dell'anteprima. Nessuna workflow nuova: il `dist` esiste solo dentro questo job.
 - `docs/DEPLOY.md` (modifica): sezione "anteprima spike di Fase 0" con i passi e la rimozione.
 
+**Fatta** il 2026-09-30 da `b58ce6b` (PR #24): l'input `deploy_spike` è in
+`.github/workflows/phase0-build.yml` riga 26 e il passo finale, che si salta senza credenziali, alla
+riga 311.
+
 **PR 6 — il verdetto**
 
-- `scripts/phase0/go_no_go.py` (nuovo): è il passo S8 già progettato in `docs/PHASE0_NEXT.md`
-  e non ancora scritto (non c'è in `scripts/phase0/`).
+- `scripts/phase0/go_no_go.py` (nuovo): è il passo S8 già progettato in `docs/PHASE0_NEXT.md`,
+  **scritto** il 2026-10-01 (PR #31): il file è in `scripts/phase0/`.
 - `docs/PHASE0_REPORT.md` (nuovo): tabella per device, esito dei checkpoint, verdetto (P0-12).
 - `docs/PROGRESS.md`, `docs/OPEN_QUESTIONS.md` (Q3 ristretta alla Fase 0, Q8 estesa o chiusa)
   (modifiche).
+
+**A metà.** `scripts/phase0/go_no_go.py` è scritto (PR #31) ed è il comando che il verdetto esegue;
+`docs/PHASE0_REPORT.md` **non** è scritto, di proposito: porta il verdetto e aspetta la riga che lo
+decide (M2, `docs/OPEN_QUESTIONS.md` Q9).
 
 **Correzione minore**, in una qualunque delle PR sopra: il commento di `web/vite.config.ts` su
 dove sta `_headers`.
@@ -438,7 +471,9 @@ dell'operatore; **[credenziali]** serve O2–O9; **[device]** serve l'operatore 
 12. **[device]** M5: download del disco in OPFS sull'Android, una corsa; poi M3/M4 se disponibili.
 13. **[subito, dopo 12]** C1–C8 sui JSON di M5; confronto con M2 (traccia identica, media entro il 15%).
 14. **[subito]** PR 6: `go_no_go.py`, `docs/PHASE0_REPORT.md` con il verdetto.
-    **Il verdetto è scritto.**
+    **Il verdetto è scritto.** **Stato 2026-10-05: no** — `scripts/phase0/go_no_go.py` è in `main`
+    (PR #31) e decide la riga iPhone (`VERDICT: DESKTOP-ONLY`), mentre `docs/PHASE0_REPORT.md`
+    aspetta la riga che decide (M2).
 
 Se le credenziali tardano, il verdetto si può scrivere dopo il passo 8 con M1 e M2, annotando
 che M5 manca; la riga M5 si aggiunge dopo. Se il core servito è ancora `-O1` (passo 1 non fatto),
