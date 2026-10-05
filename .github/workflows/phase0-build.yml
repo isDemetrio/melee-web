@@ -19,6 +19,10 @@ on:
           - '-O2'
           - '-O3'
         default: '-Oz'
+      profiling_funcs:
+        description: 'Keep function names in both modules (emcc --profiling-funcs, wasm-opt -g) so a sampling profiler can name guest and runtime functions (docs/CORE_COST_BROWSER.md). Measurement only: the artifacts get a -names suffix and must never be deployed.'
+        type: boolean
+        default: false
       deploy_spike:
         description: 'Publish the spike page as a Cloudflare Pages preview (needs CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and CF_PAGES_PROJECT; skips with a warning without them). The dist carries the game-derived module, so this also needs the operator decision O1.'
         type: boolean
@@ -74,6 +78,8 @@ jobs:
       # core.json is filled from that file, so the field reports what CMake configured with rather
       # than what the workflow intended.
       MELEE_OPT: ${{ inputs.opt_level || '-Oz' }}
+      # Names only: the same code with a name section, for a profiler. OFF for every other event.
+      MELEE_PROFILING_FUNCS: ${{ inputs.profiling_funcs && 'ON' || 'OFF' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,6 +116,7 @@ jobs:
           # melee-core-wasm-node-O1 rather than ...-node--O1, which is what the first dispatch
           # produced.
           if [ "$MELEE_OPT" != "-Oz" ]; then suffix="-${MELEE_OPT#-}"; fi
+          if [ "$MELEE_PROFILING_FUNCS" = "ON" ]; then suffix="$suffix-names"; fi
           {
             echo "NODE_ARTIFACT=melee-core-wasm-node$suffix"
             echo "SPIKE_ARTIFACT=melee-spike-dist$suffix"
@@ -126,6 +133,7 @@ jobs:
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/wasm" -G Ninja \
             -DMELEE_GEN="$RUNNER_TEMP/generated" \
             -DMELEE_OPT="$MELEE_OPT" \
+            -DMELEE_PROFILING_FUNCS="$MELEE_PROFILING_FUNCS" \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DCMAKE_CXX_COMPILER_LAUNCHER="$GITHUB_WORKSPACE/scripts/phase0/time_compile.sh"
           echo "opt_level=$MELEE_OPT" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -158,12 +166,14 @@ jobs:
           # The level is -O2, not -O3: the pass is the JS build of Binaryen here, and -O3 on a
           # 16 MB module took minutes of runner time for no measured gain.
           npm install -g binaryen@132.0.0
+          # A profiling build keeps the name section through this pass too (-g); nothing else changes.
+          names=''; if [ "$MELEE_PROFILING_FUNCS" = "ON" ]; then names=-g; fi
           for module in "$RUNNER_TEMP/wasm/melee_core_node.wasm" "$RUNNER_TEMP/wasm/melee_core_web.wasm"; do
             before=$(stat -c%s "$module")
             simd=''; case "$module" in *_web.wasm) simd=--enable-simd ;; esac
             wasm-opt --enable-bulk-memory --enable-mutable-globals \
               --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
-              $simd -O2 "$module" -o "$module.opt"
+              $simd $names -O2 "$module" -o "$module.opt"
             mv "$module.opt" "$module"
             echo "wasm-opt: $(basename "$module") $before -> $(stat -c%s "$module") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
           done
