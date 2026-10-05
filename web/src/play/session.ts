@@ -101,7 +101,11 @@ export class PlaySession {
             bitmap.close();
             this.fail(`Presentation failed: ${String(error)}`);
           }
-        } else if (message.type === 'perf') this.perf.report.onBatch(message);
+        } else if (message.type === 'perf') {
+          // A WebGPU error is written to the record now, not at the next PERSIST_MS: a page that
+          // dies right after it (the bgra-probe crash) would take it along.
+          if (this.perf.report.onBatch(message)) this.persist(performance.now());
+        }
         else if (message.type === 'beat') this.perf.report.onBeat(message.beat, performance.now());
         else if (message.type === 'perf-meta') {
           this.perf.report.onMeta(message);

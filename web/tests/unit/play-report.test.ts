@@ -166,6 +166,14 @@ describe('persisted record', () => {
       last_600_frames: { frames: 1, core_split_percent_of_time: { decode: 56.3, non_decode: 43.8 } } });
   });
 
+  it('asks for an immediate write only for a WebGPU error it has not seen', () => {
+    const report = new PlayReport(false, 0);
+    const batch = (notes: string[]) => report.onBatch({ rows: [], totals, notes, sim: [], decoder: [] });
+    expect(batch(['a meter note'])).toBe(false);
+    expect(batch(['a meter note', 'webgpu error: device lost: gone'])).toBe(true);
+    expect(batch(['a meter note', 'webgpu error: device lost: gone'])).toBe(false);
+  });
+
   it('says what a probe session that closed the page was doing in its last frames', () => {
     const report = new PlayReport(false, 0);
     report.onMeta({ ...meta, presentation: 'bgra-probe' });

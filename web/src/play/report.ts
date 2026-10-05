@@ -356,7 +356,8 @@ export class PlayReport {
     for (const note of meta.notes) this.note(note);
   }
 
-  onBatch(batch: PerfBatch): void {
+  /** True when the batch brings a WebGPU error not seen before: the page persists at once (session.ts). */
+  onBatch(batch: PerfBatch): boolean {
     const split = this.meta?.split ?? false;
     for (const record of batch.rows) {
       this.rows.push(record.row);
@@ -376,7 +377,9 @@ export class PlayReport {
     this.decoder.push(...batch.decoder);
     keepLast(this.decoder, ROWS_KEPT);
     this.totals = batch.totals;
-    for (const note of batch.notes) this.note(note);
+    let error = false;
+    for (const note of batch.notes) if (this.note(note) && note.startsWith('webgpu error')) error = true;
+    return error;
   }
 
   onBeat(beat: Beat, now: number): void {
@@ -399,8 +402,11 @@ export class PlayReport {
     keepLast(this.transfers, ROWS_KEPT);
   }
 
-  note(text: string): void {
-    if (!this.notes.includes(text)) this.notes.push(text);
+  /** False when the note was already there. */
+  note(text: string): boolean {
+    if (this.notes.includes(text)) return false;
+    this.notes.push(text);
+    return true;
   }
 
   end(reason: string, now: number): void {
