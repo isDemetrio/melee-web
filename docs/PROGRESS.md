@@ -3860,3 +3860,66 @@ PM` (`/home/hermes/briefs/codex-emulator.log`) and `/home/hermes/projects/melee-
 at `main`. No workflow, script, renderer, simulation or test-semantics file is touched, and
 `phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull request costs no
 WASM core build. CI decides the rest.
+
+## 2026-10-05 — the deploy plan's pointers into this repository's own files: twelve pointers had drifted, and two claims are now false (cron, `cron/phase0-oct5h`)
+
+**Why this and not something else.** Every step of `docs/PHASE0_DEPLOY_PLAN.md` section 6 that does
+not need the operator is done — steps 1–5 done, step 6 the O1/Android/route decision, step 7 the
+M1/M2 device runs, steps 8–13 the credentials and the devices, step 14 the verdict — which is what
+this file's resume point and the previous cron session both record, and the renderer is held by the
+eight open pull requests that own its files. So this session did to the *whole* document what
+`cron/phase0-oct5f` did to its section 5: re-read every pointer it makes into this repository's own
+files. Twelve of them no longer said what the file they name says, and two statements about the code
+are wrong: section 0.2's "su `main` il core è ancora `-O1`", which PR #13 closed, and O7's "la
+middleware risponde 403", which is a 503. Section 4 is the operator-facing procedure for the device runs, and one of its instructions
+asked for a value the result JSON already carries.
+
+**Verified 2026-10-05 on `main` at `45be555`, without a build, without a credential and without a
+device**, each correction being the named file's own line read with `sed -n '<n>p'`:
+
+- §0.2: `wasm/core/CMakeLists.txt` "righe 19 e 23" → today line 23 is `set(MELEE_OPT "-Oz" …)` and
+  line 32 is `target_compile_options(core_options INTERFACE ${MELEE_OPT} -g0 …)`; line 19 is `#`.
+  The paragraph also said "su `main` il core è ancora `-O1` e pesa circa 87 MB", which PR #13 closed
+  on 2026-09-30.
+- §3, the module's row: "stessa workflow, righe 122–129" → 131–191, the step that compiles and links
+  the module (line 131) and the `wasm-opt` step after it (line 151).
+- §3, memory: `wasm/core/CMakeLists.txt` "riga 24" → line 38, `-sINITIAL_MEMORY=256MB`.
+- §3, Access row: `functions/_middleware.ts` "riga 56" → line 82, the comment that records what
+  needs a deployment to be verified.
+- §3, "Come si automatizza dalla CI": `phase0-build.yml` "(righe 115–130)" → 131–191 for the core and
+  224–246 for the page; `ci.yml`'s `deploy` job "(righe 163–172)" → line 201 (163–172 is `e2e:`).
+- §3, O7: "la middleware risponde 403 a ogni Function" → **503** with
+  `reason: access_configuration_missing` (`functions/_middleware.ts` lines 26–28 and 91–94), which is
+  what `tests/functions/middleware.test.ts` lines 97–102 assert, against the 503 expectation at line
+  49. 403 is the answer to a missing or invalid token, not to a missing `ACCESS_AUD`.
+- §3, the note after O10: `functions/_middleware.ts` "riga 57" → line 83, the
+  `ACCESS_DEV_BYPASS`/non-`main` branch test.
+- §4, what the operator must report: `web/src/spike/main.ts` "righe 57–61" → 280–290, the object
+  literal that builds the result JSON (57–61 is `offscreenCanvas`); the list itself was missing
+  `disc_source`, `storage_persisted`, `core_load_ms`, `decoder_cost`, `heartbeat` and the
+  `?canvas`-only `render`.
+- §4, M5: "finché non esiste il campo nel JSON, lo annota a mano" → `core_load_ms` has existed since
+  PR #29 (`web/src/spike/main.ts` line 283, measured in `web/src/spike/worker.ts` lines 43–48).
+- §5, PR 1: "la correzione di `core.json` in `phase0-build.yml` righe 125–129" → lines 233–245.
+- §5, PR 3: `functions/phase0/[[path]].ts` "righe 4 e 14" → lines 13 and 14, the two object keys.
+- §7: "(`worker.ts`, riga 50)" for `--headless` → line 189.
+
+**Changed.** `docs/PHASE0_DEPLOY_PLAN.md` only: the twelve pointers above, the O7 answer, section 4's
+field list and the sentence that sent the operator to a hand annotation, and one dated note in §0.2
+in the style §5 already uses ("Stato al 2026-10-05: quel passo è fatto"), so the section keeps its
+2026-10-01 text and stops reading as today's state. `docs/PROGRESS.md`: this entry. Nothing else is
+edited: no workflow, script, renderer, simulation or test-semantics file, and no number in this log
+was changed.
+
+**Not done, and why.** Nothing was built, dispatched, deployed, uploaded, served or tunnelled, and no
+Cloudflare credential was used. The gates that can run here are green on the edited tree:
+`python3 -m unittest discover -s scripts/tests` → `Ran 214 tests in 18.586s`, `OK (skipped=1)`;
+`python3 scripts/check_no_game_data.py --all` → `278 tracked file(s) checked, no game data`;
+`python3 scripts/check_docs.py --submodule …` → `210 citations in 4 documents, 0 violation(s)`. What
+stays blocked, and by what, is unchanged: the verdict by a mid-range Android (`docs/OPEN_QUESTIONS.md`
+Q9 — only an iPhone exists), any deployment by O1–O10 (O1 is a legal judgement), `docs/PHASE0_REPORT.md`
+by those two, and Q4, Q5, Q10(b) and Q11 by the operator. The operator's in-flight branch
+`perf/four-player-load` (PR #132, draft) touches `experiments/four-player/**` and
+`.github/workflows/four-player-load.yml` only, so no file of this pull request is one they are
+working on, and `phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull
+request costs no WASM core build. CI decides the rest.
