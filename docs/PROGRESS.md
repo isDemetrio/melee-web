@@ -4242,6 +4242,16 @@ operator; the renderer by the eight open pull requests that own its files (#70, 
 VPS root filesystem is at 100 percent full — 250 MB free of 38 GB, `/home/hermes/projects` 15 GB and
 `/home/hermes/incoming` 5.3 GB — so a session that needs to materialise an artifact may not be able to.
 
+**Measured afterwards, and withdrawn.** The A/B the outage had stranded ran once Actions recovered —
+branch run `37379785602` and `main` run `37379827527`, both green. Two profile pairs at four players
+over the same 715-frame window, run in opposite order: the FIFO write-path cluster goes from 7.48% to
+9.62% of the profile in one pair and from 7.52% to 10.00% in the other (+2.14 and +2.48 points), with
+`host::gx_write` roughly doubling in absolute time while the profile total moves only 4.8%. The rewrite
+is behaviour-identical — the branch core's state trace is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`,
+the reference — but it is **slower**. `patches/0013-fifo-write-without-value-init.patch` is therefore
+removed from the series and no gain is claimed for it. The numbers and the reasoning are in
+`docs/FIFO_WRITE_COST.md`; this is a null result, stated plainly.
+
 The gates that can run here are green on the edited tree: `python3 -m unittest discover -s scripts/tests`
 gives `Ran 214 tests in 20.780s`, `OK`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300
 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
