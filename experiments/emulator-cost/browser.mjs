@@ -1,3 +1,4 @@
+import {attachProfiler} from './profiler.mjs';
 // Run only in Actions. The only exported artifacts are aggregate measurements.
 import {createServer} from 'node:http';
 import {createReadStream, openSync, readSync, statSync, writeFileSync, mkdirSync} from 'node:fs';
@@ -50,47 +51,16 @@ try {
   for (const mode of ['trace', 'attached', 'headless']) {
     const page = await browser.newPage();
     page.setDefaultTimeout(300000);
-    const cdp = await page.context().newCDPSession(page);
-    let started = 0, finished = 0, profile, workerError;
-    let commandId = 0;
-    const pending = new Map();
-    const workerCommand = (sessionId, method, params = {}) => new Promise((resolve, reject) => {
-      const id = ++commandId;
-      pending.set(id, {resolve, reject});
-      cdp.send('Target.sendMessageToTarget', {sessionId, message: JSON.stringify({id, method, params})})
-        .catch(reject);
-    });
-    cdp.on('Target.receivedMessageFromTarget', ({message}) => {
-      const event = JSON.parse(message);
-      if (event.id && pending.has(event.id)) {
-        const p = pending.get(event.id); pending.delete(event.id);
-        if (event.error) p.reject(new Error(JSON.stringify(event.error))); else p.resolve(event.result);
-      }
-      if (event.method === 'Profiler.consoleProfileStarted' && event.params.title === 'inmatch') started++;
-      if (event.method === 'Profiler.consoleProfileFinished' && event.params.title === 'inmatch') {
-        finished++; profile = event.params.profile;
-      }
-    });
-    cdp.on('Target.attachedToTarget', async ({sessionId, targetInfo}) => {
-      try {
-        if (targetInfo.type === 'worker' && mode !== 'trace') {
-          await workerCommand(sessionId, 'Profiler.enable');
-          await workerCommand(sessionId, 'Profiler.setSamplingInterval', {interval: 100});
-        }
-        await workerCommand(sessionId, 'Runtime.runIfWaitingForDebugger');
-      } catch (error) { workerError = error; }
-    });
-    await cdp.send('Target.setAutoAttach', {autoAttach: true, waitForDebuggerOnStart: true, flatten: false});
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(() => typeof globalThis.run === 'function');
+    const profiler = await attachProfiler(page, mode !== 'trace');
     const result = await page.evaluate(opts => globalThis.run(opts), {
       size, trace: mode === 'trace', attached: mode !== 'headless', profile: mode !== 'trace',
     });
-    if (workerError) throw workerError;
+    const profile = mode === 'trace' ? null : await profiler.result();
     const digest = result.trace ? createHash('sha1').update(result.trace).digest('hex') : null;
     if (mode === 'trace' && (digest !== 'c79c53b9cdf81426fa0277e7497a69e55bc5f571' || result.trace.trim().split('\n').length !== 2401))
       throw new Error(`2400 checkpoint oracle failed: ${digest}`);
-    if (mode !== 'trace' && (started !== 1 || finished !== 1 || !profile?.samples?.length)) throw new Error('profiler measured no samples');
     if (profile) writeFileSync(resolve(out, `${mode}.cpuprofile`), JSON.stringify(profile));
     const times = result.times.trim().split('\n').slice(1).map(l => l.split(',').map(Number))
       .filter(([r]) => r >= 1639 && r <= 2400).map(([,ms]) => ms);

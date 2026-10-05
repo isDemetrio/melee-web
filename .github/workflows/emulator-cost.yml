@@ -22,6 +22,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install browser on runner
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Worker profiler smoke (no game, fail before compilation)
+        run: node experiments/emulator-cost/profiler-smoke.mjs
       - run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
       - uses: mymindstorm/setup-emsdk@v14
         with:
@@ -44,11 +51,6 @@ jobs:
             -o "$RUNNER_TEMP/build/optimized.wasm"
           mv "$RUNNER_TEMP/build/optimized.wasm" "$RUNNER_TEMP/build/melee_core_web.wasm"
           node -e 'const fs = require("fs"); const m = new WebAssembly.Module(fs.readFileSync(process.argv[1])); if (!WebAssembly.Module.customSections(m, "name").length) throw Error("missing profiling names");' "$RUNNER_TEMP/build/melee_core_web.wasm"
-      - name: Install browser on runner
-        working-directory: web
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
       - name: Read private disc
         working-directory: ${{ runner.temp }}
         env:
