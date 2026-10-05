@@ -47,12 +47,16 @@ il resto.
    cross-origin isolated", ma `web/src/spike/main.ts` scrive quel dato **solo nel JSON**
    (campo `cross_origin_isolated`), non a schermo. Per questo il piano fa una **prova corta**
    prima delle misure vere (sezione 4, passo 6).
-5. **Il campo `core_opt` del JSON non prova il livello di ottimizzazione.** Viene da
-   `spike-core/core.json`, che `.github/workflows/phase0-build.yml` (riga 125) scrive con
-   `"opt":"-O1"` **fisso**. Il branch corrente `phase0/oz-size-experiment` compila invece a `-Oz`
-   (`wasm/core/CMakeLists.txt`, righe 19 e 23): un core costruito da quel branch si
-   dichiarerebbe `-O1` pur non essendolo. Si risale al livello vero dal `core_commit` (che è lo
-   SHA del commit), non da `core_opt`.
+5. **Il campo `core_opt` del JSON è una dichiarazione, non una prova.** Viene da
+   `spike-core/core.json`, e il livello vero di una corsa si legge dal `core.json` del `dist`
+   servito (passo V2), confrontato con il `core_commit` (che è lo SHA del commit).
+   **Stato al 2026-10-05: la premessa di questa voce non è più vera, la conclusione resta.**
+   `"opt"` non è più fisso: `.github/workflows/phase0-build.yml` ha un input `opt_level` con default
+   `-Oz` (riga 21) e scrive `core.json` leggendo `$RUNNER_TEMP/wasm/melee_opt.txt`, che
+   `wasm/core/CMakeLists.txt` riga 31 scrive al configure — la `grep` è rimasta come ripiego
+   (righe 233–245), e la riga 125 citata qui sopra è un altro passo. E `-Oz` non è più il livello
+   di un branch: è quello di `main` dal 2026-09-30 (PR #13), tenuto dalla riga 23 di
+   `wasm/core/CMakeLists.txt`, con la riga 32 che aggiunge `-g0`.
 
 Due note minori, sempre da non assecondare in silenzio:
 
@@ -63,8 +67,9 @@ Due note minori, sempre da non assecondare in silenzio:
   sessione di test** (la policy della VPS vieta server di lunga durata).
 - **La dimensione del modulo non è un numero solo.** Il prompt dice 87.117.067 byte (messaggio del
   commit `d04610d`); `docs/PROGRESS.md` (S6) misura il modulo web a 87.118.045 byte; `docs/PHASE0_NEXT.md`
-  cita 87.117.533. Sono build diverse, tutte ≈ 87,1 MB. Fa fede il file effettivamente servito
-  (passo V2). L'uso nel server di `--token free`, citato nel suo commento d'uso, **non esiste**
+  cita 87.117.533. Sono build diverse, tutte ≈ 87,1 MB, e sono **tutte del 2026-09-30 a `-O1`**:
+  dal 2026-10-02 il modulo servito è di circa 15,3 MB (sezione 2 V2). Fa fede il file effettivamente
+  servito (passo V2). L'uso nel server di `--token free`, citato nel suo commento d'uso, **non esiste**
   tra gli argomenti e farebbe fallire l'avvio: non passarlo.
 
 ---
@@ -89,6 +94,12 @@ frame di partita: media 27,34 ms, p95 34,82, p99 43,36 (`docs/PROGRESS.md`, sezi
 soglia GO della spec per il telefono è media ≤ 3 ms: la VPS è ~9 volte sopra. L'iPhone dovrebbe
 essere ~9 volte più veloce di una vCPU Hetzner sotto Node per passare: **non è misurato**, ma
 bisogna aspettarsi un NO-GO a `-O1`, e sapere già che sarebbe **provvisorio** (sezione 6).
+
+**Aggiornato al 2026-10-05: il core servito non è più a `-O1`.** `main` spedisce `-Oz` dal
+2026-09-30 (PR #13; `wasm/core/CMakeLists.txt` riga 23), e dello stesso confronto esiste anche la
+misura a `-Oz`: media **28,92 ms** sui 762 frame di partita, circa il 6% **più lenta** di `-O1`
+(`docs/OPT_LEVEL_EXPERIMENT.md`, righe 6–7). L'attesa di un NO-GO provvisorio *per il livello* non
+descrive quindi il core servito: è allo stesso livello di tutte le righe già misurate (sezione 6).
 
 **Insieme ai tempi misuriamo la correttezza.** Il core scrive anche 2400 checkpoint (hash di CPU,
 RAM, ARAM ed eventi, uno per retrace). Il nativo e il WASM sotto Node li producono identici bit per
@@ -202,8 +213,10 @@ stat -c %s "$DIST/spike-core/melee_core_web.wasm" # 15254426 su spike-dist-drawc
 ls "$DIST/spike-core/"                            # melee_core_web.js, melee_core_web.wasm, parity_vs_onett.txt, core.json
 ```
 
-Annotare `commit`: servirà in sezione 5. **Servire un `dist` costruito da `main`**, non dal branch
-`-Oz`, finché `-Oz` non ha ripassato i 2400 checkpoint.
+Annotare `commit`: servirà in sezione 5. **Servire un `dist` costruito da `main`.** Dal 2026-09-30
+`main` **è** il livello `-Oz` (PR #13), e `-Oz` ha ripassato i 2400 checkpoint: tutte le righe
+misurate su questa macchina, a `-Oz`, hanno prodotto la traccia identica al riferimento
+(`c79c53b9…`).
 
 **V3 — Il server, dietro HTTPS della tailnet.** Il server resta in ascolto solo su `127.0.0.1`
 (valore predefinito di `--host`) e `tailscale serve` lo espone in HTTPS con un certificato valido
@@ -287,7 +300,7 @@ qui perché Apple non li documenta**: quelli che servono si ricavano dal device.
 
 | Limite | Cosa è certo | Cosa va verificato sul device | Come si manifesta / come si riconosce | Cosa fare |
 | --- | --- | --- | --- | --- |
-| **Memoria per tab** | iOS chiude il processo di una pagina che usa troppa memoria, senza chiedere. Il limite non è documentato e dipende dal modello. | Se un modulo di circa 15 MB (15.278.441 byte sul `main` del 2026-10-05, run 37263947515; il numero si muove a ogni commit), compilato, più la memoria iniziale di 256 MB (`-sINITIAL_MEMORY=256MB` in `wasm/core/CMakeLists.txt`) più la crescita, ci sta. | La pagina si ricarica da sola, vuota, spesso con un avviso "si è verificato un problema, la pagina è stata ricaricata". Nessun JSON. Se succede **prima** di `core loaded`, è la compilazione; **dopo**, è la memoria in corsa. | Chiudere tutte le altre app e tab, riavviare il telefono, riprovare **una** volta. Se si ripete: è un risultato ("il core non carica su questo iPhone"), da annotare con il momento in cui succede. Rimedio lato nostro: modulo più piccolo (branch `-Oz`, `-g0`). |
+| **Memoria per tab** | iOS chiude il processo di una pagina che usa troppa memoria, senza chiedere. Il limite non è documentato e dipende dal modello. | Se un modulo di circa 15 MB (15.278.441 byte sul `main` del 2026-10-05, run 37263947515; il numero si muove a ogni commit), compilato, più la memoria iniziale di 256 MB (`-sINITIAL_MEMORY=256MB` in `wasm/core/CMakeLists.txt`) più la crescita, ci sta. | La pagina si ricarica da sola, vuota, spesso con un avviso "si è verificato un problema, la pagina è stata ricaricata". Nessun JSON. Se succede **prima** di `core loaded`, è la compilazione; **dopo**, è la memoria in corsa. | Chiudere tutte le altre app e tab, riavviare il telefono, riprovare **una** volta. Se si ripete: è un risultato ("il core non carica su questo iPhone"), da annotare con il momento in cui succede. Rimedio lato nostro: modulo più piccolo — `-Oz` con `-g0`, che è già quello che `main` spedisce dal 2026-09-30 (PR #13), quindi sotto questo profilo non resta niente da provare. |
 | **WebAssembly** | La **Modalità di isolamento** (Lockdown Mode) di iOS disattiva la compilazione JIT e WebAssembly. Le specifiche WebAssembly fissano limiti per dimensione di funzione e di modulo; il modulo ha già caricato in Chromium (S6), quindi sta nei limiti di V8. | Se JavaScriptCore accetta le funzioni enormi del codice ricompilato e in quanto tempo le compila; se passa al livello di ottimizzazione alto (JavaScriptCore compila prima con un compilatore veloce e poi, in background, con uno ottimizzante) prima che inizi la partita. | `error: ...` a schermo con `CompileError`, `RangeError` o "out of memory" subito dopo `running…`. Oppure: nessun errore ma tempi di partita che **calano** dall'inizio alla fine del match (sezione 5, controllo C7). | Controllare che la Modalità di isolamento sia spenta. Un `CompileError` è un risultato da riportare così com'è, con il messaggio intero. |
 | **Quantizzazione di `performance.now()`** | Senza isolamento cross-origin i browser arrotondano l'orologio (difesa contro Spectre). L'isolamento esiste solo in contesto sicuro (HTTPS o localhost). | Il passo esatto di Safari iOS con e senza isolamento: non lo scriviamo, lo misura la pagina. | Campo `timer_resolution_ms` del JSON; i valori di `sim_ms` sono tutti multipli (circa) di quel passo. | Servire in HTTPS (passo V3). Soglia di accettazione: ≤ 0,1 ms (`docs/PHASE0_NEXT.md` §5). Sopra, vale solo la regola del NO-GO netto (sezione 6). |
 | **Selettore di file con file enormi** | Su iOS il selettore apre un menu; la voce per i file porta all'app File. File in iCloud non scaricati vengono scaricati prima di essere consegnati. | Se Safari fa una **copia** temporanea del file scelto (servirebbero altri ~1,5 GB liberi) e quanto ci mette; se `FileReaderSync` nel Worker legge davvero a pezzi un file di 1,46 GB su iOS (in `docs/PHASE0_TASKS.md` P0-10 è indicato come rischio non verificato). | Attesa lunga dopo la scelta del file; poi `refused: disc image is N bytes, expected 1459978240` se il file è arrivato troncato; oppure `error:` durante la corsa se la lettura fallisce; oppure `exit` diverso da 0 con log sul disco. | Tenere almeno 3 GB liberi. La prova corta (sezione 4, passo 6) verifica la lettura prima delle corse lunghe. |
@@ -339,8 +352,9 @@ Le scritte della pagina sono in inglese; qui sono citate esattamente come appaio
    "Native reference CSV" si **lascia vuoto** (il confronto vero si fa sulla VPS).
    *Deve vedere:* il nome del file accanto al selettore, eventualmente dopo un'attesa.
 6. Tocca "Run".
-   *Deve vedere, in ordine:* `running…`; dopo il download (87 MB) e la compilazione del modulo,
-   `core loaded: <commit> -O1`; alcune righe di log; infine `exit 0` e il link `result JSON`.
+   *Deve vedere, in ordine:* `running…`; dopo il download del modulo (circa 15,3 MB dal 2026-10-02,
+   sezione 2 V2: era 87 MB nella build `-O1` del 2026-09-30) e la compilazione,
+   `core loaded: <commit> -Oz`; alcune righe di log; infine `exit 0` e il link `result JSON`.
    *Se vede `refused: disc image is N bytes, expected 1459978240`:* la ISO è incompleta, rifare
    il passo 2.
    *Se vede `error: Error: no core at /spike-core/ ...`:* manca il core sul server, avvisare l'agente.
@@ -350,8 +364,8 @@ Le scritte della pagina sono in inglese; qui sono citate esattamente come appaio
    `core loaded`.
    *Se resta su `running…` per più di 10 minuti senza `core loaded`:* download del modulo bloccato;
    annotare e avvisare l'agente.
-   *Se `core loaded` mostra un commit diverso da quello comunicato dall'agente:* fermarsi, il server
-   sta servendo un altro core.
+   *Se `core loaded` mostra un commit, o un livello, diverso da quelli comunicati dall'agente:*
+   fermarsi, il server sta servendo un altro core.
 7. Tocca `result JSON` e conferma il download. Il file si chiama `spike-result-<data-ora>.json`.
    Lo manda all'agente (passo 12) **prima** di proseguire: l'agente guarda
    `cross_origin_isolated` e `timer_resolution_ms` (sezione 5, C2). Se l'orologio è grossolano si
@@ -565,9 +579,17 @@ C8 senza corse scartate.
 
 **Due condizioni che pesano su qualunque esito:**
 
-- **Il livello di ottimizzazione.** Se il core servito è a `-O1` (quello di `main` oggi), ogni esito
-  diverso da GO è **provvisorio** (`docs/PHASE0_NEXT.md` S11): prima di chiamarlo definitivo si
-  rifà il test con un core più ottimizzato che abbia ripassato i 2400 checkpoint.
+- **Il livello di ottimizzazione.** Se il core servito non è al livello finale, ogni esito diverso
+  da GO è **provvisorio** (`docs/PHASE0_NEXT.md` S11): prima di chiamarlo definitivo si rifà il
+  test con un core più ottimizzato, che abbia ripassato i 2400 checkpoint.
+  **Stato al 2026-10-05: l'esempio di questa regola era `-O1`, e `-O1` non è più il livello di
+  `main`.** `main` spedisce `-Oz` dal 2026-09-30 (PR #13), e tutte le righe misurate su questa
+  macchina sono a `-Oz` — letto dal campo `core_opt` di ogni JSON: le tre corse iPhone
+  (`core_commit 4fba3a08…`), le due iPhone-OPFS, le tre Firefox e la Chrome (`core_commit
+  4a3f537e…`). La leva che la regola descriveva è quindi quella opposta, e
+  `docs/OPT_LEVEL_EXPERIMENT.md` la misura senza prometterla: fra i livelli confrontati `-Oz` è il
+  **più lento** (circa il 6% più lento di `-O1` sulla VPS sotto Node), quindi un livello più veloce
+  può alzare i numeri — ma quel rapporto è misurato su una VPS sotto Node, non su un telefono.
 - **Il device.** L'esito è della riga "iPhone <modello>, iOS <versione>". Diventa il go/no-go della
   spec solo se l'operatore decide che l'iPhone sostituisce l'Android di fascia media (§0.2). Senza
   quella decisione: un NO-GO sull'iPhone chiude il mobile (inferenza forte, perché un iPhone recente
@@ -593,8 +615,8 @@ In nessun caso si ammorbidiscono soglie o controlli per far uscire un verdetto.
 
 | Rischio | Segnale precoce | Cosa fare |
 | --- | --- | --- |
-| **Modulo troppo grande da scaricare** (circa 15,3 MB dal 2026-10-02, sezione 2 V2: era 87 MB nella build `-O1` del 2026-09-30; il server manda `Cache-Control: no-store`, quindi lo riscarica a **ogni** corsa) | Nella prova corta, molto tempo tra `running…` e `core loaded` | Misurare quel tempo e riportarlo. Rimedio lato nostro: il branch `-Oz`/`-g0` (in misura ora), poi compressione in trasferimento. Non cambia i tempi di simulazione. |
-| **Memoria esaurita** | Pagina che si ricarica nella prova corta: prima di `core loaded` (compilazione) o dopo (corsa) | Una sola riprova dopo riavvio. Se ripete: "il core non carica su questo iPhone", NO-GO per questa build, provvisorio fino a un modulo più piccolo. |
+| **Modulo troppo grande da scaricare** (circa 15,3 MB dal 2026-10-02, sezione 2 V2: era 87 MB nella build `-O1` del 2026-09-30; il server manda `Cache-Control: no-store`, quindi lo riscarica a **ogni** corsa) | Nella prova corta, molto tempo tra `running…` e `core loaded` | Misurare quel tempo e riportarlo. Rimedio lato nostro: il livello `-Oz`/`-g0`, che è quello che `main` spedisce dal 2026-09-30 (PR #13) e il modulo di circa 15,3 MB che si scarica, poi compressione in trasferimento. Non cambia i tempi di simulazione. |
+| **Memoria esaurita** | Pagina che si ricarica nella prova corta: prima di `core loaded` (compilazione) o dopo (corsa) | Una sola riprova dopo riavvio. Se ripete: "il core non carica su questo iPhone", NO-GO per questa build, provvisorio fino a un modulo più piccolo — che però è già quello spedito (`-Oz` con `-g0` dal 2026-09-30, PR #13). |
 | **Tempi quantizzati** | `cross_origin_isolated: false` o `timer_resolution_ms > 0.1` nel JSON della prova corta | Fermarsi e attivare HTTPS prima delle corse lunghe; altrimenti vale solo il NO-GO netto. |
 | **Un solo device come campione** | È strutturale, non c'è segnale | Annotare modello e iOS; non generalizzare; la riga Android resta aperta (§0.2). |
 | **La ISO non arriva** | Download che si ferma o rallenta al passo 2; `refused: disc image is …` al passo 6 | Riprendere il download; poi strada D (Taildrop). Se nessuna funziona, il test non si fa oggi: non esistono scorciatoie senza cambiare il Worker. |
@@ -624,7 +646,8 @@ Detto esplicitamente, perché un GO qui non venga letto come più di quello che 
   Android, niente altri iPhone, niente Chrome iOS.
 - **Niente uso prolungato.** Tre corse di pochi minuti, non una sessione di gioco di mezz'ora: il
   comportamento termico a lungo termine non è misurato.
-- **Niente verifica del livello di ottimizzazione finale.** Con il core a `-O1` il risultato vale per
-  `-O1`.
+- **Niente verifica del livello di ottimizzazione finale.** Il risultato vale per il livello del core
+  servito, cioè `-Oz` — quello che `main` spedisce dal 2026-09-30 (PR #13) e quello di tutte le
+  righe già misurate.
 - **Niente prova che i tempi vengano dall'iPhone.** La traccia prova l'esecuzione corretta; il device
   e i tempi sono dichiarati (sezione 5).
