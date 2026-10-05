@@ -71,6 +71,16 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST});
     gpu.device.queue.writeTexture({texture: gpu.white}, new Uint8Array([255,255,255,255]), {}, [1,1]);
     gpu.slots = [];
+    // A slot's texture and sampler, as gxw_bind sets them. Only a change of what the bind group
+    // key names (the texture's id, the sampler's key) forgets the last draw's bind group
+    // (gpu.lastGroup, gxw_draw): gxw_bind runs for all eight slots of every draw, and most draws
+    // bind what the one before did.
+    gpu.lastGroup = null;
+    gpu.bindSlot = (slot, entry, sampler, key) => {
+      const was = gpu.slots[slot];
+      if (!was || was.entry !== entry || was.key !== key) gpu.lastGroup = null;
+      gpu.slots[slot] = {entry, sampler, key};
+    };
     const entries = [{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,
       buffer:{type:"uniform",hasDynamicOffset:true}}];
     for (let i=0;i<8;i++) {
@@ -80,6 +90,7 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
     gpu.textureLayout = gpu.device.createBindGroupLayout({entries});
     gpu.pipelineLayout = gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.textureLayout]});
     gpu.pipelines = new Map();
+    gpu.pipelineByNumber = new Map();
     gpu.shaders = new Map();
     gpu.shaderText = new Map();
     gpu.samplers = new Map();
@@ -300,11 +311,11 @@ EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, 
     }
     if (copy_addr) {
       const e = gpu.efbCopies.get(copy_addr);
-      gpu.slots[slot] = {entry:e || gpu.whiteEntry, sampler, key};
+      gpu.bindSlot(slot, e || gpu.whiteEntry, sampler, key);
       gpu.efbCopyBinds = (gpu.efbCopyBinds | 0) + 1;
       return 1;
     }
-    if (!content) { gpu.slots[slot] = {entry:gpu.whiteEntry, sampler, key}; return 1; }
+    if (!content) { gpu.bindSlot(slot, gpu.whiteEntry, sampler, key); return 1; }
     let entry = gpu.texturePool.get(content), fresh = false;
     if (entry) gpu.texturePool.delete(content);
     else {
@@ -325,7 +336,7 @@ EM_JS(int, gxw_bind, (int slot, int content, int width, int height, int levels, 
     }
     entry.batch = gpu.batchSerial;
     gpu.texturePool.set(content, entry);
-    gpu.slots[slot] = {entry, sampler, key};
+    gpu.bindSlot(slot, entry, sampler, key);
     return fresh ? 2 : 1;
   } catch(error) { gpu.recordFailure("texture", error); gpu.failure = "texture: " + error; return 0; }
 });
@@ -403,24 +414,32 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
     const efbAlpha = (HEAPU32[(bp >> 2) + 0x43] & 7) === 1 ? 1 : 0;   // RGBA6_Z24
     // Enable, colour/alpha update, and -- only when blending -- the factors and subtract.
     const blendBits = blendmode & 1 ? blendmode & 0xFF9 : blendmode & 0x18;
-    const key = [lines,cull,zmode,blendBits,efbAlpha,shader].join(":");
-    let pipeline = gpu.pipelines.get(key);
+    // The pipeline by a number first: the shader id above 21 bits of state (lines 1, cull 2, zmode 5,
+    // blendBits 12, efbAlpha 1). A string key per draw was 13% of this function's time (V8,
+    // docs/RENDERER_JS_COST.md); the string-keyed map still creates, labels and counts pipelines.
+    const pipelineNumber = shader*2097152 + (lines<<20 | cull<<18 | zmode<<13 | blendBits<<1 | efbAlpha);
+    let pipeline = gpu.pipelineByNumber.get(pipelineNumber);
     if (!pipeline) {
-      const text = gpu.shaderText.get(shader);
-      if (text === undefined) throw new Error("no WGSL for shader " + shader);
-      // A pipeline compiled before the game started (gpu.warm, keyed by draw state and WGSL text:
-      // shader ids are only this session's), else one compiled here, inside the frame, and reported
-      // (gpu.onPipeline) so that a later session can compile it before it starts instead.
-      const warmKey = [lines,cull,zmode,blendBits,efbAlpha].join(":") + "\n" + text;
-      pipeline = gpu.warm ? gpu.warm.get(warmKey) : undefined;
-      if (pipeline) gpu.warmHits = (gpu.warmHits || 0) + 1;
-      else {
-        let module = gpu.shaders.get(shader);
-        if (!module) gpu.shaders.set(shader, module = d.createShaderModule({label:"gx shader " + shader, code:text}));
-        pipeline = d.createRenderPipeline(gpu.pipelineDescriptor(module,key,lines,cull,zmode,blendBits,efbAlpha));
-        if (gpu.onPipeline) gpu.onPipeline({lines,cull,zmode,blendBits,efbAlpha,code:text});
+      const key = [lines,cull,zmode,blendBits,efbAlpha,shader].join(":");
+      pipeline = gpu.pipelines.get(key);
+      if (!pipeline) {
+        const text = gpu.shaderText.get(shader);
+        if (text === undefined) throw new Error("no WGSL for shader " + shader);
+        // A pipeline compiled before the game started (gpu.warm, keyed by draw state and WGSL text:
+        // shader ids are only this session's), else one compiled here, inside the frame, and reported
+        // (gpu.onPipeline) so that a later session can compile it before it starts instead.
+        const warmKey = [lines,cull,zmode,blendBits,efbAlpha].join(":") + "\n" + text;
+        pipeline = gpu.warm ? gpu.warm.get(warmKey) : undefined;
+        if (pipeline) gpu.warmHits = (gpu.warmHits || 0) + 1;
+        else {
+          let module = gpu.shaders.get(shader);
+          if (!module) gpu.shaders.set(shader, module = d.createShaderModule({label:"gx shader " + shader, code:text}));
+          pipeline = d.createRenderPipeline(gpu.pipelineDescriptor(module,key,lines,cull,zmode,blendBits,efbAlpha));
+          if (gpu.onPipeline) gpu.onPipeline({lines,cull,zmode,blendBits,efbAlpha,code:text});
+        }
+        gpu.pipelines.set(key,pipeline);
       }
-      gpu.pipelines.set(key,pipeline);
+      gpu.pipelineByNumber.set(pipelineNumber,pipeline);
     }
     // Room in the batch's arenas, or submit the batch first: a batch is flushed, never
     // overwritten. Textures already bound for this draw were marked with the batch just
@@ -452,19 +471,25 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
       grow("vertexBuffer","vertexStaging",vertexNeed,GPUBufferUsage.VERTEX);
       grow("indexBuffer","indexStaging",indexNeed,GPUBufferUsage.INDEX);
     }
-    const groupKey = gpu.slots.map(s => s.entry.id + "/" + s.key).join(",");
-    let group = gpu.bindGroups.get(groupKey);
-    if (group) gpu.bindGroups.delete(groupKey);
-    else {
-      const entries = [{binding:0,resource:{buffer:gpu.uniforms,size:gpu.uniformBinding}}];
-      for (let i=0;i<8;i++) {
-        entries.push({binding:1+2*i,resource:gpu.slots[i].entry.view});
-        entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
+    // While no slot changed since the last draw (gpu.bindSlot), its bind group is this one and is
+    // already the cache's most recent entry: no key string, no cache lookup or reordering.
+    let group = gpu.lastGroup;
+    if (!group) {
+      const groupKey = gpu.slots.map(s => s.entry.id + "/" + s.key).join(",");
+      group = gpu.bindGroups.get(groupKey);
+      if (group) gpu.bindGroups.delete(groupKey);
+      else {
+        const entries = [{binding:0,resource:{buffer:gpu.uniforms,size:gpu.uniformBinding}}];
+        for (let i=0;i<8;i++) {
+          entries.push({binding:1+2*i,resource:gpu.slots[i].entry.view});
+          entries.push({binding:2+2*i,resource:gpu.slots[i].sampler});
+        }
+        group = d.createBindGroup({layout:gpu.textureLayout,entries});
+        if (gpu.bindGroups.size >= BIND_GROUP_CACHE_LIMIT) gpu.bindGroups.delete(gpu.bindGroups.keys().next().value);
       }
-      group = d.createBindGroup({layout:gpu.textureLayout,entries});
-      if (gpu.bindGroups.size >= BIND_GROUP_CACHE_LIMIT) gpu.bindGroups.delete(gpu.bindGroups.keys().next().value);
+      gpu.bindGroups.set(groupKey,group);
+      gpu.lastGroup = group;
     }
-    gpu.bindGroups.set(groupKey,group);
     batch = gpu.openBatch();
     if (!batch.pass) {
       batch.pass = batch.encoder.beginRenderPass({colorAttachments:[{view:gpu.efbView,loadOp:"load",storeOp:"store"}],
@@ -477,7 +502,13 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
     // Consecutive segments of one GX draw have the same constants: they share one slot.
     const words = gpu.uniformWords, base = constants >> 2, n = rows*4;
     let offset = batch.lastUniform, same = offset >= 0 && batch.lastRows === rows;
-    for (let i = 0, at = offset >> 2; same && i < n; i++) same = words[at+i] === HEAPU32[base+i];
+    // The heap view in a local and an early exit: 27% fewer V8 samples than re-reading HEAPU32 and
+    // testing `same` on every word. Still the largest part of this function (87% of draws match,
+    // after comparing every word): docs/RENDERER_JS_COST.md.
+    if (same) {
+      const heap = HEAPU32;
+      for (let i = 0, at = offset >> 2; i < n; i++) if (words[at+i] !== heap[base+i]) { same = false; break; }
+    }
     if (!same) {
       offset = batch.uniformBytes;
       gpu.uniformStaging.set(HEAPU8.subarray(constants,constants+rows*16),offset);
