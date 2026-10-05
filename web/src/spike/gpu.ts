@@ -68,8 +68,11 @@ export interface SpikeGpu {
   /** The XFB target is exactly one of these: the canvas's current texture, or `xfb`. */
   context: GpuCanvasContext | null;
   xfb: GpuTexture | null;
-  /** The EFB's and the target's format: one format, so an XFB copy is a plain texture copy. */
-  format: 'rgba8unorm';
+  /**
+   * The EFB's and the target's format: one format, so an XFB copy is a plain texture copy.
+   * `bgra8unorm` is the play page's presentation experiment (play/presentation.ts says why).
+   */
+  format: CanvasFormat;
   /** Written by the backend: the last clear colour (ARGB), and why it stopped if it did. */
   lastClearArgb?: number;
   failure?: string;
@@ -174,12 +177,14 @@ const live = { opened: new Set<SpikeGpu>(), mapping: new Set<GpuBuffer>() };
 const XFB_WIDTH = 640;
 const XFB_HEIGHT = 480;
 
+export type CanvasFormat = 'rgba8unorm' | 'bgra8unorm';
+
 /**
  * A device with an XFB target -- `canvas` configured for WebGPU, or, with `null`, an offscreen
  * 640x480 texture -- or the reason there is none. The fallback adapter is asked for when there is no
- * hardware one, because the CI runner renders in software.
+ * hardware one, because the CI runner renders in software. `format` is the EFB's and the target's.
  */
-export async function openGpu(canvas: OffscreenCanvas | null): Promise<GpuOpening> {
+export async function openGpu(canvas: OffscreenCanvas | null, format: CanvasFormat = 'rgba8unorm'): Promise<GpuOpening> {
   try {
     const gpu = (navigator as unknown as { gpu?: Gpu }).gpu;
     if (!gpu) return { gpu: null, reason: 'no navigator.gpu in this worker' };
@@ -189,7 +194,7 @@ export async function openGpu(canvas: OffscreenCanvas | null): Promise<GpuOpenin
     const deviceMs = performance.now() - loadedMs;
     // Install observers before the first probe/configuration, not after those can fail.
     const opened: SpikeGpu = {
-      gpu, adapter, canvas, device, context: null, xfb: null, format: 'rgba8unorm', errors: [],
+      gpu, adapter, canvas, device, context: null, xfb: null, format, errors: [],
       resources: {} as ResourceCounts, firstFailure: null, deviceLoss: null, validationErrors: [],
       recordFailure(operation, error) {
         if (!opened.firstFailure) opened.firstFailure = failureSnapshot(opened, operation, String(error));
@@ -221,9 +226,9 @@ export async function openGpu(canvas: OffscreenCanvas | null): Promise<GpuOpenin
       if (canvas) {
         opened.context = (canvas as unknown as { getContext(id: 'webgpu'): GpuCanvasContext | null }).getContext('webgpu');
         if (!opened.context) throw new Error('the canvas has no webgpu context');
-        opened.context.configure({ device, format: 'rgba8unorm', alphaMode: 'opaque', usage });
+        opened.context.configure({ device, format, alphaMode: 'opaque', usage });
       } else {
-        opened.xfb = device.createTexture({ size: [XFB_WIDTH, XFB_HEIGHT], format: 'rgba8unorm', usage });
+        opened.xfb = device.createTexture({ size: [XFB_WIDTH, XFB_HEIGHT], format, usage });
       }
     } catch (error) {
       opened.failure = `configure: ${error}`;

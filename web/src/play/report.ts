@@ -43,6 +43,7 @@ export const NOT_MEASURED = [
   'WebGPU calls made before the first frame (the backend attaching) are not counted.',
   'sampled_phases and freezes are read on the page\'s animation frames (about 60 Hz, nearest frame): they can alias with the worker, which is also paced at 60 Hz, and they stop while the page\'s main thread is blocked.',
   'Frames while the page was hidden are kept in frames_csv (hidden = 1) but left out of every summary.',
+  'What bitmap_ms is made of, in a direct session: the GPU process finishing the frame\'s messages, the GPU finishing the frame, and the transfer itself are one synchronous call (presentation.ts). Only a probe session (the transfer with nothing queued) and an alternate session (direct against one-frame-late blocks) take it apart; see presentation in the report.',
 ];
 
 export interface PerfMeta {
@@ -55,7 +56,12 @@ export interface PerfMeta {
   split: boolean;
   notes: string[];
   crossOriginIsolated: boolean;
+  /** presentation.ts's mode name; absent before the presentation experiments. */
+  presentation?: string;
 }
+
+/** The page's canvas as the phone shows it, for the transferred / shown pixel ratio. */
+export interface Display { cssWidth: number; cssHeight: number; devicePixelRatio: number }
 
 export interface PerfBatch {
   rows: FrameRecord[];
@@ -139,9 +145,97 @@ export function motive(row: Row, top: FrameRecord['top'] | null, split: boolean)
 
 const TIMING: FrameColumn[] = ['cycle_ms', 'core_ms', 'webgpu_ms', 'resources_ms', 'encode_ms', 'queue_ms', 'present_ms',
   'disc_ms', 'bitmap_ms', 'ack_ms', 'idle_ms', 'sim_ms', 'previous_heartbeat_tail_ms', 'csv_write_ms',
-  'heartbeat_read_ms', 'heartbeat_finish_ms', 'core_unattributed_ms'];
+  'heartbeat_read_ms', 'heartbeat_finish_ms', 'core_unattributed_ms', 'probe_ms', 'probe_transfer_ms'];
 const COUNTS: FrameColumn[] = ['webgpu_calls', 'draws', 'created', 'pipelines_created', 'disc_bytes'];
 const OVER_MS = [20, 33.4, 50, 100, 250, 1000];
+
+const mean = (values: number[]): number => values.reduce((a, b) => a + b, 0) / values.length;
+
+/** Frames of a block of `alternate` left out of its mean: the boundary frame is shown twice or skipped. */
+export const BLOCK_SETTLE = 2;
+/** A block with fewer in-match frames than this is not paired: it is the start or the end of a match. */
+export const BLOCK_MIN_FRAMES = 60;
+const PAIR_COLUMNS: FrameColumn[] = ['cycle_ms', 'core_ms', 'bitmap_ms', 'ack_ms', 'idle_ms'];
+
+/**
+ * An alternate session's pairs: each direct block (present_mode 0) with the late block after it
+ * (1, its first frame 2). Blocks are cut on all frames, in order, so a menu stretch splits nothing;
+ * only their visible in-match frames are averaged, minus BLOCK_SETTLE at the start. The noise is the
+ * spread of the pair differences: a difference smaller than two standard errors is not a result.
+ */
+export function alternatePairs(rows: Row[]) {
+  const blocks: { late: boolean; rows: Row[] }[] = [];
+  for (const row of rows) {
+    const late = value(row, 'present_mode') !== 0;
+    const block = blocks.at(-1);
+    if (block && block.late === late) block.rows.push(row);
+    else blocks.push({ late, rows: [row] });
+  }
+  const usable = (block: { rows: Row[] }): Row[] => block.rows.slice(BLOCK_SETTLE)
+    .filter((row) => value(row, 'hidden') === 0 && value(row, 'match_frame') > 0);
+  const pairs: { direct_frames: number; late_frames: number; direct: Record<string, number>; late: Record<string, number> }[] = [];
+  for (let i = 0; i + 1 < blocks.length; i++) {
+    const a = blocks[i]!, b = blocks[i + 1]!;
+    if (a.late || !b.late) continue;
+    const direct = usable(a), late = usable(b);
+    if (direct.length < BLOCK_MIN_FRAMES || late.length < BLOCK_MIN_FRAMES) continue;
+    const means = (selected: Row[]) => Object.fromEntries(PAIR_COLUMNS.map((column) =>
+      [column, round(mean(selected.map((row) => value(row, column))))]));
+    pairs.push({ direct_frames: direct.length, late_frames: late.length, direct: means(direct), late: means(late) });
+  }
+  if (!pairs.length) return null;
+  const difference = Object.fromEntries(PAIR_COLUMNS.map((column) => {
+    const d = pairs.map((pair) => pair.late[column]! - pair.direct[column]!);
+    const m = mean(d);
+    const sd = d.length > 1 ? Math.sqrt(d.reduce((total, x) => total + (x - m) ** 2, 0) / (d.length - 1)) : null;
+    const directMean = mean(pairs.map((pair) => pair.direct[column]!));
+    return [column, { late_minus_direct_ms: round(m), sd_ms: sd === null ? null : round(sd),
+      standard_error_ms: sd === null ? null : round(sd / Math.sqrt(d.length)),
+      relative: directMean ? round(m / directMean, 4) : null }];
+  }));
+  return { pairs: pairs.length, settle_frames: BLOCK_SETTLE, min_frames: BLOCK_MIN_FRAMES, difference, per_pair: pairs };
+}
+
+/**
+ * Where the presentation's time goes (presentation.ts): bitmap_ms by how the canvas got its picture,
+ * the alternate session's pairs, the probe's transfers by canvas size and format, and how many pixels
+ * are transferred against how many the phone shows.
+ */
+export function presentationSummary(rows: Row[], mode: string | null, display: Display | null) {
+  const visible = rows.filter((row) => value(row, 'hidden') === 0);
+  const inMatch = visible.filter((row) => value(row, 'match_frame') > 0);
+  const selected = inMatch.length ? inMatch : visible;
+  const stats = (values: number[]) => values.length ? { count: values.length, mean: round(mean(values)),
+    p50: nearestRank(values, 0.5), p95: nearestRank(values, 0.95) } : null;
+  const byMode: Record<string, unknown> = {};
+  for (const [name, code] of [['direct', 0], ['late', 1], ['late_first', 2]] as const) {
+    const these = selected.filter((row) => value(row, 'present_mode') === code);
+    if (!these.length) continue;
+    byMode[name] = Object.fromEntries(PAIR_COLUMNS.map((column) => [column, stats(these.map((row) => value(row, column)))]));
+  }
+  const probes: Record<string, unknown> = {};
+  const probed = selected.filter((row) => row[COLUMN.probe_transfer_ms] != null);
+  for (const px of [...new Set(probed.map((row) => value(row, 'probe_px')))].sort((a, b) => a - b)) {
+    for (const bgra of [0, 1]) {
+      const these = probed.filter((row) => value(row, 'probe_px') === px && value(row, 'probe_bgra') === bgra);
+      if (these.length) probes[`${px} px ${bgra ? 'bgra8unorm' : 'rgba8unorm'}`] = stats(these.map((row) => value(row, 'probe_transfer_ms')));
+    }
+  }
+  // A probe runs after its frame's presentation: the frame after it is the one it can slow down.
+  const afterProbe = selected.filter((row, i) => i > 0 && selected[i - 1]![COLUMN.probe_ms] != null &&
+    value(selected[i - 1]!, 'retrace') === value(row, 'retrace') - 1);
+  const shown = display ? Math.round(display.cssWidth * display.devicePixelRatio) * Math.round(display.cssHeight * display.devicePixelRatio) : null;
+  return {
+    mode: mode ?? 'direct', frames: inMatch.length ? 'in_match' : 'all',
+    by_present_mode: byMode,
+    alternate_pairs: alternatePairs(rows),
+    probe_transfer_ms: probed.length ? probes : null,
+    after_probe: probed.length ? { bitmap_ms: stats(afterProbe.map((row) => value(row, 'bitmap_ms'))),
+      cycle_ms: stats(afterProbe.map((row) => value(row, 'cycle_ms'))) } : null,
+    pixels: { transferred: 640 * 480, display, shown_device_px: shown,
+      transferred_over_shown: shown ? round(640 * 480 / shown) : null },
+  };
+}
 
 function countStats(values: number[]) {
   const total = values.reduce((a, b) => a + b, 0);
@@ -178,7 +272,7 @@ export function summarize(rows: Row[], inMatch: boolean, split: boolean, clockCo
   const percent: Record<string, number> = {
     core_outside_webgpu_and_disc: share(sum('core_ms') - sum('webgpu_ms') - sum('disc_ms')),
     webgpu: share(sum('webgpu_ms')), disc: share(sum('disc_ms')), bitmap: share(sum('bitmap_ms')),
-    ack: share(sum('ack_ms')), idle: share(sum('idle_ms')),
+    ack: share(sum('ack_ms')), probe: share(sum('probe_ms')), idle: share(sum('idle_ms')),
   };
   const webgpu_percent = { resources: share(sum('resources_ms')), encode: share(sum('encode_ms')),
     queue: share(sum('queue_ms')), present: share(sum('present_ms')) };
@@ -246,6 +340,7 @@ export class PlayReport {
   private heartbeat: HeartbeatState = emptyHeartbeat();
   private log: string[] = [];
   private transfers: number[] = [];
+  private display: Display | null = null;
   private readonly samples = { all: new Map<string, number>(), in_match: new Map<string, number>() };
   private lastFrame = 0;
   private lastChange: number;
@@ -289,6 +384,11 @@ export class PlayReport {
   onLog(line: string): void {
     this.log.push(line);
     keepLast(this.log, LOG_KEPT);
+  }
+
+  /** The page canvas's size on screen, the last one seen. */
+  onDisplay(display: Display): void {
+    this.display = display;
   }
 
   /** How long the page's transferFromImageBitmap took for one frame. */
@@ -411,6 +511,7 @@ export class PlayReport {
       freezes: { total: this.freezesTotal, kept: this.freezes },
       sampled_phases: this.sampled(),
       page_transfer_ms: transfers.length ? countStats(transfers) : null,
+      presentation: presentationSummary(rows, this.meta?.presentation ?? null, this.display),
       // The spike's own statistics over the core's sim_times rows: sim_ms is the core's measure of core_ms.
       stats_all: statsAll, stats_in_match: statsInMatch,
       decoder_cost: split ? decoderCostReport('profile', true, `${DECODER_COST_HEADER}\n${this.decoder.slice(-ROWS_KEPT).join('\n')}`) : null,

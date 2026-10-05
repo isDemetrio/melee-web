@@ -1,10 +1,11 @@
 import { clockCostNs, timerResolutionMs } from '../spike/clock.js';
-import { openGpu, renderProgress } from '../spike/gpu.js';
+import { observeGpuEvents, openGpu, renderProgress } from '../spike/gpu.js';
 import { heartbeatSender } from '../spike/heartbeat.js';
 import { openCachedDisc, readDiscThrough, type OpfsDirectory, type SyncReadHandle } from './disc-reader.js';
 import { coreSplitOf, CsvTail, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, type FrameRecord,
   type TailFs, verifyQueueHooks } from './frame-meter.js';
 import { loadRecipes, warmNote, warmPipelines, type PipelineRecipe, type WarmableGpu } from './pipelines.js';
+import { Presenter, presentationMode, TransferProbe, type PresentGpu } from './presentation.js';
 import { PRESENTED, readPad } from './shared-pad.js';
 
 interface Core {
@@ -27,6 +28,10 @@ interface Core {
 interface PlayRequest {
   iso: File; discIdentity?: string | null; pad: SharedArrayBuffer; flight: SharedArrayBuffer; split?: boolean;
   selftest?: boolean;
+  /** presentation.ts's mode name; absent or unknown is `direct`, the path before the experiments. */
+  presentation?: string;
+  /** Frames per `alternate` block; a test's 3-frame selftest asks for 1. */
+  alternateBlock?: number;
 }
 /** How often the frame records are posted to the page; a slow frame is posted at once. */
 const FLUSH_MS = 250;
@@ -41,9 +46,20 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
   try {
     const shared = new Int32Array(event.data.pad);
     const canvas = new OffscreenCanvas(640, 480);
-    const opening = await openGpu(canvas);
+    const mode = presentationMode(event.data.presentation);
+    const opening = await openGpu(canvas, mode.format);
     const gpu = opening.gpu;
     if (!gpu || gpu.failure) throw new Error(gpu?.failure ?? opening.reason);
+    // The transfer probe's calls must stay out of the frames' counts, so it takes the device's and
+    // the queue's functions before the meter wraps them.
+    let probe: TransferProbe | null = null;
+    if (mode.schedule === 'probe') {
+      const device = gpu.device as unknown as { createCommandEncoder(): never; queue: { submit(b: unknown[]): void } };
+      const createEncoder = device.createCommandEncoder, submit = device.queue.submit;
+      probe = new TransferProbe(() => createEncoder.call(device), (buffers) => submit.call(device.queue, buffers),
+        device, (width, height) => new OffscreenCanvas(width, height) as never, () => performance.now());
+    }
+    const presenter = new Presenter(gpu as unknown as PresentGpu, canvas, mode.schedule, event.data.alternateBlock);
     // Every WebGPU call the backend makes is timed from here on (frame-meter.ts says what that
     // can and cannot see). The calls themselves are forwarded unchanged.
     const meter = new FrameMeter(new Int32Array(event.data.flight), () => performance.now());
@@ -75,7 +91,11 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     let flushedAt = performance.now();
     let simTail: CsvTail | null = null;
     let decoderTail: CsvTail | null = null;
+    // WebGPU validation errors arrive as events (gpu.ts collects them), never as exceptions: they
+    // reach the report as notes, the first few of them, so an experiment that breaks is not silent.
+    let errorsSeen = 0;
     const flush = (): void => {
+      for (; errorsSeen < Math.min(gpu.errors.length, 20); errorsSeen++) meter.notes.push(`webgpu error: ${gpu.errors[errorsSeen]}`);
       scope.postMessage({ type: 'perf', rows: pending, sim, decoder, totals: meter.totals(), notes: meter.notes });
       pending = [];
       sim = [];
@@ -126,14 +146,15 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
                 nativeRoundtripMs: nativeRoundtripMs!, entered: bridgeEntered! } : undefined });
         // callMain never yields. Explicit bitmap presentation releases the WebGPU canvas
         // image every retrace, instead of waiting for the worker's task to return.
-        const bitmap = canvas.transferToImageBitmap();
-        meter.bitmapDone();
+        const { bitmap, mode: presented } = presenter.present();
+        meter.bitmapDone(presented);
         scope.postMessage({ type: 'frame', bitmap, serial: ++serial, retraces }, [bitmap]);
         // Backpressure also stops background tabs from accumulating images or running ahead.
         while (Atomics.load(shared, PRESENTED) !== serial) {
           Atomics.wait(shared, PRESENTED, Atomics.load(shared, PRESENTED), 100);
         }
         meter.ackDone();
+        if (probe) { meter.probeStart(); meter.probeDone(probe.run()); }
         deadline = Math.max(deadline + 1000 / 60, performance.now());
         const delay = deadline - performance.now();
         if (delay > 0) Atomics.wait(shared, PRESENTED, serial, delay);
@@ -145,6 +166,9 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     const core = await factory(options);
     if (core._melee_live_input_version?.() !== 1) throw new Error('This deployed core predates live input; rebuild it in CI.');
     if (core._gx_webgpu_attach?.() !== 1) throw new Error(`Renderer attach failed: ${gpu.failure ?? opening.reason}`);
+    // After the attach, which gives the renderer its flush (presentation.ts says what is wrapped).
+    presenter.install();
+    notes.push(`presentation: ${mode.name} (canvas ${mode.format}, ${mode.schedule})`);
     // The render pipelines this device's earlier sessions of this core compiled inside a frame,
     // compiled now, before callMain, where the worker can still await (pipelines.ts says why).
     if (!event.data.selftest && commit) {
@@ -183,7 +207,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         else split = true;
       }
     }
-    scope.postMessage({ type: 'perf-meta', commit, opt, queueProbe, timerResolutionMs: resolution, clockCostNs: clockNs, nativeClockCostNs, split, notes,
+    scope.postMessage({ type: 'perf-meta', commit, opt, queueProbe, timerResolutionMs: resolution, clockCostNs: clockNs, nativeClockCostNs, split, notes, presentation: mode.name,
       crossOriginIsolated: scope.crossOriginIsolated });
     if (event.data.selftest) {
       if (!core._gx_webgpu_selftest) throw new Error('Core has no renderer selftest');
@@ -194,6 +218,8 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         options.heartbeat(frame);
         options.heartbeatReturned(frame);
       }
+      // The selftest can yield: let the device's error events arrive before the last flush.
+      await observeGpuEvents(gpu);
       flush();
       scope.postMessage({ type: 'ended', exitCode: 0 });
       return;

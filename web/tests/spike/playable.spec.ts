@@ -23,8 +23,8 @@ interface Presentation {
  * of render.spec.ts's THE GAP -- so CI asserts the presentation, and the pixel test below runs
  * only where SPIKE_CANVAS_READBACK=1 says the GPU survives presenting.
  */
-async function playSelftest(page: Page): Promise<Presentation> {
-  await page.addInitScript(() => {
+async function playSelftest(page: Page, presentation = 'direct', alternateBlock?: number): Promise<Presentation> {
+  await page.addInitScript((block) => {
     const NativeWorker = window.Worker;
     const probe = window as unknown as { padWords?: Int32Array; frames?: unknown[] };
     probe.frames = [];
@@ -44,18 +44,20 @@ async function playSelftest(page: Page): Promise<Presentation> {
         });
       }
       override postMessage(message: unknown, transfer?: Transferable[] | StructuredSerializeOptions): void {
-        const request = message as { pad?: SharedArrayBuffer; selftest?: boolean };
+        const request = message as { pad?: SharedArrayBuffer; selftest?: boolean; alternateBlock?: number };
         if (request.pad) {
           request.selftest = true;
+          if (block) request.alternateBlock = block;
           probe.padWords = new Int32Array(request.pad);
         }
         if (Array.isArray(transfer)) super.postMessage(message, transfer);
         else super.postMessage(message, transfer);
       }
     };
-  });
+  }, alternateBlock);
   await page.goto('/');
   await page.click('button:has-text("Game")');
+  await page.selectOption('#game-presentation', presentation);
   await page.setInputFiles('#game-disc', { name: 'synthetic.iso', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
   await page.click('#game-play');
   await expect(page.locator('#performance')).toHaveText('Game ended (code 0).');
@@ -115,6 +117,34 @@ test('main page presents consecutive real core frames while worker stays synchro
     expect(Math.abs(row.core_ms! + row.bitmap_ms! + row.ack_ms! + row.idle_ms! - row.cycle_ms!)).toBeLessThan(0.005);
   }
 });
+
+// The presentation experiments (web/src/play/presentation.ts) on a real device: an exception in their
+// paths ends the session with an error instead of code 0, and a validation error is a report note.
+const EXPERIMENTS: [presentation: string, block: number | undefined, modes: number[]][] = [
+  ['bgra-probe', undefined, [0, 0, 0]], ['alternate', 1, [0, 2, 0]], ['bgra-alternate', 1, [0, 2, 0]]];
+for (const [presentation, block, modes] of EXPERIMENTS) {
+  test(`presentation ${presentation} presents every selftest frame`, async ({ page }) => {
+    const { presented, frames } = await playSelftest(page, presentation, block);
+    expect(frames.map(({ serial, width, height }) => ({ serial, width, height }))).toEqual(
+      [1, 2, 3].map((serial) => ({ serial, width: 640, height: 480 })));
+    expect(presented).toBe(3);
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#game-report')]);
+    const report = JSON.parse(await readFile(await download.path(), 'utf8'));
+    expect(report.presentation.mode).toBe(presentation);
+    // CI's Chromium loses the device when the task that presented a canvas ends (spike/gpu.ts, run
+    // 36898914442), which the selftest's wait for GPU events now reaches; any other error counts.
+    expect((report.notes as string[]).filter((note) => note.startsWith('webgpu error') &&
+      !note.includes('device lost: A valid external Instance reference no longer exists'))).toEqual([]);
+    const [header, ...lines] = (report.frames_csv as string).split('\n');
+    const columns = header!.split(',');
+    const rows = lines.map((line) => Object.fromEntries(line.split(',').map((cell, i) => [columns[i], cell])));
+    // Frame 2 is the late block's (the selftest makes two XFB copies a frame, so it may already be
+    // a late presentation proper, 1, rather than the block's first, 2).
+    expect(rows.map((row) => Number(row.present_mode) > 0)).toEqual(modes.map((mode) => mode > 0));
+    // The probe runs after every second frame: frame 2 only, of three.
+    if (presentation.endsWith('probe')) expect(rows.map((row) => row.probe_px)).toEqual(['', '76800', '']);
+  });
+}
 
 test('the presented frames carry the selftest colour, on a GPU that survives presenting', async ({ page }) => {
   test.skip(process.env.SPIKE_CANVAS_READBACK !== '1',

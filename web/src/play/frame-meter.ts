@@ -3,8 +3,7 @@
  * measured in the worker, on the worker's clock, without touching the core or `wasm/render/`.
  *
  * A frame is one cycle of the worker, from the end of one retrace's presentation to the end of the
- * next one's. It is cut into four consecutive parts by five clock reads, so they add up to the cycle
- * exactly:
+ * next one's. It is cut into consecutive parts by clock reads, so they add up to the cycle exactly:
  *
  * - `core`: `callMain` runs until the next retrace beat (`Module.heartbeat(r)`): the simulation, GX
  *   decoding, the backend's JavaScript and C++, and every WebGPU call it makes. Inside it, measured
@@ -17,6 +16,8 @@
  *   hands the frame over would wait here.
  * - `ack`: posting the frame and waiting for the page to present it (shared-pad.ts, PRESENTED). The
  *   page's main thread being busy shows up here.
+ * - `probe`: only in a presentation probe session (presentation.ts, TransferProbe): a transfer of a
+ *   canvas of its own, with nothing queued behind it. 0 in every other frame.
  * - `idle`: the 60 Hz pacing wait, i.e. time left over. A frame that is late has none.
  *
  * What it cannot see: the time the browser's GPU process and the GPU spend after a call has returned.
@@ -30,9 +31,9 @@
  * draws so far in this frame. A frozen worker cannot post, but the page can still read where it is.
  */
 
-export const PHASES = ['boot', 'core', 'webgpu', 'disc', 'bitmap', 'ack', 'idle'] as const;
+export const PHASES = ['boot', 'core', 'webgpu', 'disc', 'bitmap', 'ack', 'idle', 'probe'] as const;
 export type Phase = (typeof PHASES)[number];
-const BOOT = 0, CORE = 1, WEBGPU = 2, DISC = 3, BITMAP = 4, ACK = 5, IDLE = 6;
+const BOOT = 0, CORE = 1, WEBGPU = 2, DISC = 3, BITMAP = 4, ACK = 5, IDLE = 6, PROBE = 7;
 
 /** Flight recorder words (Int32). The page writes HIDDEN; the worker writes the rest. */
 export const FLIGHT_FRAME = 0;
@@ -83,7 +84,10 @@ export const FRAME_COLUMNS = ['retrace', 'match_frame', 'cycle_ms', 'core_ms', '
   'sim_ms', 'previous_heartbeat_tail_ms', 'csv_write_ms', 'heartbeat_read_ms', 'heartbeat_finish_ms',
   'core_unattributed_ms', 'native_pre_heartbeat_ms', 'previous_native_roundtrip_ms',
   'previous_js_heartbeat_ms', 'previous_js_return_to_resume_probe_ms',
-  'previous_bridge_outside_js_ms', 'bridge_entry_ms', 'residual_unexplained_ms'] as const;
+  'previous_bridge_outside_js_ms', 'bridge_entry_ms', 'residual_unexplained_ms',
+  // Presentation (presentation.ts): how the canvas got its picture (PRESENT_*), and the transfer probe,
+  // null in frames without one: its whole time, the transfer alone, the probe canvas's pixels and format.
+  'present_mode', 'probe_ms', 'probe_transfer_ms', 'probe_px', 'probe_bgra'] as const;
 export type FrameColumn = (typeof FRAME_COLUMNS)[number];
 export const COLUMN = Object.fromEntries(FRAME_COLUMNS.map((name, index) => [name, index])) as Record<FrameColumn, number>;
 
@@ -112,6 +116,8 @@ export interface BridgeTiming {
 export interface HeartbeatTiming { entered: number; readDone: number; core: CoreTiming | null; bridge?: BridgeTiming }
 
 export interface CoreSplit { decodeMs: number; nonDecodeMs: number }
+/** One transfer probe (presentation.ts): the transfer alone, and the probe canvas's pixels and format. */
+export interface ProbeTiming { transferMs: number; px: number; bgra: boolean }
 
 const round = (value: number): number => Math.round(value * 1000) / 1000;
 
@@ -131,6 +137,9 @@ export class FrameMeter {
   private coreEndAt = 0;
   private bitmapEndAt = 0;
   private ackEndAt = 0;
+  private probeEndAt = 0;
+  private presentMode = 0;
+  private probe: ProbeTiming | null = null;
   private resume = BOOT;
   private draws = 0;
   private discMs = 0;
@@ -229,15 +238,30 @@ export class FrameMeter {
     this.flight[FLIGHT_PHASE] = BITMAP;
   }
 
-  bitmapDone(): void {
+  /** `presentMode`: presentation.ts's PRESENT_*; 0 is the path every session took before it. */
+  bitmapDone(presentMode = 0): void {
     this.bitmapEndAt = this.now();
+    this.presentMode = presentMode;
     this.flight[FLIGHT_PHASE] = ACK;
   }
 
   ackDone(): void {
-    this.ackEndAt = this.now();
+    this.ackEndAt = this.probeEndAt = this.now();
+    this.probe = null;
     // A hidden page does not present, so a frame that waited for it is not a slow frame.
     this.hidden ||= this.flight[FLIGHT_HIDDEN] !== 0;
+    this.flight[FLIGHT_PHASE] = IDLE;
+  }
+
+  /** A transfer probe starts (presentation.ts); probeDone ends it, with null when none ran. */
+  probeStart(): void {
+    this.flight[FLIGHT_PHASE] = PROBE;
+  }
+
+  probeDone(result: ProbeTiming | null): void {
+    // Without a probe the frame has no probe part: the time since ackDone stays idle.
+    if (result) this.probeEndAt = this.now();
+    this.probe = result;
     this.flight[FLIGHT_PHASE] = IDLE;
   }
 
@@ -299,7 +323,10 @@ export class FrameMeter {
       queue_ms: round(category.queue), present_ms: round(category.present), created,
       pipelines_created: this.calls[PIPELINE]!, disc_ms: round(this.discMs), disc_bytes: this.discBytes,
       bitmap_ms: round(this.bitmapEndAt - this.coreEndAt), ack_ms: round(this.ackEndAt - this.bitmapEndAt),
-      idle_ms: round(end - this.ackEndAt), hidden: this.hidden ? 1 : 0,
+      idle_ms: round(end - this.probeEndAt), hidden: this.hidden ? 1 : 0,
+      present_mode: this.presentMode, probe_ms: this.probe ? round(this.probeEndAt - this.ackEndAt) : null,
+      probe_transfer_ms: this.probe ? round(this.probe.transferMs) : null, probe_px: this.probe?.px ?? null,
+      probe_bgra: this.probe ? (this.probe.bgra ? 1 : 0) : null,
       decode_ms: this.split ? round(this.split.decodeMs) : null,
       non_decode_ms: this.split ? round(this.split.nonDecodeMs) : null,
     };
