@@ -69,6 +69,9 @@ Due difetti del repository che il piano corregge (sezione 5), trovati leggendo i
   `/spike-core/` (`web/public/sw.js`, riga 42), ma la cache HTTP no.
 - Il commento in `web/vite.config.ts` dice che `_headers` sta "at the repo root": sta in
   `web/public/_headers`.
+  **Corretto il 2026-10-01** da `aad3598` (PR #28), che ha ripiegato in
+  sé la correzione minore assegnata dalla sezione 5: il commento ora nomina
+  `web/public/_headers` (`web/vite.config.ts` riga 8), quindi questa voce non chiede più nulla.
 
 ---
 
@@ -117,8 +120,8 @@ Questa è la decisione centrale. Le strade reali sono cinque.
 | Strada | Costo | Cosa serve all'operatore | Il telefono scarica 1,46 GB ogni volta? | Se la connessione cade a metà | File system nel Worker |
 | --- | --- | --- | --- | --- | --- |
 | **A. File scaricato a mano sul telefono e scelto col selettore** (oggi) | zero | scaricarlo da un server con richieste parziali (la VPS via `tailscale serve`, o il desktop) e metterlo nella memoria del telefono | no, una volta sola | lo riprende il gestore download del browser, se il server accetta le richieste parziali (`scripts/phase0/serve_spike.py` lo fa) | WORKERFS invariato |
-| **B. Bucket R2 letto direttamente durante la simulazione** (un *bucket* è un contenitore di file su R2; le **richieste parziali**, header HTTP `Range`, chiedono solo un pezzo di un file) | R2 (livello gratuito da verificare) | account Cloudflare, bucket, credenziali | no, ma ogni corsa rilegge dalla rete i pezzi che servono | la simulazione si blocca o fallisce a metà corsa | **nuovo**: serve un file system che legga via HTTP in modo sincrono (per esempio `FS.createLazyFile` di Emscripten con XHR sincrona nel Worker). **Scartata:** le letture di rete finirebbero dentro `sim_ms`, e il numero del verdetto misurerebbe la rete |
-| **C. R2 come origine + OPFS popolato una volta** (*OPFS*, Origin Private File System: uno spazio di file privato del sito dentro il browser, che resta tra una visita e l'altra) | R2 (livello gratuito da verificare) + Pages | account Cloudflare, bucket R2, chiavi S3 per il caricamento, Cloudflare Access (dettagli in sezione 3) | **no**: una volta per sito e per browser. Di nuovo solo se il browser libera lo spazio o l'operatore cancella i dati del sito | la pagina riprende dal punto in cui era arrivata (chiede `Range: bytes=<già scaricati>-`) e controlla ogni pezzo con un hash | **WORKERFS invariato**: `FileSystemFileHandle.getFile()` di OPFS restituisce un `File`, che si monta esattamente come quello del selettore |
+| **B. Bucket R2 letto direttamente durante la simulazione** (un *bucket* è un contenitore di file su R2; le **richieste parziali**, header HTTP `Range`, chiedono solo un pezzo di un file) | R2 (livello gratuito **verificato** il 2026-10-01, sezione 1) | account Cloudflare, bucket, credenziali | no, ma ogni corsa rilegge dalla rete i pezzi che servono | la simulazione si blocca o fallisce a metà corsa | **nuovo**: serve un file system che legga via HTTP in modo sincrono (per esempio `FS.createLazyFile` di Emscripten con XHR sincrona nel Worker). **Scartata:** le letture di rete finirebbero dentro `sim_ms`, e il numero del verdetto misurerebbe la rete |
+| **C. R2 come origine + OPFS popolato una volta** (*OPFS*, Origin Private File System: uno spazio di file privato del sito dentro il browser, che resta tra una visita e l'altra) | R2 (livello gratuito **verificato** il 2026-10-01, sezione 1) + Pages | account Cloudflare, bucket R2, chiavi S3 per il caricamento, Cloudflare Access (dettagli in sezione 3) | **no**: una volta per sito e per browser. Di nuovo solo se il browser libera lo spazio o l'operatore cancella i dati del sito | la pagina riprende dal punto in cui era arrivata (chiede `Range: bytes=<già scaricati>-`) e controlla ogni pezzo con un hash | **WORKERFS invariato**: `FileSystemFileHandle.getFile()` di OPFS restituisce un `File`, che si monta esattamente come quello del selettore |
 | **D. Server con richieste parziali sotto il nostro controllo** (la VPS dietro `tailscale serve`, o il desktop dell'operatore con port forwarding USB) | zero | Tailscale sul telefono con HTTPS attivo nella tailnet, oppure un desktop con Node ≥ 18 e un cavo USB (`docs/OPEN_QUESTIONS.md` Q8) | come A | come A | come A |
 | **E. Altri bucket** (S3, Backblaze B2, …) | da verificare, e il traffico in uscita di solito si paga | un secondo account e un secondo fornitore | come C | come C | come C, ma con il disco su un'altra origine: con l'isolamento (COEP, sezione 3) servono CORS e l'header `Cross-Origin-Resource-Policy` configurati sul fornitore. **Scartata:** nessun vantaggio rispetto a C, e la spec ha già scelto Cloudflare |
 
@@ -398,6 +401,9 @@ Un file per riga. Ogni gruppo è una PR piccola (una modifica logica per volta).
 
 **Correzione minore**, in una qualunque delle PR sopra: il commento di `web/vite.config.ts` su
 dove sta `_headers`.
+**Fatta il 2026-10-01** da `aad3598` (PR #28), che ha ripiegato in sé la
+correzione assegnata dalla sezione 0: il commento ora nomina `web/public/_headers`
+(`web/vite.config.ts` riga 8).
 
 ---
 

@@ -3532,3 +3532,67 @@ scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
 **Changed.** `docs/PHASE0_DEPLOY_PLAN.md`, three places: section 3's compression row (the answer, the two contradictory statements, the two documented limits, and the corrected check — a full GET with a browser's `Accept-Encoding` against `/spike-core/melee_core_web.wasm`), section 1's closing note (the item is documented; what remains is the header actually served and the algorithm chosen), and section 7's bullet that listed what only step 11 can check (it named five things, three of which had been closed since it was written — Access coverage and the address format on 2026-10-04, the preview's R2 binding on 2026-10-02 — so it now says so; the count sentence in section 1 above it said "Due delle cinque voci", and with compression added it says three). `docs/PROGRESS.md` is this entry. No number changes: 16,323,255 bytes, the 48- and 50-byte floors and the 25 MiB per-file limit were already right. No workflow, script, renderer or test-semantics file is touched, and `phase0-build.yml`'s path filter does not list `docs/`, so this pull request costs no WASM core build.
 
 **Not done, and why.** Nothing was deployed, uploaded or built, and no Cloudflare credential was used: the page says what Cloudflare *does*, not what this deployment *serves*, so the row's `curl` is still the check for step 11. Which algorithm the phone will actually receive cannot be settled from here even in principle, because it depends on the account's plan and that account does not exist yet (O2), and because Cloudflare's own page states both that the Free plan defaults to Zstandard and that Zstandard is enabled through Compression Rules. `docs/PHASE0_REPORT.md` stays unwritten: it is P0-12 and belongs with the operator's device rows. On the VPS, all without a build: `python3 -m unittest discover -s scripts/tests` (Ran 207 tests, `OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (271 tracked files, clean), `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` (210 citations in 4 documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh` (all deploy and upload guards hold), `bash scripts/tests/test_phase0_runner.sh` (44 checkpoint runner guards hold; run from the checkout where the pinned submodule is initialised, because a fresh worktree has it empty — the guarded script and its test are byte-identical to this branch's) and `bash scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
+
+## 2026-10-05 — the plan's own open markers, and the two the repository had already closed (cron, `cron/phase0-oct5`)
+
+**Why this and not something else.** Every autonomous step of `docs/PHASE0_DEPLOY_PLAN.md` section 6
+is done or held by the branches that own its files: PR 1–6 landed, `go_no_go.py` landed, the piece
+manifest computed on 2026-10-01, and step 3 — the native trace at the commit the spike page serves —
+was satisfied that same day, when `/home/hermes/incoming/phase0/current.env` moved the reference to
+`63511ce6c5f4e39be07b9acc9b517b2010ca01db` with its own comment ("the reference now matches the
+commit the spike page actually serves"). The renderer, the plan's only other autonomous work, is in
+flight on the operator's own branches: eleven pull requests open at the time of this run (PR #70,
+#100, #101, #104, #112, #113, #117, #119, #122, #123, #124, seven of them drafts), whose file set is
+`wasm/render/**`, `web/src/spike/**`, `web/tests/spike/render.spec.ts`, `native/CMakeLists.txt`,
+`native/headless_host.cpp`, `wasm/core/CMakeLists.txt`, `wasm/compat/fma.h`, `experiments/**` and the
+perf workflows. What was left is the plan's own text: three places where it still asks for work that
+exists, or marks as unverified something the same document had verified.
+
+**Verified 2026-10-05, each fact with the check that produced it.** *§2's route table, rows B and C*
+gave the cost of both routes as "R2 (livello gratuito da verificare)", while §1's limits table carries
+the answer as **verificato il 2026-10-01** on `https://developers.cloudflare.com/r2/pricing/` — 10
+GB-mese of storage, 1 million Class A operations, 10 million Class B, egress free — and §1's closing
+note lists that page among the ones read. The same numbers are in this file's own 2026-10-01 table
+(`| R2 free tier | 10 GB-month, 1M Class A, 10M Class B, egress free | r2/pricing/ |`), and §3's O2
+row already said so in as many words: "La riga del livello gratuito in §1 lo diceva già dal
+2026-10-01". Two rows of one document disagreed with a third. *§0's second defect bullet and §5's
+closing line* — "Il commento in `web/vite.config.ts` dice che `_headers` sta \"at the repo root\"" and
+"**Correzione minore**, in una qualunque delle PR sopra: il commento di `web/vite.config.ts` su dove
+sta `_headers`" — both ask for a correction that landed on 2026-10-01:
+`git log --oneline -S'at the repo root' -- web/vite.config.ts` names `aad3598` (PR #28) and
+`3c8ffe9`; `web/vite.config.ts` line 8 now reads "Production sets them in `web/public/_headers`"; and
+this file's own entry for that PR says it "folds in the minor correction `docs/PHASE0_DEPLOY_PLAN.md`
+section 0 asks for". The first defect of the same list — the immutable `Cache-Control` on
+`/*.wasm` — is **not** in that position: §3's row records it as answered on 2026-10-04 and the rule
+the spike deploy appends is the documented remedy, so it is left alone.
+
+**Changed.** `docs/PHASE0_DEPLOY_PLAN.md`, three places: §0's second defect bullet and §5's
+"Correzione minore" now say the correction is done, with the commit and the line that show it, and
+§2's rows B and C give the free tier as verified on 2026-10-01, pointing at §1. No number changes and
+no scope is added: the free tier's numbers, the module's 16,323,255 bytes at `-Oz`, the 25 MiB
+per-file limit and the ISO's size and hash were already right; what was stale were three markers the
+plan was still carrying. `docs/PROGRESS.md` is this entry. No workflow, script, renderer, simulation
+or test-semantics file is touched, and `phase0-build.yml`'s `pull_request.paths` does not list
+`docs/`, so this pull request costs no WASM core build.
+
+**What is left, and what each thing waits on — the honest list.** No autonomous step of the plan
+remains. §2's row E still says "da verificare" about other object stores, and it is left as it is
+because the same table discards that route; §2's two browser-behaviour markers
+(`createSyncAccessHandle` availability, and what a private window does to the site's storage) are
+assigned by the plan itself to the device run, and the second one matters only for M5; §3's rows
+whose only remaining check is the first deploy's `curl` — the headers actually served, the
+compression algorithm, and whether a `!` in the same rule that re-sets the header is applied in
+order — need O2–O9 and step 11; §6's steps 6–14 are the operator's decisions, credentials and
+devices, M1/M2 first and M2 decides. `docs/PHASE0_REPORT.md` is P0-12 and stays unwritten until
+those rows exist.
+
+**Not done, and why.** Nothing was deployed, published, uploaded or built and no Cloudflare
+credential was used: every fact above comes from the repository, from this file, or from the page §1
+already cites. On the VPS, all without a build: `python3 -m unittest discover -s scripts/tests` (Ran
+207 tests, `OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (271 tracked files,
+clean), `python3 scripts/check_docs.py --submodule
+/home/hermes/projects/melee-web/upstream/melee-unlocked` (210 citations in 4 documents, 0
+violations), `bash scripts/tests/test_deploy_guard.sh` (all deploy and upload guards hold), `bash
+scripts/tests/test_phase0_runner.sh` (44 checkpoint runner guards hold; run from the checkout where
+the pinned submodule is initialised) and `bash scripts/tests/test_device_test_serve.sh` (6 cases
+passed). CI decides the rest.
