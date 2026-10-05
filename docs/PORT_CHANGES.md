@@ -49,6 +49,19 @@ ordinary WASM arithmetic, whose NaN sign and payload the specification leaves to
 so before the pin a NaN *result* of such an operation was the platform's rather than the
 reference's. That case is no longer left to the engine -- see the next section.
 
+### The zero-factor case, taken before the general path
+
+The shim tested a zero addend first and a zero factor only inside that branch, so a call with a
+zero factor and a nonzero addend fell through `exact_product` and then to libc's `fma` -- which
+normalizes `x`, `y` and `z` (three calls, `fma.c:40-42`) before it reaches the same `x*y + z`
+shortcut. The off-diagonal zeros of a rotation matrix are exactly that case, and the four-player
+profile put the libc path at 1.28 ms/frame under the whole profile (2.4% of the profiled frame;
+`docs/SKINNING_ENVELOPE_COST.md`). The check is hoisted ahead of the general path: one compare
+instead of the `exact_product` scan and the libc call. The result is unchanged -- the exact
+product of a zero factor is a signed zero, so the exact sum is the IEEE sum of that zero and the
+addend, `-0 + +0 = +0` included -- and the probe gains a randomized zero-factor comparison against
+the general path (`wasm/probe/fma_shim_test.cpp`).
+
 ## The NaN-sign class: our own negation, not the platform's latitude
 
 `fmsub`, `fnmadd` and `fnmsub` are written as one `fma` call with a negated operand
