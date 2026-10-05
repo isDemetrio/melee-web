@@ -639,6 +639,20 @@ std::unordered_map<gxw::ShaderUid, int, gxw::ShaderUidHash> g_shaders;
 float g_last_constants[gxw::MAX_ROWS][4];
 int g_last_rows = -1;
 
+// Whether `bytes` (a multiple of 8) are equal, eight at a time. Not memcmp: this build's compares
+// one byte at a time, and over a draw's ~2000 bytes of constants it measured slower than the
+// JavaScript word loop it replaced (docs/RENDERER_JS_COST.md).
+bool same_bytes(const void* a, const void* b, size_t bytes) {
+  const auto* p = static_cast<const unsigned char*>(a);
+  const auto* q = static_cast<const unsigned char*>(b);
+  for (size_t i = 0; i < bytes; i += 8) {
+    uint64_t x, y;
+    std::memcpy(&x, p + i, 8); std::memcpy(&y, q + i, 8);
+    if (x != y) return false;
+  }
+  return true;
+}
+
 // Baseline projection/viewport rules transcribed from gx_shader.cpp:671-748 and
 // gx_d3d12.cpp:1809-1826. No guest memory or live GX registers are read here.
 bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::DrawSegment& segment) {
@@ -691,10 +705,10 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
     code=gxw::generate_wgsl(uid);
   }
   if (!upload_textures(dc)) return false;
-  // The constants of the previous gxw_draw call, for its uniform dedup: one memcmp here instead of
-  // a JavaScript loop over the same words.
+  // The constants of the previous gxw_draw call, for its uniform dedup: compared here instead of
+  // by a JavaScript loop over the same words.
   const int rows=gxw::uniform_rows(uid);
-  const bool same_constants=rows==g_last_rows && std::memcmp(u,g_last_constants,size_t(rows)*sizeof u[0])==0;
+  const bool same_constants=rows==g_last_rows && same_bytes(u,g_last_constants,size_t(rows)*sizeof u[0]);
   if (!same_constants) { std::memcpy(g_last_constants,u,size_t(rows)*sizeof u[0]); g_last_rows=rows; }
   return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
                   &u[0][0],rows,r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),
