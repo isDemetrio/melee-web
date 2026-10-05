@@ -3693,3 +3693,61 @@ by those two; the `EM_JS`-versus-`<webgpu/webgpu.h>` choice (Q10(b)), the render
 scripts/check_no_game_data.py --all` (274 tracked files, clean) and `python3 scripts/check_docs.py
 --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` (210 citations in 4 documents, 0
 violations). CI decides the rest.
+
+## 2026-10-05 — the device plan's VPS preparation is measured: four "da verificare" closed, and the local `dist` does not carry the reference commit (cron, `cron/phase0-oct5c`)
+
+**Why this and not something else.** Every autonomous step of `docs/PHASE0_DEPLOY_PLAN.md` section 6 is
+done or held by the operator (steps 1-5 done; step 6 an operator decision; 7-14 credentials, devices and
+the verdict), and the renderer — the plan's only other autonomous work — is in flight on nine open pull
+requests whose file set is `wasm/render/**`, `web/src/spike/**`, `wasm/core/CMakeLists.txt`,
+`wasm/compat/fma.h`, `native/**`, `experiments/**`, `docs/PROGRESS.md` and the perf workflows (PR #70,
+#100, #101, #104, #112, #113, #117, #119, #124); the operator merged three more (#122, #123, #127) in the
+hour before this run, and one of his sessions was verifying #119 on this VPS twelve minutes before it.
+What none of them touches is `docs/PHASE0_DEVICE_PLAN.md` section 2, "Preparazione sulla VPS (la fa
+l'agente, non l'operatore)" — the agent's own preparation of step 7 (M1/M2), which needs no Cloudflare
+credential, no phone and no decision, and which carried four "**da verificare**".
+
+**Verified 2026-10-05, each fact with the check that produced it, on the VPS and without a build.**
+*V1, the ISO*: `stat -c %s /home/hermes/incoming/melee-ntsc102.iso` answers `1459978240` and `sha1sum`
+answers `d4e70c064cc714ba8400a849cf299dbd1aa326fc`, the two values the plan expects; the path is the one
+the server's comment guessed. *V2, the dist*: `ls -d /home/hermes/incoming/phase0/spike-dist*/` finds
+**seven** copies and `cat <dir>/spike-core/core.json` reads their commits — `4fba3a08…` (2026-09-30,
+16,323,255 bytes), `4a3f537e…` (2026-10-01, 16,323,255), `9b08acfb…` (2026-10-02 17:09, 15,248,094),
+`cd20fa33…` (17:36, 15,253,943), `83059291…` (21:24, 15,254,307), `118c0405…` (21:35, 15,254,426),
+`df8635e8…` (21:59, 15,254,426) — all `-Oz`, and **none** of them the reference commit `63511ce6…` that
+`current.env` pins; the newest is `spike-dist-drawcost2`, of 2026-10-02, and `main` has moved since. The
+three newest nest the dist one level deeper (`<dir>/melee-spike-dist/`), which is what
+`gh run download -D <dir>` produces. The `stat` line's expectation of about 87.1 MB is the 2026-09-30
+`-O1` build; the served modules have been about 15.25 MB since 2026-10-02.
+*V3, the tailnet route*: `tailscale version` answers 1.102.2; `tailscale serve --help` documents
+`tailscale serve <target>` with `--bg` and a port, i.e. the exact form the plan writes (`tailscale serve
+--bg 8091`); no `sudo` is needed — every command of this measurement ran as `hermes` and answered, and the
+node carries `https://tailscale.com/cap/is-admin` and `is-owner` (`tailscale status --json`,
+`.Self.Capabilities`); MagicDNS is on tailnet-wide (`tailscale dns status` answers "MagicDNS: enabled
+tailnet-wide (suffix = tailfbaf46.ts.net)") and HTTPS certificates are already enabled (`CertDomains:
+["hermesagent.tailfbaf46.ts.net"]`, which `ipnstate.go` defines as the names the control plane will help
+provision TLS certificates for) — so the operator action the plan asks for is already done. *Route D,
+Taildrop*: `tailscale status --json` gives `TaildropTarget: 5` on both peers and `NoFileSharingReason: ""`;
+in the enum of the installed version (v1.102.2, `ipnstate.go` line 343) 5 is `TaildropTargetOffline`, not
+`MissingCap` (4) or `UnsupportedOS` (7), and both peers were offline, which is the only stated obstacle;
+`tailscale file cp|get` exist in 1.102.2.
+
+**Changed.** `docs/PHASE0_DEVICE_PLAN.md`, six places: section 2's route table row D, V1, V2 (the
+paragraph, a measured table of the seven dists, the stale 87.1 MB expectation and the two comments of the
+check block), V3, section 4 step 12's Taildrop marker, and a two-line note at the head of the
+VPS-preparation section saying which of the three were measured and what is left. No number is invented,
+and none is changed where it was right: the ISO's size and SHA-1, the 88 chunks and the module's `-Oz`
+level were already correct. `docs/PROGRESS.md` is this entry. No workflow, script, renderer, simulation or
+test-semantics file is touched, and `phase0-build.yml`'s `pull_request.paths` does not list `docs/`, so
+this pull request costs no WASM core build.
+
+**Not done, and why.** Nothing was built, dispatched, deployed, uploaded, served or tunnelled: `tailscale
+serve` was not run and `tailscale serve status` answers `No serve config`; no `dist` was rebuilt and no
+Cloudflare credential was used. What stays unverified, and by what: a real Taildrop transfer and where iOS
+saves the file (the phone must be online); a `tailscale serve` that actually issues a certificate and a
+page loaded from the phone (the tunnel and the phone); and the one substantive item this session found —
+which commit the `dist` served on route D should be, since the seven local copies do not carry the
+reference's and the choice is the operator's. The device rows M1/M2/M5, the verdict and
+`docs/PHASE0_REPORT.md` are unchanged and still wait on the operator. On the VPS, all without a build:
+`python3 -m unittest discover -s scripts/tests` (`Ran 210 tests in 19.893s`, `OK`) and `python3
+scripts/check_no_game_data.py --all` (275 tracked files, clean). CI decides the rest.
