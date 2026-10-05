@@ -176,6 +176,10 @@ sono.
 - **Il perché delle scorciatoie mancate delle texture.** Il `memcmp` è misurato (+2,1 ms); la causa
   (falsa invalidazione dei blocchi da 64 KB) è un'ipotesi coerente con le scritture sorvegliate
   2,72×, senza un contatore delle scorciatoie mancate.
+  *Aggiornamento (PR #140, `docs/TEXTURE_COMPARE.md`):* il contatore ora esiste e il 100% delle
+  scorciatoie mancate confronta uguale; i blocchi da 64 KB sono l'83–85% dei byte, il resto sono i
+  caricamenti TLUT (versione palette globale) e i cambi di palette. Il confronto a parole vale
+  −1,56 ms a due personaggi e −4,26 a quattro.
 - **`decode_rest_ms` non si separa con i timer**, come già scritto in `docs/CORE_BUDGET_DECISION.md`.
   Il profilo dà le funzioni, non i sottopassi: a `-Oz` il compilatore ha inlinato parte della
   decodifica dei vertici in `parse_command` (ne resta fuori solo una lambda di `decode_vertices`,
