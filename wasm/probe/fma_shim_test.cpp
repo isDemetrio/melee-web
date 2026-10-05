@@ -103,9 +103,64 @@ static void exact_product_matches_general_path() {
   if (differ || taken != checked / 2) ++failures;
 }
 
+// The zero-factor fast path against the general path, bit for bit, on the operands it takes:
+// one factor is a signed zero and the other runs over the whole exponent range, with an
+// infinity and the addend drawn from the same set. This is the case the shortcut exists for --
+// the exact product is a signed zero, so the exact sum is the IEEE sum of that zero and z --
+// and it is a pure reordering: it has no observable behaviour of its own, so this is a
+// correctness net for the reorder (results unchanged), not a proof that the branch fires.
+// The speed is the profile's business, not this test's.
+static void zero_factor_matches_general_path() {
+  uint64_t state = 0x7a65726f66616374ull, checked = 0, differ = 0;
+  auto next = [&state] {
+    state += 0x9e3779b97f4a7c15ull;
+    uint64_t z = state;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    return z ^ (z >> 31);
+  };
+  const double zeros[2] = {0.0, -0.0};
+  const uint64_t infs[2] = {0x7ff0000000000000ull, 0xfff0000000000000ull};
+  for (uint64_t i = 0; i < 4000000; ++i) {
+    const uint64_t r0 = next(), r1 = next();
+    double y;
+    switch (r0 % 6) {
+      case 0: y = from_bits(infs[0]); break;
+      case 1: y = from_bits(infs[1]); break;
+      case 2: y = 0.0; break;
+      case 3: y = -0.0; break;
+      default: y = from_bits((r0 & 0x800FFFFFFFFFFFFFull) | (uint64_t(1 + (r0 >> 52) % 2046) << 52));
+    }
+    double z;
+    switch (r1 % 6) {
+      case 0: z = from_bits(infs[0]); break;
+      case 1: z = from_bits(infs[1]); break;
+      case 2: z = 0.0; break;
+      case 3: z = -0.0; break;
+      default: z = from_bits((r1 & 0x800FFFFFFFFFFFFFull) | (uint64_t(1 + (r1 >> 52) % 2046) << 52));
+    }
+    for (int k = 0; k < 2; ++k) {
+      const double x = zeros[k];
+      ++checked;
+      const uint64_t got = bits(wasm_compat::fma(x, y, z));
+      const uint64_t want = bits(general_fma(x, y, z));
+      if (got != want) {
+        if (differ++ < 5)
+          std::printf("FAIL zero factor x=%016llx y=%016llx z=%016llx got=%016llx want=%016llx\n",
+                      (unsigned long long)bits(x), (unsigned long long)bits(y),
+                      (unsigned long long)bits(z), (unsigned long long)got, (unsigned long long)want);
+      }
+    }
+  }
+  std::printf("%s zero-factor fast path: %llu results, %llu differ\n",
+              differ ? "FAIL" : "ok  ", (unsigned long long)checked, (unsigned long long)differ);
+  if (differ) ++failures;
+}
+
 int main() {
   static_assert(sizeof(double) == 8, "IEEE binary64 required");
   exact_product_matches_general_path();
+  zero_factor_matches_general_path();
 
   // The zero-sign cases the probe reported: the exact product is nonzero but rounds to
   // -0, and the addend is +0. musl's shortcut adds the zero and returns +0.

@@ -142,18 +142,22 @@ inline double fma(double x, double y, double z) {
   // -- is what `pinned` below replaces with the reference's.
   double nan;
   if (nan_operand(x, y, z, nan)) return nan;
-  // `z == 0.0` is true for -0.0 as well. With a nonzero addend the call is libc's fma,
-  // so the hot path pays this compare and the result check in `pinned` and nothing else.
+  // A zero factor makes the exact product a signed zero, so the exact sum is the IEEE sum
+  // of that zero and z and ordinary addition already gives it the right sign. A matrix is
+  // full of these -- the off-diagonal zeros of every axis whose rotation is zero -- and
+  // taking the case here is one compare. Left to the general path it costs the
+  // `exact_product` scan and then libc's `fma`, which normalizes x, y and z (three calls,
+  // `fma.c:40-42`) before reaching the same `x*y + z` shortcut; the profile put that
+  // libc path at 2.3% of an in-match frame, all of it on this case
+  // (docs/CORE_COST_BROWSER.md). `x == 0.0` is false for NaN, so an infinite factor keeps
+  // taking this path: with the other factor zero that product is an invalid operation, and
+  // `pinned` is what makes its result the reference's on every engine.
+  if (x == 0.0 || y == 0.0) return pinned(x * y + z);
+  // `z == 0.0` is true for -0.0 as well.
   if (z == 0.0) {
-    // A zero factor makes the exact product a signed zero: the exact sum is the IEEE
-    // sum of that zero and z, and ordinary addition already gives it the right sign.
-    // `x == 0.0` is false for NaN, so an infinite factor keeps taking this path: with the
-    // other factor zero that product is an invalid operation, and `pinned` is what makes
-    // its result the reference's on every engine.
-    if (x == 0.0 || y == 0.0) return pinned(x * y + z);
-    // Otherwise the exact product is nonzero, so the exact sum is that product and the
-    // correctly rounded product is the correctly rounded fused result, sign of an
-    // underflow to -0 included.
+    // The factors are nonzero, so the exact product is nonzero: the exact sum is that
+    // product and the correctly rounded product is the correctly rounded fused result,
+    // sign of an underflow to -0 included.
     return x * y;
   }
   // An exact product needs no fused hardware: when x*y is representable in a double, `x*y + z`
