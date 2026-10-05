@@ -8,12 +8,20 @@ come from `docs/PHASE0_TASKS.md`; this file does not change them, it says how to
 
 ## 0. Where things stand (verified, with evidence)
 
+**State as of 2026-10-05.** This section is the snapshot of 2026-09-30 12:20 UTC and its rows stay
+the history of that day; two of the facts in it no longer hold and are corrected where they appear,
+each with the measurement that corrects it. `docs/PHASE0_DEPLOY_PLAN.md` section 6 and
+`docs/PHASE0_DEVICE_PLAN.md` section 6 both cite this file for its S11 — the optimisation-level rule —
+so the claims below about the level and the module's size were re-read against the repository on
+2026-10-05 — no build, no credential, no device. What changed in between:
+`-O1` is no longer the level `main` compiles the core with, and the module is no longer 87 MB.
+
 | Fact | Evidence |
 | --- | --- |
 | The native reference boots, plays a match, and is reproducible | `docs/PROGRESS.md` "The first native run"; traces in `/home/hermes/.hermes/cache/scratch/melee-run4/trace.csv` and `melee-run5/trace.csv`, both SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`, 2401 lines, stdout ends `final scene: mode=2 state=2 match_frame=762 (retraces=2400)` |
 | That reference was built from **main at 10:29 UTC** (patches 0001–0002 only, threaded DVD worker) | `gh run view 36702692761` → `workflow_dispatch`, `headBranch: main` |
 | **PR #6 (`phase0/wasm-core`) is green**, including the WASM build | `gh pr checks 6`; run 36710111396: offline core compile+link **952 s**, release guest **1066 s**, Node smoke passed, `forbidden_libm_imports: []` |
-| The WASM module is **87,117,533 bytes** — over the 25 MiB Pages per-file limit | same run, `wasm_report.py` output: `"within_pages_limit": false` (CI reports it, does not fail on it) |
+| The WASM module is **87,117,533 bytes** — over the 25 MiB Pages per-file limit | same run, `wasm_report.py` output: `"within_pages_limit": false` (CI reports it, does not fail on it). **State as of 2026-10-05: no longer true.** That is the `-O1` build of 2026-09-30; on `main` at `fe2e06b` the web module is **15,278,604 bytes** and the Node one 15,232,193, both with `"within_pages_limit": true` (`Phase 0 — WASM core`, run 37319576228) |
 | Compiler peak RSS in that build was **7,351,844 KiB** with `ninja_jobs=4` on a runner with `MemAvailable_KiB=6943488` | same run, "Numeric compilation report" |
 | PR #7 (`phase0/checkpoint-comparator`, P0-03) is open against `main` and **contains PR #6's three commits** (cc4dbf3, 8c87403, b82d6cf) plus its own (8191755) | `git log --oneline`, `gh pr view 7 --json baseRefName` |
 | `phase0-build.yml` is **not on `main`** yet, so it cannot be dispatched until PR #6 merges | `git show main:.github/workflows/phase0-build.yml` fails |
@@ -35,6 +43,11 @@ What the WASM core promises (`wasm/core/README.md`, `wasm/core/CMakeLists.txt`):
 and the rest of `native/core_sources.cmake`, compiled with emcc at `-O1` and
 `MELEE_SINGLE_THREAD=1`. Nothing is uploaded: the workflow ends with
 `# No guest-derived build products or caches are uploaded.`
+
+**State as of 2026-10-05.** The level is no longer a constant in the build definition: it is the cache
+variable `MELEE_OPT`, and its default is `-Oz`, not `-O1` (`wasm/core/CMakeLists.txt` line 23, with
+`set_property(CACHE MELEE_OPT PROPERTY STRINGS -Oz -O1 -O2 -O3)` on line 24 and `-g0` appended to the
+compile options on line 32). `main` has shipped `-Oz` since PR #13, 2026-09-30.
 
 ## 1. Conventions used by every step
 
@@ -411,6 +424,8 @@ ls -la "$D/wasm" "$D/native" "$D/native-st"
 - **Expected:** `same commit` twice; `$D/wasm` holds `melee_core_node.js`,
   `melee_core_node.wasm` (≈87 MB), `melee_core_web.js`, `melee_core_web.wasm`; each native
   directory holds `melee_core_headless` (≈30 MB unpacked; the 10:29 one was 30,821,536 bytes).
+- **State as of 2026-10-05:** the two modules are ≈15,2 MB, not ≈87 MB — run 37319576228 reports
+  15,232,193 bytes for `melee_core_node.wasm` and 15,278,604 for `melee_core_web.wasm`, both at `-Oz`.
 - **Failure modes:**
   - `gh workflow run` → `HTTP 422 … Unexpected inputs provided` — the S2 input is not on `main`
     (S2 not merged) or the name is misspelled.
@@ -570,7 +585,11 @@ python3 scripts/phase0/frame_stats.py --in-match "$D/runs/native-1/sim_times.csv
 - **The core, its metadata and the input script live in `/spike-core/`**, a directory that
   exists only in the page built by `phase0-build.yml`. `ci.yml` builds and (if credentials
   ever appear) deploys the shell, and it will contain `spike.html` but **no core** — the
-  87 MB module could not be deployed to Pages anyway (25 MiB limit).
+  87 MB module could not be deployed to Pages anyway (25 MiB limit). **State as of 2026-10-05: that
+  reason is gone.** The module on `main` is 15,278,604 bytes (run 37319576228), under Pages' 25 MiB
+  per-file limit, so size no longer excludes a Pages deploy; what still stops a public one is O1, the
+  operator's legal judgement on publishing game-derived code (`docs/OPEN_QUESTIONS.md` Q8,
+  `docs/PHASE0_DEPLOY_PLAN.md` section 2).
 - **One run per Worker.** `callMain` with `EXIT_RUNTIME=0` leaves static state behind; the page
   creates a fresh Worker per run and terminates it afterwards.
 - **One result file per run**: `spike-result-<UTC timestamp>.json`, containing the raw trace
@@ -763,6 +782,12 @@ python3 scripts/phase0/frame_stats.py --in-match "$D/runs/native-1/sim_times.csv
           npx playwright install --with-deps chromium
           npx playwright test -c playwright.spike.config.ts
       ```
+    - **State as of 2026-10-05:** the `printf` in the snippet above is the step as it was specified,
+      and it is not what runs. `core.json`'s `"opt"` is no longer hardcoded to `-O1`: the step reads
+      `$RUNNER_TEMP/wasm/melee_opt.txt`, which `wasm/core/CMakeLists.txt` line 31 writes at configure
+      time, and keeps the old `grep` only as a fallback (`.github/workflows/phase0-build.yml` lines
+      233–245). Run 37319576228 prints
+      `{"commit":"fe2e06bea54c9f8ec9dac2df595dd6a793a14361","opt":"-Oz"}`.
     - after the S2 upload step, add a second opt-in upload:
       ```yaml
       - name: Upload the spike page with its core (opt-in private artifact)
@@ -828,9 +853,11 @@ the repository's zero-dependency server.
 4. Expected: `#core` `core loaded: <commit> -O1`, `#status` `exit 0`, `#log` ends with
    `final scene: mode=2 state=2 match_frame=762 (retraces=2400)`, `#compare`
    `identical: 2400 retraces`, `#stats` in-match `count` ≈ 762. Download the JSON.
+   **State as of 2026-10-05:** the level printed there is `-Oz`, not `-O1` — `core loaded: <commit>
+   -Oz` — and the module downloaded before it is about 15,3 MB rather than 87 MB.
 - **Failure modes:** `refused: disc image is …` — wrong file; `crossOriginIsolated: false` in
   the JSON — the page was not served by `serve.mjs` with `_headers`; the tab crashes
-  ("Aw, Snap") — memory for compiling an 87 MB module; record it (it is itself a result for
+  ("Aw, Snap") — memory for compiling an 87 MB module (15,3 MB today, see the note above); record it (it is itself a result for
   the go/no-go); any `DIFFERENT` — apply S5's diagnosis with the browser trace in place of
   `wasm-node-1`.
 - **Cost:** one dispatch ≈ 28 runner-minutes (release step skipped); artifact ≈ the WASM
@@ -934,8 +961,32 @@ difference as NO-GO; an explanation can only be recorded by the operator in
 PR `phase0/report`: `docs/PHASE0_REPORT.md` (new) with the S9 output, the P0-09 table, the
 compile/link numbers (952 s offline, 1066 s release, 87,117,533-byte module, peak RSS), the
 FPSCR lines, and the verdict; `docs/PROGRESS.md` updated in the same PR. ≈ 4 CI minutes.
+**State as of 2026-10-05:** the 952 s / 1066 s / 87,117,533 bytes in that list are the 2026-09-30
+`-O1` build and stay that build's numbers. The size and the level the report quotes are those of the
+core S9 measured — on `main` at `fe2e06b`, 15,278,604 bytes at `-Oz` (run 37319576228).
 
 ### S11 — Conditional: a non-GO verdict measured on `-O1` is provisional
+
+**State as of 2026-10-05: the premise of this step no longer holds, and what is left of it is a
+choice rather than a to-do.** The paragraph below says both cores are compiled at `-O1` "for CI
+affordability" and that reaching another level needs a PR adding `MELEE_OPT`. Both were true on
+2026-09-30; neither is today:
+
+- `MELEE_OPT` exists, as a cache variable whose default is `-Oz` (`wasm/core/CMakeLists.txt` line 23;
+  PR #13, 2026-09-30), and `-Oz` is what `main` ships.
+- The dispatch input is `opt_level`, not `opt`, and it offers four levels — `-Oz`, `-O1`, `-O2`,
+  `-O3` — with `-Oz` as its default (`.github/workflows/phase0-build.yml` line 13, lines 16–21, and
+  `MELEE_OPT: ${{ inputs.opt_level || '-Oz' }}` on line 80).
+- The tool's `provisional` flag is still keyed to `-O1` — `PROVISIONAL_OPTS = ('-O1',)`,
+  `scripts/phase0/go_no_go.py` line 77 — so on a `-Oz` core it can no longer fire, and a non-GO
+  verdict on `-Oz` comes out final rather than provisional.
+- `-Oz` is the **slower** of the two levels, not the faster: 28,92 ms against `-O1`'s 27,34 ms over
+  the 762 match frames, on the VPS under Node (`docs/OPT_LEVEL_EXPERIMENT.md` lines 6–7; a VPS ratio,
+  not a phone one). So if S9 returns anything but GO, the level worth re-measuring is `-O1`, and the
+  run that says whether it is worth it is a dispatch with `opt_level=-O1` — not the PR below.
+
+What the paragraph still gets right is the shape of the work: a different code generation must pass
+the 2400 checkpoints again before any verdict measured on it is called final.
 
 Both cores are compiled at `-O1` for CI affordability (`wasm/core/CMakeLists.txt`,
 `target_compile_options(core_options INTERFACE -O1 …)`). If S9 returns anything but GO, the
@@ -979,12 +1030,22 @@ being spent (`docs/AGENT_RULES.md`, "CI budget").
 - WASM run time under Node on the VPS; artifact size of the WASM zip.
 - `FS.filesystems.WORKERFS` availability and `callMain`'s return value on `_Exit` under
   `EXIT_RUNTIME=0` in emsdk 4.0.23 (the S6 CI test is what verifies both).
-- Whether a mid-range Android phone can compile an 87 MB module at all.
+- Whether a mid-range Android phone can compile an 87 MB module at all. **State as of 2026-10-05:**
+  the module is 15,278,604 bytes (run 37319576228) and an iPhone 16 Pro's Safari has compiled and run
+  it — three times (`docs/PROGRESS.md`, the device row). The mid-range Android itself still does not
+  exist (`docs/OPEN_QUESTIONS.md` Q9), so the row this item is about is still unmeasured.
 - Whether `match_frame != 0` covers exactly the match: it is the script engine's convention
   (`native/headless_input.cpp:143`) and the endpoint value (762 at retrace 2400) is measured;
   the per-row behaviour is first observed in S5's `frame_stats --in-match` count.
 - That GitHub accepts the `concurrency` expression with `inputs.single_thread` (S2 gives the
   fallback).
+
+**State as of 2026-10-05:** this list is the 2026-09-30 state. What the steps below closed, each with
+its measurement in `docs/PROGRESS.md`: Node on this VPS runs `melee_core_node.js`, and the WASM module
+takes **81 s** over 2400 retraces there (lines 312–313); `FS.filesystems.WORKERFS` and `callMain`'s
+return value under `EXIT_RUNTIME=0` are exercised by the S6 CI test (lines 394–396); `match_frame != 0`
+is the count `frame_stats --in-match` reports, 762. The mid-range Android bullet is corrected in place
+above. The rest of the list is not claimed here.
 
 ## 8. Decisions that belong to the operator
 
@@ -1002,6 +1063,13 @@ Each has a minimal proposed choice; the plan is written so that choice unblocks 
 - **D4 — how devices reach the page.** *Proposed: the operator's computer with
   `web/scripts/serve.mjs`, the phone via USB port forwarding to `localhost`.* Cloudflare Pages
   is not an option for this core as built: 87,117,533 bytes exceeds the 25 MiB per-file limit.
+  **State as of 2026-10-05: the reason given here is false.** That 87,117,533-byte module is the
+  `-O1` build of 2026-09-30; the module `main` ships is 15,278,604 bytes (run 37319576228), 58% of the
+  25 MiB limit, so size no longer excludes this core from Pages — `docs/OPEN_QUESTIONS.md` Q8 records
+  the same correction for the deploy plan. What excludes a *public* deploy is O1, the operator's legal
+  judgement on publishing game-derived code, not the size. The choice proposed above still stands on
+  its own terms — no credential, no public URL, and `localhost` gives the phone a secure context — but
+  it is no longer the only one.
 - **D5 — devices.** Which mid-range Android phone (SPEC suggests Snapdragon 7-series); whether
   a Mac/iPhone is available. No verdict without the Android row.
 - **D7 (new) — the disc on the test devices.** *Proposed: the operator copies their own ISO to
