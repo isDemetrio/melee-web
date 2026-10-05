@@ -140,7 +140,6 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
     gpu.uniforms = gpu.device.createBuffer({size:UNIFORM_ARENA,
       usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
     gpu.uniformStaging = new Uint8Array(UNIFORM_ARENA);
-    gpu.uniformWords = new Uint32Array(gpu.uniformStaging.buffer);
     gpu.vertexBuffer = gpu.device.createBuffer({size:VERTEX_ARENA_INITIAL,
       usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
     gpu.vertexStaging = new Uint8Array(VERTEX_ARENA_INITIAL);
@@ -397,7 +396,7 @@ EM_JS(int, gxw_texture_count, (), {
 // tools that replay these calls read the draw's state from.
 EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indices, int count,
                      const float* constants, int rows, const float* raster, int lines, int cull, int zmode,
-                     const uint32_t* bp, int shader, const char* code), {
+                     const uint32_t* bp, int shader, const char* code, int same_constants), {
   const gpu = Module["gxWebgpu"];
   const BIND_GROUP_CACHE_LIMIT = 1024, ARENA_GROWTH_LIMIT = 16 << 20;
   // Draws recorded (heartbeat.ts reports it).
@@ -499,16 +498,14 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
       batch.pass.setVertexBuffer(0,gpu.vertexBuffer); batch.pass.setIndexBuffer(gpu.indexBuffer,"uint32");
     }
     const pass = batch.pass, state = batch.state;
-    // Consecutive segments of one GX draw have the same constants: they share one slot.
-    const words = gpu.uniformWords, base = constants >> 2, n = rows*4;
-    let offset = batch.lastUniform, same = offset >= 0 && batch.lastRows === rows;
-    // The heap view in a local and an early exit: 27% fewer V8 samples than re-reading HEAPU32 and
-    // testing `same` on every word. Still the largest part of this function (87% of draws match,
-    // after comparing every word): docs/RENDERER_JS_COST.md.
-    if (same) {
-      const heap = HEAPU32;
-      for (let i = 0, at = offset >> 2; i < n; i++) if (words[at+i] !== heap[base+i]) { same = false; break; }
-    }
+    // Consecutive segments of one GX draw have the same constants: they share one slot. Whether
+    // these are the previous call's is `same_constants`, compared in C++ (draw_segment): the
+    // previous call either staged its constants at batch.lastUniform or found them there, so in the
+    // same batch, with the same row count, that slot holds these bytes. Compared word by word here,
+    // that was the largest part of this function (87% of draws match, after reading every word):
+    // docs/RENDERER_JS_COST.md.
+    let offset = batch.lastUniform;
+    const same = same_constants && offset >= 0 && batch.lastRows === rows;
     if (!same) {
       offset = batch.uniformBytes;
       gpu.uniformStaging.set(HEAPU8.subarray(constants,constants+rows*16),offset);
@@ -638,6 +635,24 @@ bool upload_textures(const gx::DrawCall& dc) {
 // pipelines map in gxw_draw holds as many), like the pipelines themselves.
 std::unordered_map<gxw::ShaderUid, int, gxw::ShaderUidHash> g_shaders;
 
+// The uniform rows the last gxw_draw call was given (draw_segment).
+float g_last_constants[gxw::MAX_ROWS][4];
+int g_last_rows = -1;
+
+// Whether `bytes` (a multiple of 8) are equal, eight at a time. Not memcmp: this build's compares
+// one byte at a time, and over a draw's ~2000 bytes of constants it measured slower than the
+// JavaScript word loop it replaced (docs/RENDERER_JS_COST.md).
+bool same_bytes(const void* a, const void* b, size_t bytes) {
+  const auto* p = static_cast<const unsigned char*>(a);
+  const auto* q = static_cast<const unsigned char*>(b);
+  for (size_t i = 0; i < bytes; i += 8) {
+    uint64_t x, y;
+    std::memcpy(&x, p + i, 8); std::memcpy(&y, q + i, 8);
+    if (x != y) return false;
+  }
+  return true;
+}
+
 // Baseline projection/viewport rules transcribed from gx_shader.cpp:671-748 and
 // gx_d3d12.cpp:1809-1826. No guest memory or live GX registers are read here.
 bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::DrawSegment& segment) {
@@ -690,9 +705,14 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
     code=gxw::generate_wgsl(uid);
   }
   if (!upload_textures(dc)) return false;
+  // The constants of the previous gxw_draw call, for its uniform dedup: compared here instead of
+  // by a JavaScript loop over the same words.
+  const int rows=gxw::uniform_rows(uid);
+  const bool same_constants=rows==g_last_rows && same_bytes(u,g_last_constants,size_t(rows)*sizeof u[0]);
+  if (!same_constants) { std::memcpy(g_last_constants,u,size_t(rows)*sizeof u[0]); g_last_rows=rows; }
   return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
-                  &u[0][0],gxw::uniform_rows(uid),r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),
-                  dc.bp.reg,shader->second,code.empty() ? nullptr : code.c_str());
+                  &u[0][0],rows,r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),
+                  dc.bp.reg,shader->second,code.empty() ? nullptr : code.c_str(),same_constants);
 }
 
 
