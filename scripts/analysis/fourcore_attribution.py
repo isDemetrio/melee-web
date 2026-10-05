@@ -49,7 +49,7 @@ OWNERS = [
     ('stage', r'^(?:Ground_|gr[A-Z]|grDisplay|grLib|grZako|mpLib|mpColl)'),
     ('hud', r'^(?:if[A-Z]|NameTag|fn_802F|fn_8030)'),
     ('effect', r'^(?:ef[A-Z]|efLib|ps[A-Z]|Effect)'),
-    ('camera', r'^(?:Camera_|fn_8002F360|fn_8003)'),
+    ('camera', r'^(?:Camera_|fn_8002F360|fn_800301D0)'),
 ]
 OWNERS_C = [(k, re.compile(r)) for k, r in OWNERS]
 
@@ -62,6 +62,14 @@ KINDS = [
     ('bone_matrices', r'^(?:HSD_JObjSetupMatrix|HSD_JObjMakeMatrix|HSD_JObj_SetupMatrix|lb_8000B|HSD_MtxSRT|HSD_JObjGetMtx)'),
 ]
 KINDS_C = [(k, re.compile(r)) for k, r in KINDS]
+
+# Inside the render pass: the nearest guest frame (from the leaf) that is one of these display
+# stages. Matrix math (PSMTX*, HSD_Mtx*) has no entry, so it lands on whoever called it --
+# SetupEnvelopeModelMtx is the skinning of enveloped vertices, HSD_JObjMakeMatrix bone matrices.
+RENDER_STAGES = ('SetupEnvelopeModelMtx', 'SetupRigidModelMtx', 'SetupSharedVtx', 'HSD_JObjSetupMatrix',
+                 'HSD_JObjMakeMatrix', 'GXCallDisplayList', '__GXSendFlushPrim', 'WriteMTX', 'GXLoad',
+                 'HSD_TObj', 'HSD_TExp', 'HSD_MObj', 'HSD_Setup', 'HSD_State', 'HSD_PObjDisp',
+                 'HSD_DObjDisp', 'HSD_JObjDisp', 'HSD_LObj')
 
 
 def strip_args(name):
@@ -168,12 +176,11 @@ def classify(prof, leaf):
             break
     if phase == 'render' and owner == 'none':
         # Render callbacks outside the per-GObj iterator, e.g. the shadow pass.
+        # The camera's render callback (fn_800301D0) dispatches every pass, so a camera match is
+        # only kept when nothing more specific (the shadow pass, say) sits below it.
         i = chain.index('HSD_GObj_80390FC0')
-        for name in chain[i + 1:]:
-            o = owner_of(name)
-            if not o.startswith('other:'):
-                owner = o
-                break
+        found = [o for o in map(owner_of, chain[i + 1:]) if not o.startswith('other:')]
+        owner = next((o for o in found if o != 'camera'), found[0] if found else 'none')
     kind = 'other_guest' if chain else 'no_guest_frame'
     for name in reversed(chain):  # leaf first
         hit = next((k for k, rx in KINDS_C if rx.search(name)), None)
@@ -184,7 +191,7 @@ def classify(prof, leaf):
 
 
 def analyse(prof):
-    tables = {k: collections.Counter() for k in ('zone', 'phase', 'owner', 'kind', 'phase_owner', 'owner_kind', 'owner_zone', 'callback', 'leaf_self', 'zone_disagreement')}
+    tables = {k: collections.Counter() for k in ('zone', 'phase', 'owner', 'kind', 'phase_owner', 'owner_kind', 'owner_zone', 'callback', 'leaf_self', 'zone_disagreement', 'render_stage', 'owner_leaf')}
     examples = collections.defaultdict(collections.Counter)  # zone -> leaf names, to check the classifier
     for leaf, d in prof.samples:
         zone, phase, owner, kind, chain, old = classify(prof, leaf)
@@ -207,6 +214,10 @@ def analyse(prof):
                 break
         leafname = prof.guest[leaf] or prof.name[leaf]
         tables['leaf_self'][leafname] += d
+        if phase == 'render':
+            stage = next((g for g in reversed(chain) if g.startswith(RENDER_STAGES)), '(none)')
+            tables['render_stage'][f'{oclass}/{stage}'] += d
+        tables['owner_leaf'][f'{phase}/{oclass}/{zone}/{leafname}'] += d
         examples[zone][leafname] += d
         # Classifier check: where the cpuprofile_split.py rule (whole signature) disagrees.
         new_coarse = 'guest' if zone.startswith('guest_') else zone
@@ -249,7 +260,7 @@ def main(argv=None):
                          'two_ms': round(ms2, 3), 'four_ms': round(ms4, 3), 'delta_ms': round(ms4 - ms2, 3),
                          'ratio': round(ms4 / ms2, 3) if ms2 > 0 else None})
         rows.sort(key=lambda r: -abs(r['delta_ms']))
-        out[t] = rows[:a.top] if t in ('callback', 'leaf_self', 'owner_kind', 'owner_zone', 'zone_disagreement') else rows
+        out[t] = rows[:a.top] if t in ('callback', 'leaf_self', 'owner_kind', 'owner_zone', 'zone_disagreement', 'render_stage', 'owner_leaf') else rows
     total_delta = sum(r['delta_ms'] for r in out['zone'])
     out['total_delta_ms'] = round(total_delta, 3)
     json.dump(out, sys.stdout, indent=1)
