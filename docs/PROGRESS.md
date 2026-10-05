@@ -3,7 +3,47 @@
 Rule (`docs/AGENT_RULES.md`): a new session must be able to resume from this file
 alone. Update it at the end of every working session.
 
-## Current state — 2026-09-30 06:40 UTC, branch `feat/wasm-runtime-maps`, PR #1
+## Current state — 2026-10-05
+
+This log is append-only: the newest entry is the **last section of the file**, and this block is the
+entry point for a session that resumes from this file alone (`docs/AGENT_RULES.md`). It is the only
+part of the file that is kept current; everything below it is history, in the order it was written.
+
+**Phase: Phase 0, at the point where the repository alone cannot advance it.** The disc is verified,
+`main.dol` is secured in a private repository, the recompiled core builds in GitHub Actions and runs
+in a browser page, the simulation is bit-exact with the native reference, and the device row has been
+measured on the one device that exists. What is left of Phase 0 needs the operator: Cloudflare
+credentials and O1's legal judgement, a mid-range Android, and the decisions Q4, Q5, Q10(b) and Q11.
+
+| Area | State | Evidence |
+| --- | --- | --- |
+| Disc image, `main.dol` | verified against independent public sources | `docs/OPEN_QUESTIONS.md` Q1, Q2 |
+| Recompiled core | builds and links in CI at `-Oz`; 16,323,255 bytes web, 16,323,657 Node | `Phase 0 — WASM core` on `main`; `docs/OPEN_QUESTIONS.md` Q8 |
+| Determinism | 2400/2400 checkpoints identical to the native reference, trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | re-checked 2026-10-05 with `scripts/phase0/compare_checkpoints.py` on the stored iPhone trace: `identical: 2400 retraces` |
+| Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" |
+| Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
+| Device row — mid-range Android, the row that decides | **not measured: there is no such device** | `docs/OPEN_QUESTIONS.md` Q9 |
+| Deploy plan | PR 1–6 landed, `go_no_go.py` landed, `disc-chunks.json` computed; nothing deployed and no Cloudflare credential used | `docs/PHASE0_DEPLOY_PLAN.md` section 6 |
+| `docs/PHASE0_REPORT.md` (P0-12) | **not written**: it carries the verdict and waits on the deciding device row | `docs/PHASE0_DEPLOY_PLAN.md` section 6, step 14 |
+| Repository visibility | public; whether that is intended is the operator's call | `docs/OPEN_QUESTIONS.md` Q11 |
+
+**Open blockers.** Q3's Phase 0 subset, O1–O10 — a Cloudflare account with R2, a private bucket, S3
+keys scoped to it, the Pages token and account ID, Access, and O1's legal judgement. It does **not**
+block the go/no-go: the plan keeps that on the tailnet route, which needs no Cloudflare credential.
+Then the mid-range Android row, without which the specification's verdict cannot be reached at all,
+and the operator's decisions Q4, Q5, Q10(b) and Q11. `docs/OPEN_QUESTIONS.md` is the list, with what
+each one blocks.
+
+**Next step.** Of `docs/PHASE0_DEPLOY_PLAN.md` section 6, steps 1–5 are done and the first step not
+done is step 6 — an operator decision (O1, which Android, which route). The first step that needs
+neither a credential nor a decision is step 7: M1 and M2 on a real device, which needs hardware this
+machine does not have — a desktop Chrome with three runs, and a mid-range Android. Nothing in the
+repository blocks it: the core, the page and the local device server are in `main` and green.
+
+### The state as it was written — 2026-09-30 06:40 UTC, branch `feat/wasm-runtime-maps`, PR #1
+
+Kept verbatim as history. Its opening paragraph and several of its rows were true on 2026-09-30 and
+are not any more: the disc arrived that day, and everything after it is in the entries below.
 
 **Phase: pre-Phase-0. Infrastructure.** No game data is available yet, so nothing that
 requires the DOL has been attempted. There is no disc image, so there is no DOL, no
@@ -3596,3 +3636,60 @@ violations), `bash scripts/tests/test_deploy_guard.sh` (all deploy and upload gu
 scripts/tests/test_phase0_runner.sh` (44 checkpoint runner guards hold; run from the checkout where
 the pinned submodule is initialised) and `bash scripts/tests/test_device_test_serve.sh` (6 cases
 passed). CI decides the rest.
+
+## 2026-10-05 — the resume point says the game cannot be played, five days after it started running (cron, `cron/phase0-oct5b`)
+
+**Why this and not something else.** `docs/AGENT_RULES.md` makes this file the thing a new session
+resumes from — "a new session must be able to resume from that file alone" — and the rule line at the
+top of the file repeats it. The block that sits there, the first thing such a session reads, was the
+snapshot written on 2026-09-30 and had not been touched since: `git log -S'Current state — 2026-09-30'
+-- docs/PROGRESS.md` names one commit, `7eb6327`, while the file grew to 3,598 lines around it. It
+says "**Phase: pre-Phase-0. Infrastructure.**", "There is no disc image, so there is no DOL, no
+recompiled game and no `melee.wasm`", and "**The game cannot be played, and no amount of work in this
+repository changes that.**" — four claims the rest of the same file refutes, the last of them by the
+first playable integration of 2026-10-02. Every autonomous step of `docs/PHASE0_DEPLOY_PLAN.md`
+section 6 is done or held by the operator (steps 1–5 done, step 6 an operator decision), so what was
+left to do was the document that tells the next session where the work stands.
+
+**Changed.** `docs/PROGRESS.md`, two places: the top block, and this entry. The top block is now
+"## Current state — 2026-10-05": the phase in one paragraph, a nine-row table in which every row names
+its evidence, the open blockers with what each one blocks, and the next step. The 2026-09-30 block is
+kept **verbatim** under "### The state as it was written — 2026-09-30 06:40 UTC, branch
+`feat/wasm-runtime-maps`, PR #1", with one sentence naming which of it is superseded. Nothing else in
+the file is edited: this log is append-only, and no entry, number or claim in it changed. No
+workflow, script, renderer, simulation or test-semantics file is touched, and `phase0-build.yml`'s
+`pull_request.paths` does not list `docs/`, so this pull request costs no WASM core build.
+
+**Verified 2026-10-05, each fact with the check that produced it, on the VPS and without a build.**
+The trace: `python3 scripts/phase0/compare_checkpoints.py
+/home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv
+/home/hermes/incoming/phase0/devices/iphone-safari/run1_trace.csv` answers `identical: 2400 retraces`,
+and `sha1sum` of that device trace is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`. The verdict:
+`python3 scripts/phase0/go_no_go.py --reference
+/home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv --reference-commit
+63511ce6c5f4e39be07b9acc9b517b2010ca01db --phone
+/home/hermes/incoming/phase0/devices/iphone-safari/*.json` prints `VERDICT: DESKTOP-ONLY`, exit 3,
+`provisional: false`, worst repeat 3.2442 ms mean and 5.64 ms p99. The core builds and the option is
+`-Oz`: `gh run list --branch main` shows `Phase 0 — WASM core` green on `main` at `d578a5e`, and
+`wasm/core/CMakeLists.txt` line 23 sets `MELEE_OPT` to `-Oz`. The plan's steps 1–5: `current.env`
+points the reference at `63511ce6c5f4e39be07b9acc9b517b2010ca01db`, the spike `dist` is in
+`/home/hermes/incoming/phase0/spike-dist/`, and `/home/hermes/incoming/phase0/disc-chunks.json` holds
+`size_bytes` 1,459,978,240, `chunk_size_bytes` 16,777,216, `sha1` `d4e70c06…` and **88** chunks. The
+device that decides does not exist: `/home/hermes/incoming/phase0/devices/` holds `iphone-safari`
+(3 runs), `iphone-safari-opfs` (2), `firefox-linux-2026-10-01` (3) and
+`chrome-oneplus-2026-10-01-run1.json` (1) and no Android, and `docs/PHASE0_DEVICE_PLAN.md` section 5
+already records that the four browser rows carry a desktop `X11; Linux x86_64` user agent. What makes
+the report P0-12 is `docs/PHASE0_DEPLOY_PLAN.md` section 6 step 14.
+
+**Not done, and why.** Nothing was built, deployed, published, uploaded or dispatched, and no
+Cloudflare credential was used. `docs/PHASE0_REPORT.md` (P0-12) is deliberately **not** written: the
+specification asks it to carry "la decisione go/no-go motivata", which is the operator's verdict, and
+it waits on the row that decides (M2). What is blocked, and by what: the verdict by a mid-range
+Android (`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the spec's deciding row is
+unmeasured); any deployment by O1–O10 (Q3's Phase 0 subset, and O1 is a legal judgement); the report
+by those two; the `EM_JS`-versus-`<webgpu/webgpu.h>` choice (Q10(b)), the renderer's scope (Q4), iOS
+(Q5) and the repository's visibility (Q11) by the operator. On the VPS, all without a build:
+`python3 -m unittest discover -s scripts/tests` (`Ran 210 tests in 19.669s`, `OK`), `python3
+scripts/check_no_game_data.py --all` (274 tracked files, clean) and `python3 scripts/check_docs.py
+--submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` (210 citations in 4 documents, 0
+violations). CI decides the rest.
