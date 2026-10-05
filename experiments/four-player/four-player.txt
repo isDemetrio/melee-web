@@ -9,14 +9,18 @@
 # where the host first observes GM_MENU, so the CSS/SSS sequence stays aligned despite the
 # opening-movie and disc-read timing; the @match entries follow simulated match frames.
 #
-# WHY PORTS 3 AND 4 MOVE UP, NOT DOWN-RIGHT. Ports 1 and 2 join the character select the way the
-# canonical script does: move the hand down-right (sx=61 sy=127) and press A. Ports 3 and 4 do
-# not: with the same down-right move their hand never claims a door, the CSS never advances to
-# the stage select, and the run ends at `mode=2 state=0` with no match at all -- which is exactly
-# what the recovered perf/beyond-core/four-player.txt did (it used sx=61 sy=127 for all four, and
-# its own harness would have failed the `four_hud_frames>600` assertion). Measured here, port 3/4
-# move the hand UP (sy=-127) then press A, which does claim a door: the trace changes when that
-# port's pad is driven during the match, so the port is a human fighter and not a CPU.
+# WHY PORTS 3 AND 4 MOVE UP, AND WHY THE STICK'S X COMPONENT MATTERS. Every hand starts at
+# y = -21.5 (mncharsel.c:4513), below the character grid, and a port's own door only becomes human
+# while its hand sits on the grid, at y in (0.2, 22) (mncharsel.c:3319). The stick's Y sign is the
+# direction that matters: sy=+127 drives the hand up into the grid, sy=-127 drives it further down.
+# Ports 1 and 2 use the canonical move (sx=61 sy=127) and press A. Reusing exactly that move for
+# ports 3 and 4 leaves their door claimed but with no character (sel_icon >= 0x19), so the CSS
+# never advances to the stage select and the run ends at `mode=2 state=0` with no match -- what the
+# recovered perf/beyond-core/four-player.txt did (sx=61 sy=127 for all four; its own harness would
+# have failed its `four_hud_frames > 600` assertion). Sweeping the move in CI (see sweep_css.py and
+# the four-player-sweep workflow) shows ports 3/4 with no X component (sy=127 alone) or a negative
+# one (sx=-61 sy=127) reach the stage select with all FOUR HUD slots live; a positive X component
+# (sx=61 or sx=127) or a negative Y leaves the CSS stuck. This file uses sy=127 alone.
 # The A presses are held ten frames and released, because the CSS reads the trigger edge.
 #
 # One more property this script relies on: the CSS only shows PRESS START (and only then lets
@@ -49,8 +53,8 @@
 400 sx=61 sy=127
 400 p=2 sx=61 sy=127
 # Ports 3 and 4: the hand move UP that actually claims their door.
-400 p=3 sy=-127
-400 p=4 sy=-127
+400 p=3 sy=127
+400 p=4 sy=127
 430
 430 p=2
 430 p=3
