@@ -4223,7 +4223,8 @@ attempts`: runs `37369290053` (20:22) and `37371159436` (20:40) on this branch, 
 GitHub's status page reported `Actions: degraded_performance` at 21:31 UTC. It was over by 21:51: a
 `ci.yml` dispatch on this branch (run `37378661157`) acquired a runner at once and all four jobs passed in
 about two minutes. **So those five red runs are infrastructure, not code**, and `main` has had no run since
-17:52 that reached a runner and completed.
+17:52 that reached a runner and completed. `main`'s own dispatch at 22:02 UTC (run `37379827527`) then
+completed successfully in 10m18s, so `main` is green again and the window above is closed.
 
 **Changed.** `patches/0013-fifo-write-without-value-init.patch` (written by the interrupted run; unchanged
 here), `docs/PORT_CHANGES.md` — the row the rules require, plus a section stating what the change is, which
