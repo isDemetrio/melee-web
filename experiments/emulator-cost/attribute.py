@@ -47,8 +47,14 @@ def analyse(profile):
             stack.append(names[nodes[node]['callFrame']['functionName']])
             node = parents.get(node)
         category = 'unclassified'
+        # Resolve the host/guest zone before assigning a helper's self time.
+        # E.g. ld32 under decode_vertices belongs to vertex decoding, not guest loads.
         for name in stack:
-            match = next((key for key, rx in RULES if rx.search(name)), None)
+            if RULES[-1][1].search(name):
+                category = next((key for key, rx in RULES[7:-1] if any(rx.search(n) for n in stack)),
+                                'guest_and_inlined_helpers')
+                break
+            match = next((key for key, rx in RULES[:7] if rx.search(name)), None)
             if match:
                 category = match
                 break
