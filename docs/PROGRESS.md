@@ -4126,12 +4126,12 @@ against the general path. `docs/PORT_CHANGES.md` and this file. One file of beha
 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`, identical to the reference of
 `docs/ATTRIBUTE_RESIDUAL.md`. The libm `fma`+`normalize` path in the whole 4-player profile:
 **2.41% → 0.44%** of the profile (A-equivalent 915 → 162 ms), and it leaves the skinning subtree's
-top twenty entirely. Worth **0.38 ms/frame at 4p** (0.8% of a ~47 ms frame) and 0.22 at 2p. Eight
+top twenty entirely. Worth **~1.05 ms/frame at 4p** (2.0–2.2% of the frame) and ~0.4 at 2p. Eight
 alternating A/B pairs (`~/briefs/skinning/measure_ab.sh`) on the harness's own `sim_ms` metric give
 a paired mean of −2.12 ms (sd 2.44), but the session drifted upward (A's own runs 49.8 → 60.5 ms
-across the pairs) and the profile caps the removable work an order of magnitude below that mean;
-the first four pairs average −0.31 ms, the profile's number. The frame metric cannot resolve a
-gain this size, and the −2.1 ms is drift, not the change.
+across the pairs); the first four pairs average −0.32 ms and the last four −3.92 ms, so the mean
+sits between the profile's 1.05 ms and the drift. The frame metric cannot resolve a gain this
+size, and the −2.1 ms is reported, not claimed.
 
 **Not done.** No renderer, netcode, simulation or recompiler change; no build outside Actions; no
 deployment. The memory helpers (28.4% of the skinning subtree) and the FIFO path (15.3%) are named

@@ -55,8 +55,8 @@ The shim tested a zero addend first and a zero factor only inside that branch, s
 zero factor and a nonzero addend fell through `exact_product` and then to libc's `fma` -- which
 normalizes `x`, `y` and `z` (three calls, `fma.c:40-42`) before it reaches the same `x*y + z`
 shortcut. The off-diagonal zeros of a rotation matrix are exactly that case, and the four-player
-profile put the libc path at 0.38 ms/frame under the skinning subtree
-(`docs/SKINNING_ENVELOPE_COST.md`). The check is hoisted ahead of the general path: one compare
+profile put the libc path at 1.28 ms/frame under the whole profile (2.4% of the profiled frame;
+`docs/SKINNING_ENVELOPE_COST.md`). The check is hoisted ahead of the general path: one compare
 instead of the `exact_product` scan and the libc call. The result is unchanged -- the exact
 product of a zero factor is a signed zero, so the exact sum is the IEEE sum of that zero and the
 addend, `-0 + +0 = +0` included -- and the probe gains a randomized zero-factor comparison against
