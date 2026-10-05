@@ -34,6 +34,11 @@ Vengono prima di tutto perché cambiano l'ordine dei lavori.
    `wasm/core/CMakeLists.txt` (righe 19 e 23) sul branch `phase0/oz-size-experiment`, che **non è
    in `main`** (`git branch --contains 55f101c` elenca solo il branch e il suo remoto). Su `main`
    il core è ancora `-O1` e pesa circa 87 MB. Il primo passo è quindi portare il branch in `main`.
+   **Stato al 2026-10-05: quel passo è fatto.** Il branch è in `main` dal 2026-09-30 (PR #13,
+   §5 "Fatta"); su `main` `wasm/core/CMakeLists.txt` riga 23 tiene `MELEE_OPT` a `-Oz` e la
+   riga 32 aggiunge `-g0` — le righe 19 e 23 citate qui sopra sono quelle del branch del
+   2026-10-01 — e il modulo web che la CI spedisce è 15.278.441 byte (§5, PR 1). Il paragrafo
+   resta l'analisi del 2026-10-01, non lo stato di oggi.
 3. **16.323.657 byte è il modulo Node, non quello web.** La tabella di `docs/PROGRESS.md` (ultima
    sezione) confronta con 87.118.511 byte, che nella sezione S6 è il **modulo Node**; il modulo web
    a `-O1` era 87.118.045. La dimensione del modulo **web** a `-Oz` è stata letta il 2026-10-01 nel
@@ -82,11 +87,11 @@ Un telefono, per fare una corsa, deve avere tre cose.
 | Cosa | File | Dimensione | Da dove viene |
 | --- | --- | --- | --- |
 | **La pagina** | `spike.html` più il JavaScript costruito da `web/src/spike/main.ts`, `compare.ts`, `worker.ts` | **misurata**: il `dist` della spike ha 21 file per 18.005.796 byte, di cui 16.389.654 sono `spike-core`; senza il core e senza le mappe dei sorgenti restano 13 file per **268.162 byte** (`spike.html` da solo: 690 byte) | `vite build` nella workflow `phase0-build.yml` |
-| **Il modulo** (il gioco compilato in WebAssembly, *WASM*) | `spike-core/melee_core_web.wasm` + `melee_core_web.js` (il codice JavaScript che lo carica), `core.json`, `parity_vs_onett.txt` | `.wasm`: 87.118.045 byte a `-O1`; a `-Oz` **16.323.255 byte** per il modulo web e 16.323.657 per quello Node (§0.3) | stessa workflow, righe 122–129 |
+| **Il modulo** (il gioco compilato in WebAssembly, *WASM*) | `spike-core/melee_core_web.wasm` + `melee_core_web.js` (il codice JavaScript che lo carica), `core.json`, `parity_vs_onett.txt` | `.wasm`: 87.118.045 byte a `-O1`; a `-Oz` **16.323.255 byte** per il modulo web e 16.323.657 per quello Node (§0.3) | stessa workflow, righe 131–191 (la compilazione del core e il `wasm-opt`) |
 | **Il disco** | la ISO di Melee NTSC 1.02 | **1.459.978.240 byte** (1,46 GB; 1,36 GiB), SHA-1 `d4e70c064cc714ba8400a849cf299dbd1aa326fc` | solo sulla VPS, `/home/hermes/incoming/melee-ntsc102.iso` (`docs/OPEN_QUESTIONS.md` Q1); mai nel repository |
 
 In memoria il modulo parte con 256 MB (`-sINITIAL_MEMORY=256MB`, `wasm/core/CMakeLists.txt`
-riga 24) e può crescere. Il disco **non** viene copiato in memoria: il Worker lo legge a pezzi,
+riga 38) e può crescere. Il disco **non** viene copiato in memoria: il Worker lo legge a pezzi,
 su richiesta, durante la simulazione.
 
 **Come il core legge il disco oggi.** `worker.ts` riceve un oggetto `File` (un file locale che il
@@ -210,7 +215,7 @@ vedi sotto) e con il telefono. Nessuno è stato verificato durante la stesura.
 | **Niente cache immutabile** su `/spike-core/*` | §0, primo difetto | regola aggiunta al `_headers` **del solo deploy spike** dalla workflow | lo stesso `curl` non mostra `immutable`. Le due domande sono **verificate il 2026-10-04** su `https://developers.cloudflare.com/pages/configuration/headers/`, senza account: le regole che combaciano si **sommano** ("If a header is applied twice in the `_headers` file, the values are joined with a comma separator") e la sintassi per staccare un header esiste ed è quella che la workflow usa ("This can be done by prepending the header name with an exclamation mark and space (`!`)"). Senza la riga `! Cache-Control` il modulo riceverebbe quindi `public, max-age=31536000, immutable, no-store`; con essa la regola spike è il rimedio documentato. Resta **da verificare con il `curl` del primo deploy**, perché la pagina non lo dice, se un `!` nella **stessa** regola che poi rimette l'header sia applicato in ordine — la pagina lo mostra in una regola separata |
 | Richieste parziali sul disco | ripresa del download | la Function `/phase0/disc` | `curl -sI -H 'Range: bytes=0-5' …/phase0/disc` → `206` e `Content-Range: bytes 0-5/1459978240` |
 | Dimensione per file | il modulo deve starci | limite di Pages, §1 | il deploy riesce; il log di `wasm_report.py` dice `within_pages_limit: true` per il modulo web |
-| Access protetto | spec riga 15; il modulo è derivato dal gioco | Cloudflare Access, applicazione che copre l'indirizzo dell'anteprima | **Misurato il 2026-10-04 senza credenziali**: senza token si riceve la pagina di login Access e non il contenuto, su `/spike.html`, su `/spike-core/core.json` e su `/phase0/disc-chunks` (`200` con "Sign in · Cloudflare Access"). La copertura degli indirizzi `*.pages.dev` è **verificata**: un alias di branch che non esiste (`nosuchbranch-ctrl-9182.melee-web.pages.dev`) riceve la stessa pagina di login, quindi Access copre il wildcard e non solo gli indirizzi con un deploy. **Limite misurato**: l'apex `melee-web.pages.dev` **non** è coperto — risponde il `404` "Deployment Not Found" di Pages senza richiesta di login (la shell di produzione non è pubblicata: `CF_DEPLOY_SHELL` in `.github/workflows/ci.yml`), quindi il giorno in cui la shell viene pubblicata su quell'indirizzo sarà leggibile da chiunque, e O6 va esteso all'apex prima. Restano da verificare, con un token, gli header davvero serviti (la middleware annota comunque il limite: `functions/_middleware.ts` riga 56) |
+| Access protetto | spec riga 15; il modulo è derivato dal gioco | Cloudflare Access, applicazione che copre l'indirizzo dell'anteprima | **Misurato il 2026-10-04 senza credenziali**: senza token si riceve la pagina di login Access e non il contenuto, su `/spike.html`, su `/spike-core/core.json` e su `/phase0/disc-chunks` (`200` con "Sign in · Cloudflare Access"). La copertura degli indirizzi `*.pages.dev` è **verificata**: un alias di branch che non esiste (`nosuchbranch-ctrl-9182.melee-web.pages.dev`) riceve la stessa pagina di login, quindi Access copre il wildcard e non solo gli indirizzi con un deploy. **Limite misurato**: l'apex `melee-web.pages.dev` **non** è coperto — risponde il `404` "Deployment Not Found" di Pages senza richiesta di login (la shell di produzione non è pubblicata: `CF_DEPLOY_SHELL` in `.github/workflows/ci.yml`), quindi il giorno in cui la shell viene pubblicata su quell'indirizzo sarà leggibile da chiunque, e O6 va esteso all'apex prima. Restano da verificare, con un token, gli header davvero serviti (la middleware annota comunque il limite: `functions/_middleware.ts` riga 82) |
 | Compressione del modulo nel trasferimento | tempo di caricamento sul telefono | **automatica: documentata il 2026-10-04** leggendo la pagina, senza account — `https://developers.cloudflare.com/speed/optimization/content/compression/` (lo stesso testo è servito da `…/content/brotli/`, stesso titolo "Content compression"; la pagina porta `dateModified` 2026-04-17). `application/wasm` è nell'elenco dei tipi di contenuto per cui "Cloudflare will return Gzip, Brotli, or Zstandard-encoded responses"; la pagina comprime le risposte di successo solo se sono `200` (degli errori solo `403` e `404`), e la soglia minima è 48 byte per gzip e 50 per Brotli e Zstandard — il modulo è 16.323.255 byte a `-Oz`, quindi molto sopra. L'algoritmo dipende dal piano e dall'`accept-encoding` del browser: la stessa pagina dice "Free Plan: Content is compressed by default using Zstandard", Pro e Business Brotli, Enterprise Gzip, **e** in una nota "Customers can enable Zstandard compression through Compression Rules": le due frasi si contraddicono, e qui si registrano entrambe invece di scegliere. Le Compression Rules non sarebbero comunque disponibili su `*.pages.dev` ("Compression Rules require that you proxy the DNS records of your domain (or subdomain) through Cloudflare"), quindi resta il comportamento predefinito. Ciò che lo annullerebbe è `cache-control: no-transform`; nel `dist` della spike non c'è — la regola aggiunta dalla workflow è `no-store`. Resta **da verificare con il `curl` del primo deploy** l'header davvero servito e l'algoritmo scelto | **Il comando che questa riga chiedeva va corretto**: `-H 'Accept-Encoding: br, gzip'` non annuncia `zstd`, che è l'algoritmo che la pagina dà per predefinito sul piano Free, e `-I` è una HEAD, di cui la pagina non dice nulla (la sua regola parla degli status); una richiesta con `Range` sarebbe una `206`, che la pagina esclude dalla compressione. Il controllo è quindi un GET completo con l'header di un browser: `curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' …/spike-core/melee_core_web.wasm`, e si legge `content-encoding` nell'output |
 
 Le Pages Functions ricevono gli header da `_headers`? **No, verificato il 2026-10-04** sulla stessa
@@ -224,13 +229,13 @@ sulla cache qui sopra riguarda perciò il solo modulo, che è un file del `dist`
 ### Come si automatizza dalla CI
 
 Solo `.github/workflows/phase0-build.yml` costruisce il core e il `dist` della pagina spike
-(righe 115–130), quindi il deploy va **lì**, come passo finale, non in `ci.yml` (il cui job
+(righe 131–191 per il core, 224–246 per la pagina), quindi il deploy va **lì**, come passo finale, non in `ci.yml` (il cui job
 `deploy` pubblica la shell senza core). Il passo:
 
 - parte solo con `workflow_dispatch` e un nuovo input `deploy_spike` (predefinito `false`), come
   l'esistente `upload_spike`, e solo dopo il test in Chromium;
 - se mancano le credenziali **si salta con un avviso** e la workflow resta verde, come il job
-  `deploy` di `ci.yml` (righe 163–172);
+  `deploy` di `ci.yml` (riga 201);
 - toglie `sw.js` dal `dist` spike e aggiunge la regola `/spike-core/*` al suo `_headers`;
 - pubblica con lo script esistente: `scripts/deploy.sh --branch phase0-spike --dist-dir
   "$RUNNER_TEMP/spike-dist"`. Lo script esegue `wrangler pages deploy … --project-name
@@ -253,13 +258,13 @@ basta questo sottoinsieme.
 | O4 | Chiavi S3 di R2 (*Access Key ID* e *Secret Access Key*) limitate in scrittura a quel solo bucket, più l'ID account | date all'agente **solo per la sessione** di caricamento sulla VPS, in variabili d'ambiente, mai in un file; revocate dopo | caricare il disco |
 | O5 | Secret GitHub `CLOUDFLARE_API_TOKEN` (permesso di modifica di Pages) e `CLOUDFLARE_ACCOUNT_ID`; variabile di repository `CF_PAGES_PROJECT` = `melee-web` | impostazioni del repository | il deploy dalla CI (`docs/DEPLOY.md` §2 punto 8) |
 | O6 | Applicazione Cloudflare Access che copre l'indirizzo dell'anteprima, con la lista delle email ammesse | pannello Zero Trust | protezione |
-| O7 | Nelle variabili d'ambiente di Pages, ambiente *preview*: `ACCESS_AUD` e `ACCESS_TEAM_DOMAIN` di quell'applicazione | pannello Pages | senza, la middleware risponde 403 a ogni Function, disco compreso (`functions/_middleware.ts` righe 20–22, 64–65) |
+| O7 | Nelle variabili d'ambiente di Pages, ambiente *preview*: `ACCESS_AUD` e `ACCESS_TEAM_DOMAIN` di quell'applicazione | pannello Pages | senza, la middleware risponde **503** con `reason: access_configuration_missing` a ogni Function, disco compreso — **non** 403, che è la risposta al token mancante o non valido (`functions/_middleware.ts` righe 26–28 e 91–94; `tests/functions/middleware.test.ts` righe 97–102, con l'attesa 503 alla riga 49) |
 | O8 | Binding R2 `PHASE0_DISC` → `melee-phase0-disc` per l'ambiente *preview*. **Basta `wrangler.toml`, a patto che il blocco dell'ambiente ripeta i binding: risposta misurata, non più `da verificare`.** È già dichiarato in `wrangler.toml` sotto `[[env.preview.r2_buckets]]` insieme a `ASSETS_R2` (commit `824cdd6`). La misura, del 2026-10-02: dichiarare il solo `[env.preview.vars]` rese esplicita la configurazione della preview e il `[[r2_buckets]]` di primo livello **smetteva di raggiungerla**, e la preview pubblicata rispondeva `503 {"error":"Disc storage unavailable"}` — lo stato che `functions/phase0/[[path]].ts` restituisce quando `env.PHASE0_DISC` manca (`docs/DEPLOY.md` §6). La documentazione enuncia la stessa regola: `r2_buckets` è fra le chiavi **non ereditabili**, e "if any one non-inheritable key is overridden for any environment ... all non-inheritable keys must also be specified in the environment configuration and overridden" (`developers.cloudflare.com/pages/functions/wrangler-configuration/`, "Non-inheritable keys", letta il 2026-10-04). Per il binding non serve quindi alcuna azione nel pannello; resta da verificare, con il bucket creato (O3), che la Function serva davvero il disco | pannello Pages o `wrangler.toml` | la Function del disco |
 | O9 | *Consigliato*: un **service token** di Access per l'agente (ID e segreto) | all'agente, per la sessione | i controlli con `curl` della tabella sopra senza browser |
 | O10 | Il modello esatto del telefono Android (SoC compreso) e del desktop | nel report | la matrice |
 
 Non servono: dominio, TURN, Supabase, `ACCESS_DEV_BYPASS` (non va attivato: aprirebbe il disco su
-un branch non `main`, `functions/_middleware.ts` riga 57).
+un branch non `main`, `functions/_middleware.ts` riga 83).
 
 ---
 
@@ -306,15 +311,20 @@ la riga che decide (Android), poi le righe informative, infine la conferma sull'
 
 - I file `spike-result-<data-ora>.json` **senza aprirli né modificarli**: la prova corta e le tre
   corse (per M5 la corsa singola). Dentro ci sono già `core_commit`, `core_opt`, `user_agent`,
-  `cross_origin_isolated`, `timer_resolution_ms`, `frames`, `iso_bytes`, `exit_code`,
-  `final_scene`, `wall_ms`, `trace_csv`, `sim_times_csv`, `stats_all`, `stats_in_match`,
-  `comparison` (`web/src/spike/main.ts` righe 57–61).
+  `cross_origin_isolated`, `timer_resolution_ms`, `frames`, `iso_bytes`, `disc_source`,
+  `storage_persisted`, `core_load_ms`, `exit_code`, `final_scene`, `wall_ms`, `trace_csv`,
+  `decoder_cost`, `sim_times_csv`, `stats_all`, `stats_in_match`, `comparison`, `heartbeat` e —
+  solo per una corsa con `?canvas` — `render`: è l'oggetto che `web/src/spike/main.ts` righe
+  280–290 costruisce, ed è quel file a tenerne la lista (le righe 57–61 che questa voce citava
+  sono, dal 2026-10-05, la funzione `offscreenCanvas`).
 - Scritti a parte: **modello esatto del telefono e SoC** (lo `user_agent` di Chrome su Android non
   riporta più il modello, per la riduzione dello user agent: **da verificare** sul JSON della prova
   corta), versione del sistema e del browser, se il telefono era in carica, temperatura "a
   sensazione" alla fine.
 - Per M5 in più: quanto è durato il download del disco, quante volte si è interrotto, e il tempo
-  da "Run" a `core loaded` (finché non esiste il campo nel JSON, sezione 5, lo annota a mano).
+  da "Run" a `core loaded`, che è **già nel JSON**: il campo `core_load_ms`, misurato nel worker
+  dal suo avvio al messaggio `core` (`web/src/spike/main.ts` riga 283, `web/src/spike/worker.ts`
+  righe 43–48; introdotto da #29, §5 "Fatta" del PR 4), quindi non c'è niente da annotare a mano.
 - **Condizioni uguali per tutte le righe**: risparmio energetico spento, blocco schermo su "mai",
   nessun'altra app, pausa di 5 minuti tra le corse. Sulla carica i due piani esistenti si
   contraddicono (`docs/PHASE0_NEXT.md` S9: "phone plugged in"; `docs/PHASE0_DEVICE_PLAN.md` §3:
@@ -341,7 +351,7 @@ istruzioni e non storia, e sono corrette nel testo: il file della Function è
 **PR 1 — il modulo piccolo in `main`**
 
 - `phase0/oz-size-experiment` → `main`: nessun file nuovo, solo il merge (porta `-Oz -g0`, la
-  correzione di `core.json` in `phase0-build.yml` righe 125–129, e `scripts/phase0/serve_spike.py`).
+  correzione di `core.json` in `phase0-build.yml` righe 233–245, e `scripts/phase0/serve_spike.py`).
 
 **Fatta** il 2026-09-30 (PR #13, `phase0/oz-size-experiment`): `wasm/core/CMakeLists.txt` riga 23
 tiene `MELEE_OPT` a `-Oz` e la riga 32 aggiunge `-g0`; il modulo che CI spedisce è di 15.278.441
@@ -382,7 +392,7 @@ singolo da 1,46 GB resta non verificato: serve il bucket (O3).
   senza token Access (403).
 
 **Fatta** il 2026-09-30 da `2208884` (PR #16): la Function serve `/phase0/disc` e
-`/phase0/disc-chunks` (`functions/phase0/[[path]].ts` righe 4 e 14) e il binding `PHASE0_DISC` sta
+`/phase0/disc-chunks` (`functions/phase0/[[path]].ts` righe 13 e 14) e il binding `PHASE0_DISC` sta
 in `functions/types.ts` riga 31 e in `wrangler.toml` righe 33 e 56.
 
 **PR 4 — la pagina che popola OPFS**
@@ -486,7 +496,7 @@ Alla fine della Fase 0: cancellare il disco dal bucket (o il bucket), togliere i
 
 ## 7. Cosa NON dimostra questo piano
 
-- **Niente grafica.** Il core gira `--headless` (`worker.ts`, riga 50): il costo del disegno sul
+- **Niente grafica.** Il core gira `--headless` (`worker.ts`, riga 189): il costo del disegno sul
   telefono non è misurato e si aggiunge alla simulazione.
 - **Niente audio.** `--volume 0`.
 - **Niente input umano.** L'input viene dalla sequenza scriptata `parity_vs_onett.txt`: nessun
