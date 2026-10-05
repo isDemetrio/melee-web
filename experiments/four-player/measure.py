@@ -7,16 +7,27 @@ and writes counts and timings only -- never guest data:
 
   reference   upstream/melee-unlocked/port/scripts/parity_vs_onett.txt, the project's reference
               match and the one the iPhone number came from. Its 2400-retrace trace is gated
-              against c79c53b9cdf81426fa0277e7497a69e55bc5f571, so a core change would fail here.
+              against c79c53b9cdf81426fa0277e7497a69e55bc5f571, so a core change -- or an oracle
+              that perturbed the guest -- fails here. The two new workloads have their own traces
+              and are not gated against the reference: they are different inputs, so a different
+              trace is the expected result, not a failure.
   two-player  experiments/four-player/two-player.txt, two human ports.
   four-player experiments/four-player/four-player.txt, four human ports.
 
-Per-frame columns come from the two instruments the project already has: --sim-times (the core's
-own sim_ms, the same timer the phone reports as core_ms) and the graphics oracle's per-frame row
-(draws, vertices, segments and how many HUD slots are present, i.e. how many characters are on
-screen). The browser-only parts of the phone's play report -- cycle_ms, webgpu_ms, bitmap_ms,
-ack_ms -- do not exist in the headless host and are not invented here; docs/FOUR_PLAYER_LOAD.md
-says so.
+Two instruments, two clocks, reported separately rather than joined frame by frame:
+
+  --sim-times        one row per retrace: the core's own sim_ms, the same timer the phone reports
+                     as core_ms. In-match rows are the ones with match_frame > 0, exactly as
+                     scripts/phase0/frame_stats.py --in-match defines them.
+  the oracle         one row per *submitted* frame, which is not the same clock: the headless host
+                     only finishes a frame when the guest copies EFB to XFB, so 2400 retraces
+                     produce fewer frames. It carries draws, vertices, segments and how many HUD
+                     slots are present -- hud_players[].present is the number of characters on
+                     screen, which is what certifies the four-player workload really put four
+                     characters in the match.
+
+The browser-only parts of the phone's play report -- cycle_ms, webgpu_ms, bitmap_ms, ack_ms -- do
+not exist in the headless host and are not invented here; docs/FOUR_PLAYER_LOAD.md says so.
 """
 from __future__ import annotations
 
@@ -37,6 +48,8 @@ WORKLOADS = {
     'two-player': ROOT / 'experiments/four-player/two-player.txt',
     'four-player': ROOT / 'experiments/four-player/four-player.txt',
 }
+# Only the reference script is the project's gate; the two new workloads are new inputs.
+GATED = {'reference'}
 
 
 def pct(values, fraction):
@@ -60,43 +73,39 @@ def run(name, script, frames=2400):
     trace = hashlib.sha1((out / 'trace.csv').read_bytes()).hexdigest()
     sim = [{'retrace': int(r['retrace']), 'sim_ms': float(r['sim_ms']), 'match_frame': int(r['match_frame'])}
            for r in csv.DictReader((out / 'sim_times.csv').open())]
-    frames_rows = {}
-    with frame_times.open() as handle:
-        for r in csv.DictReader(handle):
-            frames_rows[int(r['sequence'])] = {k: int(v) for k, v in r.items()}
-    return {'name': name, 'trace_sha1': trace, 'oracle': oracle, 'sim': sim, 'frames': frames_rows}
+    frames_rows = [{'sequence': int(r['sequence']), 'scene_major': int(r['scene_major']),
+                    'scene_minor': int(r['scene_minor']), 'hud_present': int(r['hud_present']),
+                    'draws': int(r['draws']), 'vertices': int(r['vertices'])}
+                   for r in csv.DictReader(frame_times.open())]
+    final = next((s for s in log.splitlines() if s.startswith('final scene:')), 'MISSING')
+    return {'name': name, 'trace_sha1': trace, 'oracle': oracle, 'sim': sim, 'frames': frames_rows, 'final_scene': final}
 
 
-def summarize(run_result):
-    """Join the core timer with the oracle's per-frame row, retrace by retrace."""
-    sim, frames = run_result['sim'], run_result['frames']
-    joined = []
-    for row in sim:
-        frame = frames.get(row['retrace'])
-        joined.append({'sim_ms': row['sim_ms'], 'match_frame': row['match_frame'],
-                       'in_match': bool(frame) and frame['scene_major'] == 2 and frame['scene_minor'] == 2,
-                       'hud_present': frame['hud_present'] if frame else None,
-                       'draws': frame['draws'] if frame else None,
-                       'vertices': frame['vertices'] if frame else None})
+def core_stats(run_result):
+    """The core's own timer, one row per retrace, in-match by match_frame > 0."""
+    sim = run_result['sim']
     out = {}
-    for label, keep in (('match', lambda r: r['in_match']), ('menus', lambda r: not r['in_match']), ('all', lambda r: True)):
-        sel = [r for r in joined if keep(r)]
-        sim_ms = [r['sim_ms'] for r in sel]
-        draws = [r['draws'] for r in sel if r['draws'] is not None]
-        vertices = [r['vertices'] for r in sel if r['vertices'] is not None]
-        hud = [r['hud_present'] for r in sel if r['hud_present'] is not None]
-        out[label] = {
-            'frames': len(sel),
-            'sim_mean_ms': statistics.mean(sim_ms) if sim_ms else 0.0,
-            'sim_p95_ms': pct(sim_ms, .95),
-            'sim_p99_ms': pct(sim_ms, .99),
-            'sim_max_ms': max(sim_ms, default=0.0),
-            'draws_mean': statistics.mean(draws) if draws else 0.0,
-            'draws_p95': pct(draws, .95),
-            'vertices_mean': statistics.mean(vertices) if vertices else 0.0,
-            'hud_present_max': max(hud, default=0),
-            'hud_present_mean': statistics.mean(hud) if hud else 0.0,
-        }
+    for label, keep in (('match', lambda r: r['match_frame'] > 0), ('menus', lambda r: r['match_frame'] == 0), ('all', lambda r: True)):
+        sel = [r['sim_ms'] for r in sim if keep(r)]
+        out[label] = {'retraces': len(sel), 'sim_mean_ms': statistics.mean(sel) if sel else 0.0,
+                      'sim_p95_ms': pct(sel, .95), 'sim_p99_ms': pct(sel, .99), 'sim_max_ms': max(sel, default=0.0)}
+    return out
+
+
+def render_stats(run_result):
+    """The oracle's per-frame row, in-match by the scene words."""
+    rows = run_result['frames']
+    out = {}
+    for label, keep in (('match', lambda r: r['scene_major'] == 2 and r['scene_minor'] == 2),
+                        ('menus', lambda r: not (r['scene_major'] == 2 and r['scene_minor'] == 2)), ('all', lambda r: True)):
+        sel = [r for r in rows if keep(r)]
+        draws = [r['draws'] for r in sel]
+        vertices = [r['vertices'] for r in sel]
+        hud = [r['hud_present'] for r in sel]
+        out[label] = {'frames': len(sel), 'draws_mean': statistics.mean(draws) if draws else 0.0,
+                      'draws_p95': pct(draws, .95), 'draws_max': max(draws, default=0),
+                      'vertices_mean': statistics.mean(vertices) if vertices else 0.0,
+                      'hud_present_max': max(hud, default=0), 'hud_present_mean': statistics.mean(hud) if hud else 0.0}
     return out
 
 
@@ -106,22 +115,25 @@ def main():
                'workloads': {}}
     for name, script in WORKLOADS.items():
         got = run(name, script)
-        assert got['trace_sha1'] == TRACE, f'{name}: trace {got["trace_sha1"]} != reference'
-        entry = results['workloads'][name] = {'script': str(script.relative_to(ROOT)),
-                                              'trace_sha1': got['trace_sha1'], 'oracle': got['oracle'],
-                                              'per_frame': summarize(got)}
-        print(f"{name}: trace {got['trace_sha1']} ok; oracle {json.dumps(got['oracle'])}")
+        if name in GATED:
+            assert got['trace_sha1'] == TRACE, f'{name}: trace {got["trace_sha1"]} != reference'
+        results['workloads'][name] = {'script': str(script.relative_to(ROOT)), 'gated': name in GATED,
+                                      'trace_sha1': got['trace_sha1'], 'final_scene': got['final_scene'],
+                                      'oracle': got['oracle'], 'core': core_stats(got), 'render': render_stats(got)}
+        print(f"{name}: trace {got['trace_sha1']} {'(gate ok)' if name in GATED else ''}; {got['final_scene']}; "
+              f"oracle {json.dumps(got['oracle'])}")
         (RES / 'four-player.json').write_text(json.dumps(results, indent=2) + '\n')
 
-    ref = results['workloads']['reference']['per_frame']['match']
-    four = results['workloads']['four-player']['per_frame']['match']
-    two = results['workloads']['two-player']['per_frame']['match']
-    results['ratios'] = {
-        'four_over_two_sim_mean': four['sim_mean_ms'] / two['sim_mean_ms'] if two['sim_mean_ms'] else None,
-        'four_over_reference_sim_mean': four['sim_mean_ms'] / ref['sim_mean_ms'] if ref['sim_mean_ms'] else None,
-        'four_over_two_draws_mean': four['draws_mean'] / two['draws_mean'] if two['draws_mean'] else None,
-        'four_over_reference_draws_mean': four['draws_mean'] / ref['draws_mean'] if ref['draws_mean'] else None,
-    }
+    ref = results['workloads']['reference']
+    two = results['workloads']['two-player']
+    four = results['workloads']['four-player']
+    ratios = {}
+    for label in ('match', 'all'):
+        for key, base, top in (('sim_mean_ms', two, four), ('draws_mean', two, four), ('sim_mean_ms', ref, four), ('draws_mean', ref, four)):
+            b = base['core'][label][key] if key.startswith('sim') else base['render'][label][key]
+            t = top['core'][label][key] if key.startswith('sim') else top['render'][label][key]
+            ratios[f'four_over_{"two" if base is two else "reference"}_{key}_{label}'] = (t / b) if b else None
+    results['ratios'] = ratios
     (RES / 'four-player.json').write_text(json.dumps(results, indent=2) + '\n')
     print(json.dumps(results, indent=2))
 
