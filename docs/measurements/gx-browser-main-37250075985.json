@@ -1,0 +1,398 @@
+{
+  "run": 37250075985,
+  "branch_commit": "f48580d",
+  "source_merge_commit": "24db2f8c1143cbc85b149a783ee627c04190ec2b",
+  "baseline": "origin/main e80a221; excludes PR #121",
+  "browser": {
+    "browser": "153.0.8010.12",
+    "renderer": "fake WebGPU; GPU/API costs excluded",
+    "runs": [
+      {
+        "mode": "trace",
+        "digest": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "frames": 762,
+        "sim_ms": 14.67352362204724,
+        "samples": null
+      },
+      {
+        "mode": "attached",
+        "digest": null,
+        "frames": 762,
+        "sim_ms": 15.40961942257218,
+        "samples": 71568
+      },
+      {
+        "mode": "headless",
+        "digest": null,
+        "frames": 762,
+        "sim_ms": 8.622867454068233,
+        "samples": 39851
+      }
+    ]
+  },
+  "limitation": "Only GX/MMIO zones retained: original guest breakdown incorrectly scanned past the nearest guest boundary; do not use it.",
+  "attached": {
+    "sampled_ms_per_frame": 15.447669291338583,
+    "samples": 71568,
+    "zones": {
+      "gx_vertices": {
+        "samples": 509,
+        "percent": 0.7081226907472897,
+        "ms_per_frame": 0.10938845144356955,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::decode_vertices(gx::(anonymous namespace)::VertexDesc const&, unsigned char const*, unsigned int, unsigned int)::$_0::operator()(gx::(anonymous namespace)::AttrDesc const&, gx::(anonymous namespace)::ArrayView const&, unsigned int) const",
+            83354
+          ]
+        ]
+      },
+      "gx_texture_snapshot": {
+        "samples": 3,
+        "percent": 0.0040522893140875925,
+        "ms_per_frame": 0.0006259842519685039,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "emscripten_builtin_free",
+            161
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::__unordered_map_hasher<unsigned char const*, std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::hash<unsigned char const*>, std::__2::equal_to<unsigned char const*>, true>, std::__2::__unordered_map_equal<unsigned char const*, std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::equal_to<unsigned char const*>, std::__2::hash<unsigned char const*>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>>>::__emplace_unique_key_args<unsigned char const*, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned char const* const&>, std::__2::tuple<>>(unsigned char const* const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned char const* const&>&&, std::__2::tuple<>&&)",
+            160
+          ],
+          [
+            "std::__2::__shared_ptr_emplace<gx::TextureSnapshot, std::__2::allocator<gx::TextureSnapshot>>::__on_zero_shared()",
+            156
+          ]
+        ]
+      },
+      "gx_record_draw": {
+        "samples": 3588,
+        "percent": 5.006888042297405,
+        "ms_per_frame": 0.7734475065616797,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "memcmp",
+            310247
+          ],
+          [
+            "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+            256271
+          ],
+          [
+            "std::__2::vector<gx::DrawSegment, std::__2::allocator<gx::DrawSegment>>::push_back[abi:ne200100](gx::DrawSegment&&)",
+            8812
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned long long, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::__unordered_map_hasher<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::hash<unsigned long long>, std::__2::equal_to<unsigned long long>, true>, std::__2::__unordered_map_equal<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::equal_to<unsigned long long>, std::__2::hash<unsigned long long>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned long long, unsigned int>>>::__emplace_unique_key_args<unsigned long long, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>, std::__2::tuple<>>(unsigned long long const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>&&, std::__2::tuple<>&&)",
+            6454
+          ],
+          [
+            "gx::hash_bytes(void const*, unsigned long)",
+            5102
+          ],
+          [
+            "emscripten_builtin_malloc",
+            1317
+          ],
+          [
+            "gx::capture_authored_pose()",
+            1164
+          ]
+        ]
+      },
+      "gx_parse_command": {
+        "samples": 6164,
+        "percent": 8.617877103325052,
+        "ms_per_frame": 1.331261154855643,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+            977898
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned int, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::__unordered_map_hasher<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::hash<unsigned int>, std::__2::equal_to<unsigned int>, true>, std::__2::__unordered_map_equal<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::equal_to<unsigned int>, std::__2::hash<unsigned int>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned int, unsigned int>>>::__emplace_unique_key_args<unsigned int, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>, std::__2::tuple<>>(unsigned int const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>&&, std::__2::tuple<>&&)",
+            16251
+          ],
+          [
+            "emscripten_builtin_free",
+            7269
+          ],
+          [
+            "host::try_ptr(unsigned int, unsigned int)",
+            6234
+          ],
+          [
+            "emscripten_builtin_malloc",
+            1979
+          ],
+          [
+            "gx::hash_bytes(void const*, unsigned long)",
+            1327
+          ],
+          [
+            "host::rd32(unsigned int)",
+            1308
+          ],
+          [
+            "_emscripten_get_now",
+            494
+          ],
+          [
+            "std::__2::vector<gx::DrawSegment, std::__2::allocator<gx::DrawSegment>>::push_back[abi:ne200100](gx::DrawSegment&&)",
+            342
+          ],
+          [
+            "gx::capture_authored_pose()",
+            330
+          ],
+          [
+            "host::ptr(unsigned int, unsigned int)",
+            170
+          ],
+          [
+            "wasm-to-js",
+            167
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned long long, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::__unordered_map_hasher<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::hash<unsigned long long>, std::__2::equal_to<unsigned long long>, true>, std::__2::__unordered_map_equal<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::equal_to<unsigned long long>, std::__2::hash<unsigned long long>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned long long, unsigned int>>>::__emplace_unique_key_args<unsigned long long, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>, std::__2::tuple<>>(unsigned long long const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>&&, std::__2::tuple<>&&)",
+            167
+          ],
+          [
+            "memcmp",
+            163
+          ],
+          [
+            "host::rd8(unsigned int)",
+            162
+          ],
+          [
+            "void std::__2::vector<unsigned char, std::__2::allocator<unsigned char>>::__assign_with_size[abi:ne200100]<unsigned char const*, unsigned char const*>(unsigned char const*, unsigned char const*, long)",
+            160
+          ]
+        ]
+      },
+      "gx_fifo_write_unresolved": {
+        "samples": 2731,
+        "percent": 3.813161767729233,
+        "ms_per_frame": 0.5890446194225721,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::gx_write(unsigned int, int)",
+            403258
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            45095
+          ],
+          [
+            "host::try_ptr(unsigned int, unsigned int)",
+            334
+          ],
+          [
+            "std::__2::vector<std::__2::pair<unsigned int, void (*)(ppc::Context&)>, std::__2::allocator<std::__2::pair<unsigned int, void (*)(ppc::Context&)>>>::push_back[abi:ne200100](std::__2::pair<unsigned int, void (*)(ppc::Context&)>&&)",
+            165
+          ]
+        ]
+      },
+      "mmio_unresolved": {
+        "samples": 554,
+        "percent": 0.7773089468771207,
+        "ms_per_frame": 0.12007611548556431,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::mmio_write(unsigned int, unsigned int, int)",
+            83131
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            7884
+          ],
+          [
+            "host::mmio_read(unsigned int, int)",
+            483
+          ]
+        ]
+      }
+    }
+  },
+  "headless": {
+    "sampled_ms_per_frame": 8.648560367454069,
+    "samples": 39851,
+    "zones": {
+      "gx_vertices": {
+        "samples": 520,
+        "percent": 1.3014470115715706,
+        "ms_per_frame": 0.11255643044619423,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::decode_vertices(gx::(anonymous namespace)::VertexDesc const&, unsigned char const*, unsigned int, unsigned int)::$_0::operator()(gx::(anonymous namespace)::AttrDesc const&, gx::(anonymous namespace)::ArrayView const&, unsigned int) const",
+            85768
+          ]
+        ]
+      },
+      "gx_texture_snapshot": {
+        "samples": 2,
+        "percent": 0.0050529551214128,
+        "ms_per_frame": 0.00043700787401574807,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::__unordered_map_hasher<unsigned char const*, std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::hash<unsigned char const*>, std::__2::equal_to<unsigned char const*>, true>, std::__2::__unordered_map_equal<unsigned char const*, std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::equal_to<unsigned char const*>, std::__2::hash<unsigned char const*>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>>>::__emplace_unique_key_args<unsigned char const*, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned char const* const&>, std::__2::tuple<>>(unsigned char const* const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned char const* const&>&&, std::__2::tuple<>&&)",
+            170
+          ],
+          [
+            "emscripten_builtin_free",
+            163
+          ]
+        ]
+      },
+      "gx_record_draw": {
+        "samples": 3321,
+        "percent": 8.327664565112789,
+        "ms_per_frame": 0.7202230971128608,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "memcmp",
+            297168
+          ],
+          [
+            "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+            227248
+          ],
+          [
+            "std::__2::vector<gx::DrawSegment, std::__2::allocator<gx::DrawSegment>>::push_back[abi:ne200100](gx::DrawSegment&&)",
+            8817
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned long long, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::__unordered_map_hasher<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::hash<unsigned long long>, std::__2::equal_to<unsigned long long>, true>, std::__2::__unordered_map_equal<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::equal_to<unsigned long long>, std::__2::hash<unsigned long long>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned long long, unsigned int>>>::__emplace_unique_key_args<unsigned long long, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>, std::__2::tuple<>>(unsigned long long const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>&&, std::__2::tuple<>&&)",
+            6251
+          ],
+          [
+            "gx::hash_bytes(void const*, unsigned long)",
+            5692
+          ],
+          [
+            "emscripten_builtin_malloc",
+            2637
+          ],
+          [
+            "gx::capture_authored_pose()",
+            997
+          ]
+        ]
+      },
+      "gx_parse_command": {
+        "samples": 5483,
+        "percent": 13.703325982522845,
+        "ms_per_frame": 1.1851404199475066,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+            872552
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned int, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::__unordered_map_hasher<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::hash<unsigned int>, std::__2::equal_to<unsigned int>, true>, std::__2::__unordered_map_equal<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::equal_to<unsigned int>, std::__2::hash<unsigned int>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned int, unsigned int>>>::__emplace_unique_key_args<unsigned int, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>, std::__2::tuple<>>(unsigned int const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>&&, std::__2::tuple<>&&)",
+            12153
+          ],
+          [
+            "host::try_ptr(unsigned int, unsigned int)",
+            6726
+          ],
+          [
+            "emscripten_builtin_free",
+            6523
+          ],
+          [
+            "emscripten_builtin_malloc",
+            2447
+          ],
+          [
+            "gx::hash_bytes(void const*, unsigned long)",
+            1001
+          ],
+          [
+            "_emscripten_get_now",
+            341
+          ],
+          [
+            "std::__2::vector<gx::DrawSegment, std::__2::allocator<gx::DrawSegment>>::push_back[abi:ne200100](gx::DrawSegment&&)",
+            336
+          ],
+          [
+            "host::rd32(unsigned int)",
+            330
+          ],
+          [
+            "gx::capture_authored_pose()",
+            179
+          ],
+          [
+            "host::rd16(unsigned int)",
+            168
+          ],
+          [
+            "host::rd8(unsigned int)",
+            161
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned long long, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::__unordered_map_hasher<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::hash<unsigned long long>, std::__2::equal_to<unsigned long long>, true>, std::__2::__unordered_map_equal<unsigned long long, std::__2::__hash_value_type<unsigned long long, unsigned int>, std::__2::equal_to<unsigned long long>, std::__2::hash<unsigned long long>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned long long, unsigned int>>>::__emplace_unique_key_args<unsigned long long, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>, std::__2::tuple<>>(unsigned long long const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned long long const&>&&, std::__2::tuple<>&&)",
+            160
+          ]
+        ]
+      },
+      "gx_fifo_write_unresolved": {
+        "samples": 2703,
+        "percent": 6.759169634076522,
+        "ms_per_frame": 0.5845708661417323,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::gx_write(unsigned int, int)",
+            399180
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            45619
+          ],
+          [
+            "host::try_ptr(unsigned int, unsigned int)",
+            321
+          ],
+          [
+            "std::__2::vector<std::__2::pair<unsigned int, void (*)(ppc::Context&)>, std::__2::allocator<std::__2::pair<unsigned int, void (*)(ppc::Context&)>>>::push_back[abi:ne200100](std::__2::pair<unsigned int, void (*)(ppc::Context&)>&&)",
+            162
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned int, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::__unordered_map_hasher<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::hash<unsigned int>, std::__2::equal_to<unsigned int>, true>, std::__2::__unordered_map_equal<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::equal_to<unsigned int>, std::__2::hash<unsigned int>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned int, unsigned int>>>::__emplace_unique_key_args<unsigned int, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>, std::__2::tuple<>>(unsigned int const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>&&, std::__2::tuple<>&&)",
+            161
+          ]
+        ]
+      },
+      "mmio_unresolved": {
+        "samples": 526,
+        "percent": 1.3199896877228212,
+        "ms_per_frame": 0.11416010498687663,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::mmio_write(unsigned int, unsigned int, int)",
+            75305
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            11685
+          ]
+        ]
+      }
+    }
+  }
+}

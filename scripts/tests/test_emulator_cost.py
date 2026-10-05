@@ -47,6 +47,12 @@ class AttributionTest(unittest.TestCase):
         self.assertEqual(self.category(['fma', 'f_80000000']), 'fp_emulation')
         self.assertEqual(self.category(['unknown_helper', 'f_80000000']), 'guest_other_helpers')
 
+    def test_dispatch_below_guest_does_not_own_guest_body(self):
+        self.assertEqual(self.category(['f_80000000', 'ppc::call', 'f_80000004']),
+                         'guest_and_inlined_helpers')
+        self.assertEqual(self.category(['ppc::trace_enter', 'ppc::enter', 'f_80000000',
+                                        'ppc::call', 'f_80000004']), 'entry_trace')
+
     def test_missing_boundary_is_not_free(self):
         result = module.analyse(profile(['f_80000000']))
         self.assertEqual(result['zones']['gx_vertices']['visibility'], 'not observed (may be inlined)')

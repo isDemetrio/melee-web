@@ -43,17 +43,24 @@ def analyse(profile):
     totals = collections.Counter()
     leaves = collections.defaultdict(collections.Counter)
     counts = collections.Counter()
+    leaf_us = collections.Counter()
+    leaf_counts = collections.Counter(samples)
     for node, us in zip(samples, deltas):
+        leaf_us[node] += us
+    stack_aggregates = []
+    for node, us in leaf_us.items():
+        sample_count = leaf_counts[node]
         stack = []
         while node in nodes:
             stack.append(names[nodes[node]['callFrame']['functionName']])
             node = parents.get(node)
+        stack_aggregates.append({'stack_leaf_first': stack, 'us': us, 'samples': sample_count})
         category = 'unclassified'
         # Resolve the host/guest zone before assigning a helper's self time.
         # E.g. ld32 under decode_vertices belongs to vertex decoding, not guest loads.
-        for name in stack:
+        for depth, name in enumerate(stack):
             if RULES[-1][1].search(name):
-                category = next((key for key, rx in RULES[7:-1] if any(rx.search(n) for n in stack)),
+                category = next((key for key, rx in RULES[7:-1] if any(rx.search(n) for n in stack[:depth])),
                                 'guest_and_inlined_helpers' if RULES[-1][1].search(stack[0])
                                 else 'guest_other_helpers')
                 break
@@ -62,11 +69,14 @@ def analyse(profile):
                 category = match
                 break
         totals[category] += us
-        counts[category] += 1
+        counts[category] += sample_count
         leaves[category][stack[0] if stack else '<missing stack>'] += us
     total = sum(deltas)
     return {'total_sampled_ms': total / 1000, 'samples': len(samples),
             'ms_per_frame': total / 1000 / 762,
+            # Aggregates contain names, elapsed time and counts only, never game bytes.
+            # Preserve these so a classification fix does not require another game build.
+            'stack_aggregates': stack_aggregates,
             'limitations': [
                 'Zero samples means below visibility or inlined, never zero cost.',
                 'FIFO buffer append is unresolved inside gx_write/write_fifo self time.',
