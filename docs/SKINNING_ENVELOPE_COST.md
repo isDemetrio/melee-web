@@ -115,8 +115,8 @@ reached only when a factor was zero.
 
 So the direct measurement of the removable work is **1.279 − 0.227 = 1.05 ms/frame at four
 players** (0.227 = 162.6/715), i.e. **2.0% of the 53.07 ms profiled frame, 2.2% of the ~47.5 ms
-`sim_ms`**; at two players the same path is 256.2 + 168.5 = 424.7 ms, 0.59 ms/frame, so the
-change is worth ~0.4 ms/frame there.
+`sim_ms`**. At two players the same path in the whole profile is 329.6 + 207.0 = 536.6 ms,
+0.750 ms/frame; with the same 82% reduction the change is worth **~0.6 ms/frame** there.
 
 **The frame metric cannot resolve it.** The harness's own metric, mean `sim_ms` over match frames
 1–715, eight alternating A/B pairs (`/home/hermes/briefs/skinning/measure_ab.sh`, four-player
@@ -137,6 +137,6 @@ whose single runs span ±7%, exactly as `FOUR_PLAYER_ATTRIBUTION.md` found for a
 
 **Verdict.** A safe reduction exists and is measured directly: the libm `fma`+`normalize` path
 under the skinning subtree is removed, worth **~1.0 ms/frame at four players (2.0–2.2% of the
-frame) and ~0.4 ms/frame at two**. That is the whole of it. The frame metric's eight-pair mean
+frame) and ~0.6 ms/frame at two**. That is the whole of it. The frame metric's eight-pair mean
 (−2.12 ms) is consistent in sign but drift-contaminated and larger than the removable work, so
 it is reported, not claimed.
