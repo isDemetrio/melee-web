@@ -26,10 +26,8 @@ globalThis.run = async ({size, trace, attached, profile}) => {
       if (r < 0) return;
       if (r !== last + 1) throw new Error(`nonsequential retrace ${r}`);
       last = r;
-      if (profile && (r === 1638 || r === 2400)) {
-        globalThis.profileBoundary = r;
-        debugger; // CDP starts/stops sampling while execution is suspended here.
-      }
+      if (profile && r === 1638) console.profile('inmatch');
+      if (profile && r === 2400) console.profileEnd('inmatch');
     }
   });
   const fs = core.FS;

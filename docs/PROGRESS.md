@@ -3543,7 +3543,7 @@ base is pending the operator's answer. No emulator optimization or renderer edit
 `experiments/emulator-cost/` and `.github/workflows/emulator-cost.yml` add a Chromium replay
 using the existing private R2 disc route. The first run gates on the complete 2400-checkpoint
 SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; separate attached/headless sampling runs
-cover retraces 1639–2400 via CDP debugger boundaries. Only aggregate JSON and machine/source
+cover retraces 1639–2400 via synchronous console.profile/profileEnd boundaries (CDP Profiler only, no Debugger). Only aggregate JSON and machine/source
 metadata are uploaded. Builds, browser execution and tests run exclusively in Actions.
 
 No new measurements are available yet. In particular, FIFO buffer writes inlined into

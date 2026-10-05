@@ -63,7 +63,7 @@ def analyse(profile):
                 'FIFO buffer append is unresolved inside gx_write/write_fifo self time.',
                 'mmio self time includes all destinations; it cannot be attributed wholly to GX.',
                 'Helper self time does not separate call overhead from instructions.',
-                'Debugger boundaries add profiler overhead; compare sampled and core elapsed time.',
+                'Console profile boundaries add profiler overhead; compare sampled and core elapsed time.',
                 'Real WebGPU API/GPU costs are excluded; this is Chromium, not iPhone JSC.',
             ],
             'zones': {key: {'samples': counts[key], 'percent': totals[key] * 100 / total,
