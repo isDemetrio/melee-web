@@ -1,5 +1,6 @@
 import { loadHeartbeat, type StoredHeartbeat } from '../spike/heartbeat.js';
 import { h } from '../ui/context.js';
+import { PRESENTATION_MODES } from './presentation.js';
 import { PLAY_STORAGE_KEY, PlayReport } from './report.js';
 import type { PlayPerf } from './session.js';
 
@@ -30,6 +31,9 @@ export function saveFile(file: File): void {
 export class ReportControls {
   readonly line = h('p', { class: 'status', id: 'perf-line' });
   readonly split = h('input', { id: 'game-split', type: 'checkbox' });
+  /** How frames are handed to the page (presentation.ts); anything but `direct` is an experiment. */
+  readonly presentation = h('select', { id: 'game-presentation', 'aria-label': 'Presentation' },
+    PRESENTATION_MODES.map((mode) => h('option', { value: mode.name, text: mode.name })));
   readonly element: HTMLElement;
   private report: PlayReport | null = null;
   private previous: StoredHeartbeat | null = null;
@@ -69,7 +73,8 @@ export class ReportControls {
     } });
     this.element = h('div', {}, [
       h('div', { class: 'row' }, [save, share,
-        h('label', { class: 'row' }, [this.split, 'core split (adds the core profiler\'s cost)'])]),
+        h('label', { class: 'row' }, [this.split, 'core split (adds the core profiler\'s cost)']),
+        h('label', { class: 'row' }, ['presentation', this.presentation])]),
       this.line,
     ]);
   }
@@ -78,7 +83,7 @@ export class ReportControls {
   begin(): PlayPerf {
     this.report = new PlayReport(this.split.checked, performance.now());
     this.previous = null;
-    return { report: this.report, split: this.split.checked, line: (text) => { this.line.textContent = text; } };
+    return { report: this.report, split: this.split.checked, presentation: this.presentation.value, line: (text) => { this.line.textContent = text; } };
   }
 
   private file(): File | null {

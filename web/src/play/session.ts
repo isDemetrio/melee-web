@@ -17,6 +17,8 @@ const PERSIST_MS = 2000;
 export interface PlayPerf {
   report: PlayReport;
   split: boolean;
+  /** presentation.ts's mode name: how the worker hands frames over. */
+  presentation: string;
   line(text: string): void;
 }
 
@@ -117,7 +119,8 @@ export class PlaySession {
           this.recipes.add(message.recipe).catch((error) => this.log(`render pipeline not kept: ${String(error)}`));
         }
       };
-      worker.postMessage({ iso, discIdentity, pad: this.shared.buffer, flight: this.flight.buffer, split: this.perf.split });
+      worker.postMessage({ iso, discIdentity, pad: this.shared.buffer, flight: this.flight.buffer, split: this.perf.split,
+        presentation: this.perf.presentation });
     } catch (error) {
       if (!this.disposed) this.fail(String(error));
       else this.log(`Stopped loading: ${String(error)}`);
@@ -140,6 +143,8 @@ export class PlaySession {
   /** The live line, and the record a killed tab leaves behind (heartbeat.ts), every PERSIST_MS. */
   private tick(): void {
     const now = performance.now();
+    this.perf.report.onDisplay({ cssWidth: this.canvas.clientWidth, cssHeight: this.canvas.clientHeight,
+      devicePixelRatio: window.devicePixelRatio });
     this.perf.line(this.perf.report.line(now));
     if (now - this.persistedAt >= PERSIST_MS) this.persist(now);
   }
