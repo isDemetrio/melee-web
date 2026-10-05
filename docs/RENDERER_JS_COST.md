@@ -132,7 +132,53 @@ Resto del JS per draw, fuori da `gxw_draw`: `gxw_bind` è chiamato **8 volte per
 anche vuoto: 16,2 M chiamate su 2,02 M draw nella corsa intera), ognuna con `Map.get/delete/set` e un
 oggetto nuovo — 2,4–2,6% del fotogramma (sezione 2).
 
-## 4. Limite dichiarato
+## 4. Prototipi: −15% del fotogramma, comportamento identico
+
+Le tre riduzioni della sezione 1 come patch dell'EM_JS minificato nella copia del banco (nessun
+build: `~/incoming/phase0/renderjs/proto.mjs`), poi come sorgente in PR #123:
+
+- pipeline cercata per **numero** (id dello shader sopra 21 bit di stato), stringa solo alla creazione;
+- **bind group del draw precedente** finché `gxw_bind` non cambia uno slot (id texture, chiave
+  sampler): niente stringa, niente lookup né riordino LRU;
+- confronto uniform con la vista del heap in una locale e uscita al primo diverso.
+
+**Certificazione** (gioco vero, 2400 fotogrammi, `DIGEST=1 VALIDATE=1`, traccia attiva):
+
+| | digest delle chiamate WebGPU | chiamate | errori di contenuto | traccia |
+| --- | --- | ---: | ---: | --- |
+| originale | `624cf718…` | 2.744.711 | 0 / 2.021.706 | `c79c53b9…` |
+| prototipo | `624cf718…` | 2.744.711 | 0 / 2.021.706 | `c79c53b9…` |
+| controllo negativo (dedup sbagliato apposta) | `52f6e191…` | 2.621.860 | **1.263.814** | `c79c53b9…` |
+
+Il digest è lo SHA-1 di ogni chiamata in ordine: metodo, ricevente, argomenti (oggetti per ordine di
+creazione, descrittori per struttura, dati per i loro byte). Il controllo negativo mostra che digest e
+validazione **vedono** un errore del renderer, e che **la traccia dei checkpoint no**: è lo stato
+della CPU emulata, che il backend non tocca. L'oracolo grafico di `perf/beyond-core` (input del
+renderer, sul core Node senza backend) per lo stesso motivo non può vedere questi cambi.
+
+**Il validatore era rotto senza dirlo.** `VALIDATE=1` di `bench2/3.mjs` confrontava le uniform su 105
+righe fisse; da quando le righe sono variabili (125, 186…) segnava errore su **ogni** draw. Corretto
+in `lines.mjs` (`rows*16` byte, e controllo che la binding le contenga).
+
+**Misura** (`sim_ms` medio in partita, coppie alternate, senza profiler):
+
+| coppia | originale | prototipo | Δ |
+| ---: | ---: | ---: | ---: |
+| 1 | 54,61 | 44,42 | −10,19 |
+| 2 | 51,35 | 45,96 | −5,39 |
+| 3 | 58,97 | 48,92 | −10,05 |
+| 4 | 56,22 | 48,60 | −7,62 |
+| media | 55,29 | 46,98 | **−8,31 (0,85×)** |
+
+Profilo del prototipo: JS di `gxw_draw` dal **22,6% al 14,3%** dei campioni; pipeline 2,95% →
+0,17%; bind group 5,85% → ~1,5%; confronto uniform 9,4% → **7,5%** (il ciclo più stretto toglie
+solo il 27% dei suoi campioni). `gxw_bind` sale da 2,6% a 3,0% (il controllo dello slot).
+
+Il confronto uniform resta la voce più grossa: il passo successivo (PR impilata su #123) lo sposta
+in C++ — `draw_segment` tiene le righe passate all'ultima chiamata e passa a `gxw_draw` se sono le
+stesse (`memcmp`), e il JS non confronta più nulla. Richiede un build: da misurare sul core di CI.
+
+## 5. Limite dichiarato
 
 Il tempo **dentro** le chiamate WebGPU vere (sul telefono: IPC verso il processo GPU di WebKit e
 codifica Metal) e il tempo GPU **non sono misurabili dalla VPS**: qui WebGPU è finto. Quel pezzo lo
