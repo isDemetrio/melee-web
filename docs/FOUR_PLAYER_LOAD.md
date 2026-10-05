@@ -134,6 +134,22 @@ The character counts in the table are not assumed. They are the oracle's `max_hu
 the reference and the control, 4 for the four-player run, in every single match frame
 (`four_hud_frames = 838`, `two_hud_frames = 0`).
 
+### Reproducibility, and why the ratio is the number to quote
+
+The workflow was run twice on this branch ([37297575825](https://github.com/isDemetrio/melee-web/actions/runs/37297575825),
+[37299365971](https://github.com/isDemetrio/melee-web/actions/runs/37299365971)). The render is
+deterministic: per-frame draws reproduce to the hundredth (903.31 vs 903.31 for four characters,
+684.84 vs 684.84 for the control) and every trace SHA-1 is identical. The **absolute** `sim_ms` is
+not: the control moved 33.86 -> 42.33 ms and four players 50.43 -> 63.37 ms, because the VPS runner
+is a noisy machine. The ratio barely moved:
+
+| ratio | run 1 | run 2 |
+|---|---|---|
+| four / two control, `sim_ms` | 1.489 | 1.497 |
+| four / reference, `sim_ms` | 1.520 | 1.518 |
+
+Under 1% apart. Quote the ratio; the absolute milliseconds are machine- and load-dependent.
+
 ## Nothing broke
 
 - **Trace gate: IDENTICAL.** The reference workload's 2400-retrace trace SHA-1 is
