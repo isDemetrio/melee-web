@@ -1,0 +1,41 @@
+diff --git a/port/runtime/ppc/ppc.h b/port/runtime/ppc/ppc.h
+index 689ce55..d031ba3 100644
+--- a/port/runtime/ppc/ppc.h
++++ b/port/runtime/ppc/ppc.h
+@@ -108,12 +108,17 @@ void add_trace_func(uint32_t addr, uint32_t limit);
+ void trace_spline_guest(const Context& c, uint32_t pc);
+ // Runs `fn` at the entry of the translated function at `addr`. Every translated function starts
+ // with enter(), so this also catches direct calls, which set_hook (dispatch table only) never
+-// sees. Rides the --trace-func slow path: no cost unless a hook or trace is registered.
++// sees. The first hook is checked inline with one compare (g_entry_hook_pc is 1, never a guest
++// PC, until then); further hooks and --trace-func ride the trace_enter slow path, which costs
++// nothing unless one of those is registered. Hooks run in registration order either way.
+ using EntryHook = void (*)(Context&);
+ void add_entry_hook(uint32_t addr, EntryHook fn);
++extern uint32_t g_entry_hook_pc;
++extern EntryHook g_entry_hook_fn;
+ inline void enter(Context& c, uint32_t pc) {
+   c.last_pc = pc; c.trace[c.trace_pos++ & 63] = pc;
+   if ((++g_enter_count & 0xFFFFFu) == 0) hang_check(c);
++  if (pc == g_entry_hook_pc) g_entry_hook_fn(c);
+   if (g_trace_funcs) trace_enter(c, pc);
+ }
+ // Cave-local returns (emit.py _local_return): `lrs` holds the return addresses of the last 32 local
+diff --git a/port/runtime/ppc/ppc_runtime.cpp b/port/runtime/ppc/ppc_runtime.cpp
+index 5dbcfe6..aeb8b82 100644
+--- a/port/runtime/ppc/ppc_runtime.cpp
++++ b/port/runtime/ppc/ppc_runtime.cpp
+@@ -119,7 +119,12 @@ bool g_trace_funcs = false;
+ static std::vector<std::pair<uint32_t, uint32_t>> g_traced;   // (addr, remaining prints)
+ void add_trace_func(uint32_t addr, uint32_t limit) { g_traced.push_back({addr, limit}); g_trace_funcs = true; }
+ static std::vector<std::pair<uint32_t, EntryHook>> g_entry_hooks;
+-void add_entry_hook(uint32_t addr, EntryHook fn) { g_entry_hooks.push_back({addr, fn}); g_trace_funcs = true; }
++uint32_t g_entry_hook_pc = 1;
++EntryHook g_entry_hook_fn = nullptr;
++void add_entry_hook(uint32_t addr, EntryHook fn) {
++  if (!g_entry_hook_fn) { g_entry_hook_pc = addr; g_entry_hook_fn = fn; return; }
++  g_entry_hooks.push_back({addr, fn}); g_trace_funcs = true;
++}
+ void trace_enter(Context& c, uint32_t pc) {
+   for (auto& h : g_entry_hooks) if (h.first == pc) h.second(c);
+   for (auto& t : g_traced) {
