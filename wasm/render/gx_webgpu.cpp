@@ -150,46 +150,55 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
     // Views have no destroy(): one per persistent texture, made here or when its texture is.
     gpu.whiteEntry = {id:0, texture:gpu.white, view:gpu.white.createView()};
     // The scaled XFB copy (gxw_copy): a fullscreen triangle samples the reduced EFB and writes the
-    // target, so a frame rendered at fewer pixels is shown at the canvas's. One pipeline, created
-    // here -- before callMain -- not inside a frame, where pipeline creation froze on the iPhone
-    // (web/src/play/pipelines.ts says why). The uniform is [src_x, src_y, full_w, full_h], in full
-    // EFB coordinates; the fragment maps the target's pixel to the reduced texture's normalised
-    // coordinate, so the scale cancels and only the full dimensions are needed.
-    gpu.blitSampler = gpu.device.createSampler({magFilter:"linear", minFilter:"linear"});
-    gpu.blitUniform = gpu.device.createBuffer({size:16, usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
-    gpu.blitLayout = gpu.device.createBindGroupLayout({entries:[
-      {binding:0,visibility:GPUShaderStage.FRAGMENT,buffer:{type:"uniform"}},
-      {binding:1,visibility:GPUShaderStage.FRAGMENT,sampler:{type:"filtering"}},
-      {binding:2,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:"float"}}]});
-    const blitModule = gpu.device.createShaderModule({label:"gx blit", code:
-      "struct U { src: vec4<f32> };\n" +
-      "@group(0) @binding(0) var<uniform> u: U;\n" +
-      "@group(0) @binding(1) var samp: sampler;\n" +
-      "@group(0) @binding(2) var tex: texture_2d<f32>;\n" +
-      "struct VOut { @builtin(position) pos: vec4<f32> };\n" +
-      "@vertex fn vs(@builtin(vertex_index) i: u32) -> VOut {\n" +
-      "  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));\n" +
-      "  var o: VOut; o.pos = vec4<f32>(p[i], 0.0, 1.0); return o;\n" +
-      "}\n" +
-      "@fragment fn fs(in: VOut) -> @location(0) vec4<f32> {\n" +
-      "  let uv = (vec2<f32>(u.src.x, u.src.y) + in.pos.xy) / vec2<f32>(u.src.z, u.src.w);\n" +
-      "  return textureSample(tex, samp, uv);\n" +
-      "}\n"});
-    gpu.blitPipeline = gpu.device.createRenderPipeline({label:"gx blit",
-      layout: gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.blitLayout]}),
-      vertex:{module:blitModule, entryPoint:"vs"},
-      fragment:{module:blitModule, entryPoint:"fs", targets:[{format:gpu.format}]},
-      primitive:{topology:"triangle-list"}});
-    // The blit's bind group names efbView, which a resize replaces, so it is remade whenever the
-    // render target is (makeEfb nulls it, gxw_set_scale remakes it): made here and between retraces,
-    // never inside a frame, where device calls cost the frame that makes them.
+    // target, so a frame rendered at fewer pixels is shown at the canvas's. The uniform is
+    // [src_x, src_y, full_w, full_h], in full EFB coordinates; the fragment maps the target's pixel
+    // to the reduced texture's normalised coordinate, so the scale cancels and only the full
+    // dimensions are needed.
+    //
+    // These are made only when the internal resolution is reduced: at scale 1 the full-resolution
+    // path must be the one that ran before, down to the device calls the render tests count, and a
+    // session that never reduces must create nothing extra. `ensureBlit` runs at open when the level
+    // starts reduced, and from gxw_set_scale between retraces when the operator reduces it mid-match
+    // -- before callMain or between frames, never inside a frame's draw loop, where pipeline creation
+    // froze on the iPhone (web/src/play/pipelines.ts says why).
     gpu.makeBlitGroup = () => {
       gpu.blitGroup = gpu.device.createBindGroup({layout:gpu.blitLayout, entries:[
         {binding:0, resource:{buffer:gpu.blitUniform}},
         {binding:1, resource:gpu.blitSampler},
         {binding:2, resource:gpu.efbView}]});
     };
-    gpu.makeBlitGroup();
+    gpu.ensureBlit = () => {
+      if (!gpu.blitPipeline) {
+        gpu.blitSampler = gpu.device.createSampler({magFilter:"linear", minFilter:"linear"});
+        gpu.blitUniform = gpu.device.createBuffer({size:16, usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+        gpu.blitLayout = gpu.device.createBindGroupLayout({entries:[
+          {binding:0,visibility:GPUShaderStage.FRAGMENT,buffer:{type:"uniform"}},
+          {binding:1,visibility:GPUShaderStage.FRAGMENT,sampler:{type:"filtering"}},
+          {binding:2,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:"float"}}]});
+        const blitModule = gpu.device.createShaderModule({label:"gx blit", code:
+          "struct U { src: vec4<f32> };\n" +
+          "@group(0) @binding(0) var<uniform> u: U;\n" +
+          "@group(0) @binding(1) var samp: sampler;\n" +
+          "@group(0) @binding(2) var tex: texture_2d<f32>;\n" +
+          "struct VOut { @builtin(position) pos: vec4<f32> };\n" +
+          "@vertex fn vs(@builtin(vertex_index) i: u32) -> VOut {\n" +
+          "  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));\n" +
+          "  var o: VOut; o.pos = vec4<f32>(p[i], 0.0, 1.0); return o;\n" +
+          "}\n" +
+          "@fragment fn fs(in: VOut) -> @location(0) vec4<f32> {\n" +
+          "  let uv = (vec2<f32>(u.src.x, u.src.y) + in.pos.xy) / vec2<f32>(u.src.z, u.src.w);\n" +
+          "  return textureSample(tex, samp, uv);\n" +
+          "}\n"});
+        gpu.blitPipeline = gpu.device.createRenderPipeline({label:"gx blit",
+          layout: gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.blitLayout]}),
+          vertex:{module:blitModule, entryPoint:"vs"},
+          fragment:{module:blitModule, entryPoint:"fs", targets:[{format:gpu.format}]},
+          primitive:{topology:"triangle-list"}});
+      }
+      // The bind group names efbView, which a resize replaces, so it is remade on every resize.
+      gpu.makeBlitGroup();
+    };
+    if (gpu.scale < 1) gpu.ensureBlit();
     // Draw resources are persistent (gxw_bind, gxw_draw). Uniforms, vertices and indices are
     // arenas: each draw of a batch appends its data at its own offset to a staging copy, and the
     // batch writes them with one writeBuffer each just before its single submit (gpu.flush).
@@ -868,7 +877,9 @@ EM_JS(int, gxw_set_scale, (float scale), {
   try {
     gpu.flush();
     gpu.makeEfb((typeof scale === "number" && scale > 0 && scale <= 1) ? scale : 1);
-    gpu.makeBlitGroup();
+    // Between retraces, not inside a frame: the blit's pipeline and bind group are made here the
+    // first time the level is reduced, and the group is remade on every resize (efbView changed).
+    if (scale < 1) gpu.ensureBlit();
     return 1;
   } catch (error) {
     gpu.recordFailure("resize", error); gpu.failure = "resize: " + error; return 0;
