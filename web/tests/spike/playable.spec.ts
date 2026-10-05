@@ -131,7 +131,10 @@ for (const [presentation, block, modes] of EXPERIMENTS) {
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#game-report')]);
     const report = JSON.parse(await readFile(await download.path(), 'utf8'));
     expect(report.presentation.mode).toBe(presentation);
-    expect((report.notes as string[]).filter((note) => note.startsWith('webgpu error'))).toEqual([]);
+    // CI's Chromium loses the device when the task that presented a canvas ends (spike/gpu.ts, run
+    // 36898914442), which the selftest's wait for GPU events now reaches; any other error counts.
+    expect((report.notes as string[]).filter((note) => note.startsWith('webgpu error') &&
+      !note.includes('device lost: A valid external Instance reference no longer exists'))).toEqual([]);
     const [header, ...lines] = (report.frames_csv as string).split('\n');
     const columns = header!.split(',');
     const rows = lines.map((line) => Object.fromEntries(line.split(',').map((cell, i) => [columns[i], cell])));
