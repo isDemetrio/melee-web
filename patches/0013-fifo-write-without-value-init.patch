@@ -1,0 +1,21 @@
+diff --git a/port/runtime/gx/gx_core.cpp b/port/runtime/gx/gx_core.cpp
+index ccd7f10..aa8d2f5 100644
+--- a/port/runtime/gx/gx_core.cpp
++++ b/port/runtime/gx/gx_core.cpp
+@@ -740,9 +740,13 @@ void init(Backend* backend) {
+ static void drain_fifo();
+ 
+ void write_fifo(uint32_t value, int bytes) {
+-  const size_t at = g_buf.size();
+-  g_buf.resize(at + (size_t)bytes);   // one size update per write instead of a push_back per byte
+-  for (int i = 0; i < bytes; ++i) g_buf[at + i] = (uint8_t)(value >> (8 * (bytes - 1 - i)));
++  // The guest hands the FIFO one word at a time, so this is the hottest path in the port. `resize`
++  // value-initialises the bytes it adds and the loop below overwrites every one of them: build the
++  // word in a scratch and hand it to `insert`, the call `write_fifo_bytes` already makes, which for
++  // a trivially copyable element type copies the range in without touching the new storage twice.
++  uint8_t word[4];
++  for (int i = 0; i < bytes; ++i) word[i] = (uint8_t)(value >> (8 * (bytes - 1 - i)));
++  g_buf.insert(g_buf.end(), word, word + bytes);
+   drain_fifo();
+ }
+ 
