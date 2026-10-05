@@ -13,6 +13,7 @@
 #include "ppc.h"
 #include "wasm/compat/fma.h"
 #include <cstdint>
+#include <initializer_list>
 #include <cstdio>
 #include <cstring>
 
@@ -43,8 +44,68 @@ constexpr uint64_t kNegZero = 0x8000000000000000ull;
 constexpr uint64_t kPosZero = 0x0000000000000000ull;
 constexpr uint64_t kTwoPowNeg104 = 0x3970000000000000ull;  // 2^-104
 
+// The shim before its exact-product shortcut: the general path every call took until then.
+static double general_fma(double x, double y, double z) {
+  double nan;
+  if (wasm_compat::nan_operand(x, y, z, nan)) return nan;
+  if (z == 0.0) {
+    if (x == 0.0 || y == 0.0) return wasm_compat::pinned(x * y + z);
+    return x * y;
+  }
+  return wasm_compat::pinned(std::fma(x, y, z));
+}
+
+// The exact-product shortcut against the general path, bit for bit, on the operands it takes:
+// a float times f25(c), as the single and paired-single paths pass them, with addends drawn
+// near the product's exponent and in exact cancellation. Integer-only generator.
+static void exact_product_matches_general_path() {
+  uint64_t state = 0x6578616374707264ull, taken = 0, checked = 0, differ = 0;
+  auto next = [&state] {
+    state += 0x9e3779b97f4a7c15ull;
+    uint64_t z = state;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    return z ^ (z >> 31);
+  };
+  for (uint64_t i = 0; i < 4000000; ++i) {
+    const uint64_t r0 = next(), r1 = next(), r2 = next(), r3 = next();
+    float af; uint32_t a32 = uint32_t(r0) & 0x807FFFFFu;
+    a32 |= (uint32_t(64 + (r0 >> 32) % 128) << 23);   // float exponent 2^-63 .. 2^64
+    std::memcpy(&af, &a32, 4);
+    const double a = af;
+    const double c = ppc::f25(from_bits((r1 & 0x800FFFFFFFFFFFFFull) | (uint64_t(1023 - 40 + (r1 >> 52) % 80) << 52)));
+    const double p = a * c;
+    double b;
+    switch (r3 % 4) {
+      case 0: b = -p; break;                                              // exact cancellation
+      case 1: b = from_bits(bits(-p) + (r2 % 64) - 32); break;            // within 32 ulps of -p
+      case 2: b = from_bits((r2 & 0x800FFFFFFFFFFFFFull) | (bits(p) & 0x7FF0000000000000ull)); break;
+      default: b = from_bits((r2 & 0x800FFFFFFFFFFFFFull) | (uint64_t(1023 - 200 + (r2 >> 52) % 400) << 52));
+    }
+    const double xs[2] = {a, c};
+    for (int k = 0; k < 2; ++k) {
+      const double x = xs[k], y = xs[1 - k];
+      taken += wasm_compat::exact_product(x, y);
+      for (const double z : {b, -b}) {
+        ++checked;
+        if (bits(wasm_compat::fma(x, y, z)) != bits(general_fma(x, y, z))) {
+          if (differ++ < 5)
+            std::printf("FAIL exact product a=%016llx c=%016llx b=%016llx\n", (unsigned long long)bits(x),
+                        (unsigned long long)bits(y), (unsigned long long)bits(z));
+        }
+      }
+    }
+  }
+  std::printf("%s exact-product shortcut: %llu results, %llu differ, shortcut taken for %llu of %llu products\n",
+              differ ? "FAIL" : "ok  ", (unsigned long long)checked, (unsigned long long)differ,
+              (unsigned long long)taken, (unsigned long long)(checked / 2));
+  // A shortcut that never fires would pass the comparison above and prove nothing.
+  if (differ || taken != checked / 2) ++failures;
+}
+
 int main() {
   static_assert(sizeof(double) == 8, "IEEE binary64 required");
+  exact_product_matches_general_path();
 
   // The zero-sign cases the probe reported: the exact product is nonzero but rounds to
   // -0, and the addend is +0. musl's shortcut adds the zero and returns +0.

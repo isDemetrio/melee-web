@@ -3573,6 +3573,16 @@ scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
 
 **Not done, and why.** Nothing was deployed, uploaded or built, and no Cloudflare credential was used: the page says what Cloudflare *does*, not what this deployment *serves*, so the row's `curl` is still the check for step 11. Which algorithm the phone will actually receive cannot be settled from here even in principle, because it depends on the account's plan and that account does not exist yet (O2), and because Cloudflare's own page states both that the Free plan defaults to Zstandard and that Zstandard is enabled through Compression Rules. `docs/PHASE0_REPORT.md` stays unwritten: it is P0-12 and belongs with the operator's device rows. On the VPS, all without a build: `python3 -m unittest discover -s scripts/tests` (Ran 207 tests, `OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (271 tracked files, clean), `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` (210 citations in 4 documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh` (all deploy and upload guards hold), `bash scripts/tests/test_phase0_runner.sh` (44 checkpoint runner guards hold; run from the checkout where the pinned submodule is initialised, because a fresh worktree has it empty — the guarded script and its test are byte-identical to this branch's) and `bash scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
 
+## 2026-10-04 — the core's in-match time is emulator, not guest: profiled on V8 (`measure/core-cost-browser`)
+
+V8 sampling profile of the web core built with function names (new opt-in dispatch input
+`profiling_funcs`), exactly the 762 in-match retraces, stack-based zones: the translated guest
+code's own body is **15.1%** of the frame with the renderer attached (26.2% headless). The rest is
+GPU emulation (FIFO decode, 28.4%), renderer (31.1%, mock WebGPU) and CPU emulation helpers
+(memory 12.6%, software `fma` 7.0%, entry bookkeeping 1.7%). The native profile's
+`HSD_JObjDisp` 70–73% is reproduced (70.98% headless) but 31.8 of those points are GX FIFO
+decoding reached through guest stores. Trace of the named module: `c79c53b9…`. Limits (V8 not
+JSC, mock WebGPU, two players): [CORE_COST_BROWSER](CORE_COST_BROWSER.md).
 ## 2026-10-05 — the plan's own open markers, and the two the repository had already closed (cron, `cron/phase0-oct5`)
 
 **Why this and not something else.** Every autonomous step of `docs/PHASE0_DEPLOY_PLAN.md` section 6

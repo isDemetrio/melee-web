@@ -101,6 +101,22 @@ inline double invalid_nan() {
 // arm64 it turns 3,040 divergent results into 0.
 inline double pinned(double r) { return r != r ? invalid_nan() : r; }
 
+// True when x*y is exact in a double: both factors normal with unbiased exponents in
+// [-300, 300], so the product is a normal double far from overflow and underflow, and at most
+// 53 significant bits between them. A double with t trailing zero bits in its 52-bit fraction
+// has 53 - t significant bits, so the condition is t(x) + t(y) >= 53. Zeros, subnormals,
+// infinities and NaNs all fail the exponent test and keep the general path.
+inline bool exact_product(double x, double y) {
+  uint64_t ux, uy;
+  std::memcpy(&ux, &x, 8);
+  std::memcpy(&uy, &y, 8);
+  const uint32_t ex = uint32_t(ux >> 52) & 0x7FFu, ey = uint32_t(uy >> 52) & 0x7FFu;
+  if (ex - 723u > 600u || ey - 723u > 600u) return false;
+  const uint64_t fx = ux & 0x000FFFFFFFFFFFFFull, fy = uy & 0x000FFFFFFFFFFFFFull;
+  const int tx = fx ? __builtin_ctzll(fx) : 52, ty = fy ? __builtin_ctzll(fy) : 52;
+  return tx + ty >= 53;
+}
+
 inline double fma(double x, double y, double z) {
   // x86's FMA does not compute with a NaN operand: the result is the first NaN operand,
   // quieted and unnegated. musl's `fma.c:54-55` diverts every non-finite operand to
@@ -140,6 +156,14 @@ inline double fma(double x, double y, double z) {
     // underflow to -0 included.
     return x * y;
   }
+  // An exact product needs no fused hardware: when x*y is representable in a double, `x*y + z`
+  // rounds once, over the exact sum, which is the definition of the fused result. That holds
+  // whenever the two factors have at most 53 significant bits between them and the product
+  // neither overflows nor underflows. The single-precision and paired-single paths
+  // (port/recomp/emit.py, fmadds/ps_madd) pass a float (24 bits) and `f25(c)` (at most 26), so
+  // 50 bits: their products are always exact. musl's `fma` reconstructs the same answer in
+  // software, and that was 7-12% of an in-match frame (docs/CORE_COST_BROWSER.md).
+  if (exact_product(x, y)) return pinned(x * y + z);
   return pinned(std::fma(x, y, z));
 }
 
