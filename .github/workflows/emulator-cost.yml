@@ -1,0 +1,75 @@
+name: Emulator cost — Chromium attribution
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'experiments/emulator-cost/**'
+      - '.github/workflows/emulator-cost.yml'
+permissions:
+  contents: read
+concurrency:
+  group: emulator-cost-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: echo "EMSDK_VERSION=$(cat EMSDK_VERSION)" >> "$GITHUB_ENV"
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+      - name: Generate outside checkout
+        env:
+          GH_TOKEN: ${{ secrets.DOL_REPO_TOKEN }}
+        run: scripts/phase0/fetch_and_recompile.sh offline "$RUNNER_TEMP/generated"
+      - name: Build named web module
+        run: |
+          emcmake cmake -S wasm/core -B "$RUNNER_TEMP/build" -G Ninja \
+            -DMELEE_GEN="$RUNNER_TEMP/generated" -DCMAKE_EXE_LINKER_FLAGS=--profiling-funcs
+          cmake --build "$RUNNER_TEMP/build" --target melee_core_web --parallel 3
+          npm install -g binaryen@132.0.0
+          wasm-opt --enable-bulk-memory --enable-mutable-globals \
+            --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
+            --enable-simd -g -O2 "$RUNNER_TEMP/build/melee_core_web.wasm" \
+            -o "$RUNNER_TEMP/build/optimized.wasm"
+          mv "$RUNNER_TEMP/build/optimized.wasm" "$RUNNER_TEMP/build/melee_core_web.wasm"
+      - name: Install browser on runner
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Read private disc
+        working-directory: ${{ runner.temp }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote --file "$RUNNER_TEMP/disc.iso"
+      - name: Checkpoint oracle and browser profiles
+        run: |
+          mkdir -p "$RUNNER_TEMP/results"
+          git rev-parse HEAD > "$RUNNER_TEMP/results/source.txt"
+          lscpu > "$RUNNER_TEMP/results/machine.txt"
+          node experiments/emulator-cost/browser.mjs "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/results"
+          for mode in attached headless; do
+            python3 experiments/emulator-cost/attribute.py "$RUNNER_TEMP/results/$mode.cpuprofile" "$RUNNER_TEMP/results/$mode.json"
+          done
+          cat "$RUNNER_TEMP/results/browser.json" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulator-cost-aggregates
+          path: |
+            ${{ runner.temp }}/results/*.json
+            ${{ runner.temp }}/results/*.txt
+          retention-days: 7
+      - name: Remove private inputs and raw profiles
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/results"

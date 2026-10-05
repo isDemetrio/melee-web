@@ -3532,3 +3532,22 @@ scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
 **Changed.** `docs/PHASE0_DEPLOY_PLAN.md`, three places: section 3's compression row (the answer, the two contradictory statements, the two documented limits, and the corrected check — a full GET with a browser's `Accept-Encoding` against `/spike-core/melee_core_web.wasm`), section 1's closing note (the item is documented; what remains is the header actually served and the algorithm chosen), and section 7's bullet that listed what only step 11 can check (it named five things, three of which had been closed since it was written — Access coverage and the address format on 2026-10-04, the preview's R2 binding on 2026-10-02 — so it now says so; the count sentence in section 1 above it said "Due delle cinque voci", and with compression added it says three). `docs/PROGRESS.md` is this entry. No number changes: 16,323,255 bytes, the 48- and 50-byte floors and the 25 MiB per-file limit were already right. No workflow, script, renderer or test-semantics file is touched, and `phase0-build.yml`'s path filter does not list `docs/`, so this pull request costs no WASM core build.
 
 **Not done, and why.** Nothing was deployed, uploaded or built, and no Cloudflare credential was used: the page says what Cloudflare *does*, not what this deployment *serves*, so the row's `curl` is still the check for step 11. Which algorithm the phone will actually receive cannot be settled from here even in principle, because it depends on the account's plan and that account does not exist yet (O2), and because Cloudflare's own page states both that the Free plan defaults to Zstandard and that Zstandard is enabled through Compression Rules. `docs/PHASE0_REPORT.md` stays unwritten: it is P0-12 and belongs with the operator's device rows. On the VPS, all without a build: `python3 -m unittest discover -s scripts/tests` (Ran 207 tests, `OK (skipped=1)`), `python3 scripts/check_no_game_data.py --all` (271 tracked files, clean), `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` (210 citations in 4 documents, 0 violations), `bash scripts/tests/test_deploy_guard.sh` (all deploy and upload guards hold), `bash scripts/tests/test_phase0_runner.sh` (44 checkpoint runner guards hold; run from the checkout where the pinned submodule is initialised, because a fresh worktree has it empty — the guarded script and its test are byte-identical to this branch's) and `bash scripts/tests/test_device_test_serve.sh` (6 cases passed). CI decides the rest.
+
+
+## 2026-10-05 — Emulator attribution: browser measurement infrastructure (in progress)
+
+Branch `feat/gx-browser-attribution` starts at updated `origin/main` (`e80a221`). GitHub reports
+PR #121 merged into `measure/core-cost-browser` (`00ec591`), **not main**; incorporating that
+base is pending the operator's answer. No emulator optimization or renderer edit yet.
+
+`experiments/emulator-cost/` and `.github/workflows/emulator-cost.yml` add a Chromium replay
+using the existing private R2 disc route. The first run gates on the complete 2400-checkpoint
+SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; separate attached/headless sampling runs
+cover retraces 1639–2400 via CDP debugger boundaries. Only aggregate JSON and machine/source
+metadata are uploaded. Builds, browser execution and tests run exclusively in Actions.
+
+No new measurements are available yet. In particular, FIFO buffer writes inlined into
+`gx_write` and the destination of MMIO self samples remain explicitly unresolved. Zero samples
+are reported as unobserved, never zero cost. Next: validate the harness in CI, establish the
+#121 baseline, then attribute GX before trying any candidate. Memory helpers and entry hooks
+remain subsequent work; no speedup claimed.
