@@ -174,9 +174,19 @@ Profilo del prototipo: JS di `gxw_draw` dal **22,6% al 14,3%** dei campioni; pip
 0,17%; bind group 5,85% → ~1,5%; confronto uniform 9,4% → **7,5%** (il ciclo più stretto toglie
 solo il 27% dei suoi campioni). `gxw_bind` sale da 2,6% a 3,0% (il controllo dello slot).
 
-Il confronto uniform resta la voce più grossa: il passo successivo (PR impilata su #123) lo sposta
-in C++ — `draw_segment` tiene le righe passate all'ultima chiamata e passa a `gxw_draw` se sono le
-stesse (`memcmp`), e il JS non confronta più nulla. Richiede un build: da misurare sul core di CI.
+**Confermato sul core costruito da CI** (PR #123, run 37247236548, contro `main` 37247238291, stessi
+flag): digest identico, 0 errori, traccia identica; `sim_ms` in partita 49,96 / 53,83 / 52,90 / 49,72 →
+44,05 / 43,95 / 42,93 / 47,11 ms, **−7,1 ms, 0,86×, 4 su 4**.
+
+**Il confronto uniform in C++, con `memcmp`: più lento — riportato così.** Il passo successivo
+(ramo `perf/renderer-uniform-memcmp`) fa confrontare a `draw_segment` le righe con quelle passate
+all'ultima chiamata e passa l'esito a `gxw_draw`, che non confronta più nulla. Digest identico, 0
+errori, traccia identica; il JS di `gxw_draw` scende al **6,6%** dei campioni. Ma contro il core di
+#123, 4 coppie alternate: 45,51 / 47,63 / 44,06 / 45,75 → 52,53 / 48,56 / 46,39 / 51,51 ms, **+4,0 ms,
+4 su 4 a sfavore**. Spiegazione coerente con i numeri: il `memcmp` di questo build confronta **un
+byte alla volta** — già nel profilo della sezione 2 il `memcmp` della `ShaderUid` (304 byte) costava
+l'1,78% del fotogramma, ~1,9 ns/byte; su ~2000 byte di costanti fa ~3,8 µs, più del ciclo JS. In
+prova: lo stesso confronto a parole da 8 byte.
 
 ## 5. Limite dichiarato
 
