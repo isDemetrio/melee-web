@@ -85,7 +85,7 @@ if (selftestColour !== null) {
     worker.terminate();
     renderOut.textContent = JSON.stringify({ presented: data.presented, sentinel: data.sentinel, render: data.render });
   };
-  const selftest = { argb, copies, repeats: Number(parameters.get('repeats') ?? 1), geometry: Number(parameters.get('geometry') ?? 0), sampleX: Number(parameters.get('sample-x') ?? 320), target: parameters.has('nocanvas') ? undefined : target };
+  const selftest = { argb, copies, repeats: Number(parameters.get('repeats') ?? 1), geometry: Number(parameters.get('geometry') ?? 0), sampleX: Number(parameters.get('sample-x') ?? 320), target: parameters.has('nocanvas') ? undefined : target, resolution: Number(parameters.get('resolution') ?? 100) };
   worker.postMessage({ selftest, canvas }, canvas ? [canvas] : []);
 }
 /**

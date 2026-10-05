@@ -52,8 +52,9 @@ but it is not exposed to the page.
    (`presentation.pixels.transferred_over_shown`, from the page canvas's CSS size and
    `devicePixelRatio`). How much the *transfer* depends on pixel count is measured by the probe at
    320×240, 640×480 and 1280×960, without touching the game's picture. A lower internal resolution of
-   the *rendering* would also need the renderer's viewports scaled; it is not tried here, because the
-   alternate run below bounds how much GPU work there is to save in the first place.
+   the *rendering* is a separate mode (`docs/PRESENTATION_COST.md`, "Internal resolution" below): it
+   scales the renderer's viewports, so it changes how many pixels are *drawn*, not how many are
+   transferred (the canvas stays 640×480).
 2. **Transfers per frame.** One. `worker.ts` calls `transferToImageBitmap` only on a retrace beat
    (`retraces >= 0`); the per-draw beats (`-1`) return before it. The renderer writes the canvas only on
    an XFB copy and submits one batch per frame. A frame shows one `context.getCurrentTexture` in
@@ -98,6 +99,51 @@ as before (no file under `wasm/` is touched), so the CPU trace and the WebGPU ca
 `direct` session are unchanged. The `probe` calls go through functions captured before the meter, so
 they are in no frame's `webgpu_calls`; the `alternate` copies are counted in the frame that makes
 them. A non-default mode that became the default would need its own WebGPU digest certificate.
+
+## Internal resolution (how much of the lag is pixel fill)
+
+The slowest decile of in-match frames costs three times a fast frame (55.59 ms vs 18.85 ms) for 42%
+more draws (2869 vs 2023) — a cost that does not track the draw count. That is the signature of fill
+rate: the same draws cost more when they cover more pixels, and the camera zooming out, or a special
+effect, covers more. This mode tests that directly: it draws the frame at fewer pixels and scales it up
+to the canvas, so the geometry, the commands and the materials are unchanged and only the pixels filled
+change.
+
+`Game screen → internal resolution` selector (default `100%`, the path every earlier report used),
+next to the presentation selector. Three levels:
+
+| level | render target | pixels drawn | shown at |
+| --- | --- | --- | --- |
+| `100%` | 640×528 (the EFB) | 337,920 | 640×480 |
+| `75%` | 480×396 | 190,080 | 640×480 |
+| `50%` | 320×264 | 84,480 | 640×480 |
+
+The level is read live: change it **during** a match and the same match carries frames at more than one
+level, so a single report compares them. The per-frame report records the level (`res_pct`) and the
+pixels drawn vs shown (`px_drawn`, `px_shown`), and the report's `resolution` block groups the frames by
+level (`by_level`, with `cycle_ms`, `core_ms`, `webgpu_ms`, `bitmap_ms` per level).
+
+**Nothing about the game changes.** The reduction is in the presentation only: the WebGPU backend's
+render target is `640*scale × 528*scale`, the same draw commands run with a scaled viewport and
+scissors, and the XFB copy scales the result back up to the 640×480 canvas (a fullscreen blit;
+`wasm/render/gx_webgpu.cpp`, `gxw_open`/`gxw_copy`). The emulated framebuffer, its coordinates and all
+guest state are untouched, which the 2400-checkpoint trace proves (that trace runs the node core, which
+carries no WebGPU backend).
+
+### Run (on the phone)
+
+1. Game screen → **internal resolution** = `100%`. Play a match of the kind that lags (four players,
+   a stage that zooms out). Save/Share report. This is the baseline.
+2. Play the **same match, same characters, same stage** at `50%` — the largest reduction — and save.
+3. Optionally, one more match changing the level **mid-match** (start at `100%`, switch to `50%` when
+   the zoom-out starts): the `resolution` block then compares both halves of one match, which removes
+   stage and session variance.
+4. Compare the `resolution.by_level` block: `cycle_ms` (and `core_ms`/`webgpu_ms`) at `100%` against
+   `50%`. If the slow frames are pixel fill, the `50%` mean and p99 are lower, and the gap between the
+   slowest and fastest frames narrows; if it is not, they barely move. The report also names the
+   level per frame, so the zoom-out frames can be read at each level on their own.
+
+The measured numbers are the operator's; CI has no GPU and cannot produce them (`docs/FOUR_PLAYER_LOAD.md`).
 
 ## Results
 

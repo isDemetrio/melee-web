@@ -10,9 +10,11 @@ function row(cells: Partial<Record<FrameColumn, number>>, top?: FrameRecord['top
     cells[name] ?? (name === 'decode_ms' || name === 'non_decode_ms' ? null : 0));
   return top ? { row: values, top } : { row: values };
 }
-/** A normal frame: 16.7 ms, of which 10 core (6 WebGPU), 0.5 bitmap, 1 ack, 5.2 idle. */
+/** A normal frame: 16.7 ms, of which 10 core (6 WebGPU), 0.5 bitmap, 1 ack, 5.2 idle. The internal
+ * resolution (resolution.ts) is the default 100%: the columns a real session always carries. */
 const normal = (retrace: number, matchFrame = 0): FrameRecord => row({ retrace, match_frame: matchFrame, cycle_ms: 16.7,
-  core_ms: 10, webgpu_ms: 6, webgpu_calls: 2283, draws: 1874, encode_ms: 4, queue_ms: 2, bitmap_ms: 0.5, ack_ms: 1, idle_ms: 5.2 });
+  core_ms: 10, webgpu_ms: 6, webgpu_calls: 2283, draws: 1874, encode_ms: 4, queue_ms: 2, bitmap_ms: 0.5, ack_ms: 1, idle_ms: 5.2,
+  res_pct: 100, px_drawn: 640 * 528, px_shown: 640 * 480 });
 const totals: MethodTotals = { all: { 'queue.submit': { calls: 2, ms: 3 } }, in_match: {}, longest: {} };
 const meta: PerfMeta = { commit: 'abc', opt: '-Oz', timerResolutionMs: 0.02, clockCostNs: 40, split: false, notes: ['a note'],
   crossOriginIsolated: true };
@@ -90,7 +92,20 @@ describe('play report', () => {
     const report = new PlayReport(false, 0);
     report.onBatch({ rows: [normal(1), normal(2, 5)], totals, notes: [], sim: [], decoder: [] });
     expect(report.line(0)).toBe('frame 2 (match) · 60 fps, 16.7 ms/frame = core 10.0 (WebGPU 6.0 in 2283 calls, 1874 draws) ' +
-      '+ bitmap 0.5 + page 1.0 + idle 5.2 · slow frames 0 · freezes 0');
+      '+ bitmap 0.5 + page 1.0 + idle 5.2 · internal 100% (337920 px drawn) · slow frames 0 · freezes 0');
+  });
+
+  it('groups frames by internal resolution, so one match compares its levels', () => {
+    // A match that changed level mid-way (resolution.ts): two frames at 100%, three at 50%. The
+    // block carries both halves and each level's pixels drawn, which is what makes the gain visible.
+    const at50 = (retrace: number): FrameRecord => row({ retrace, match_frame: retrace, cycle_ms: 16.7,
+      core_ms: 8, webgpu_ms: 4, res_pct: 50, px_drawn: 320 * 264, px_shown: 640 * 480 });
+    const report = new PlayReport(false, 0);
+    report.onBatch({ rows: [normal(1, 1), normal(2, 2), at50(3), at50(4), at50(5)], totals, notes: [], sim: [], decoder: [] });
+    const built = report.build(0, 'test agent');
+    expect(built.resolution!.levels).toEqual([100, 50]);
+    expect(built.resolution!.by_level['100%']).toMatchObject({ frames: 2, px_drawn: 640 * 528, px_shown: 640 * 480 });
+    expect(built.resolution!.by_level['50%']).toMatchObject({ frames: 3, px_drawn: 320 * 264, px_shown: 640 * 480 });
   });
 });
 

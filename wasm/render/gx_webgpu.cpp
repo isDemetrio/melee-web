@@ -60,13 +60,35 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
   // Draws per batch are bounded by the uniform arena; the vertex and index arenas' first sizes
   // grow by doubling.
   const UNIFORM_ARENA = 2 << 20, VERTEX_ARENA_INITIAL = 1 << 20, INDEX_ARENA_INITIAL = 256 << 10;
+  // The internal resolution (web/src/play/resolution.ts): the worker sets gpu.scale before the
+  // attach. The render target is `width*scale` x `height*scale`, so the same geometry fills fewer
+  // pixels; the XFB copy (gxw_copy) scales it back up to the target. 1, or absent, is the
+  // full-resolution path every session used before this mode. `width`/`height` are the full
+  // dimensions (gx::EFB_WIDTH x gx::EFB_HEIGHT), kept for the scaled blit's texture coordinates.
+  const clampScale = (value) => (typeof value === "number" && value > 0 && value <= 1) ? value : 1;
   try {
-    gpu.efb = gpu.device.createTexture({
-      size: [width, height], format: gpu.format,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-    });
-    gpu.depth = gpu.device.createTexture({size: [width, height], format: "depth32float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT});
+    gpu.efbFullW = width; gpu.efbFullH = height;
+    // (Re)create the render target at `scale`. gxw_set_scale calls this again to change the internal
+    // resolution between retraces; the old textures are destroyed, which submitted work survives
+    // (https://www.w3.org/TR/webgpu/#texture-destruction).
+    gpu.makeEfb = (scale) => {
+      const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale));
+      if (gpu.efb) gpu.efb.destroy();
+      if (gpu.depth) gpu.depth.destroy();
+      gpu.efb = gpu.device.createTexture({
+        size: [w, h], format: gpu.format,
+        // TEXTURE_BINDING is for the scaled XFB blit (gxw_copy), which samples this texture; it is
+        // unused at scale 1, where the XFB copy is a plain texture copy.
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      gpu.depth = gpu.device.createTexture({size: [w, h], format: "depth32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT});
+      gpu.efbView = gpu.efb.createView();
+      gpu.depthView = gpu.depth.createView();
+      gpu.scale = scale;
+      gpu.blitGroup = null;   // names efbView, which this replaced
+    };
+    gpu.makeEfb(clampScale(gpu.scale));
     gpu.white = gpu.device.createTexture({size: [1, 1], format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST});
     gpu.device.queue.writeTexture({texture: gpu.white}, new Uint8Array([255,255,255,255]), {}, [1,1]);
@@ -126,9 +148,57 @@ EM_JS(int, gxw_open, (int width, int height, int max_rows), {
           depthCompare:(zmode&1) ? ["never","greater","equal","greater-equal","less","not-equal","less-equal","always"][(zmode>>1)&7]:"always"}};
     };
     // Views have no destroy(): one per persistent texture, made here or when its texture is.
-    gpu.efbView = gpu.efb.createView();
-    gpu.depthView = gpu.depth.createView();
     gpu.whiteEntry = {id:0, texture:gpu.white, view:gpu.white.createView()};
+    // The scaled XFB copy (gxw_copy): a fullscreen triangle samples the reduced EFB and writes the
+    // target, so a frame rendered at fewer pixels is shown at the canvas's. The uniform is
+    // [src_x, src_y, full_w, full_h], in full EFB coordinates; the fragment maps the target's pixel
+    // to the reduced texture's normalised coordinate, so the scale cancels and only the full
+    // dimensions are needed.
+    //
+    // These are made only when the internal resolution is reduced: at scale 1 the full-resolution
+    // path must be the one that ran before, down to the device calls the render tests count, and a
+    // session that never reduces must create nothing extra. `ensureBlit` runs at open when the level
+    // starts reduced, and from gxw_set_scale between retraces when the operator reduces it mid-match
+    // -- before callMain or between frames, never inside a frame's draw loop, where pipeline creation
+    // froze on the iPhone (web/src/play/pipelines.ts says why).
+    gpu.makeBlitGroup = () => {
+      gpu.blitGroup = gpu.device.createBindGroup({layout:gpu.blitLayout, entries:[
+        {binding:0, resource:{buffer:gpu.blitUniform}},
+        {binding:1, resource:gpu.blitSampler},
+        {binding:2, resource:gpu.efbView}]});
+    };
+    gpu.ensureBlit = () => {
+      if (!gpu.blitPipeline) {
+        gpu.blitSampler = gpu.device.createSampler({magFilter:"linear", minFilter:"linear"});
+        gpu.blitUniform = gpu.device.createBuffer({size:16, usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+        gpu.blitLayout = gpu.device.createBindGroupLayout({entries:[
+          {binding:0,visibility:GPUShaderStage.FRAGMENT,buffer:{type:"uniform"}},
+          {binding:1,visibility:GPUShaderStage.FRAGMENT,sampler:{type:"filtering"}},
+          {binding:2,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:"float"}}]});
+        const blitModule = gpu.device.createShaderModule({label:"gx blit", code:
+          "struct U { src: vec4<f32> };\n" +
+          "@group(0) @binding(0) var<uniform> u: U;\n" +
+          "@group(0) @binding(1) var samp: sampler;\n" +
+          "@group(0) @binding(2) var tex: texture_2d<f32>;\n" +
+          "struct VOut { @builtin(position) pos: vec4<f32> };\n" +
+          "@vertex fn vs(@builtin(vertex_index) i: u32) -> VOut {\n" +
+          "  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));\n" +
+          "  var o: VOut; o.pos = vec4<f32>(p[i], 0.0, 1.0); return o;\n" +
+          "}\n" +
+          "@fragment fn fs(in: VOut) -> @location(0) vec4<f32> {\n" +
+          "  let uv = (vec2<f32>(u.src.x, u.src.y) + in.pos.xy) / vec2<f32>(u.src.z, u.src.w);\n" +
+          "  return textureSample(tex, samp, uv);\n" +
+          "}\n"});
+        gpu.blitPipeline = gpu.device.createRenderPipeline({label:"gx blit",
+          layout: gpu.device.createPipelineLayout({bindGroupLayouts:[gpu.blitLayout]}),
+          vertex:{module:blitModule, entryPoint:"vs"},
+          fragment:{module:blitModule, entryPoint:"fs", targets:[{format:gpu.format}]},
+          primitive:{topology:"triangle-list"}});
+      }
+      // The bind group names efbView, which a resize replaces, so it is remade on every resize.
+      gpu.makeBlitGroup();
+    };
+    if (gpu.scale < 1) gpu.ensureBlit();
     // Draw resources are persistent (gxw_bind, gxw_draw). Uniforms, vertices and indices are
     // arenas: each draw of a batch appends its data at its own offset to a staging copy, and the
     // batch writes them with one writeBuffer each just before its single submit (gpu.flush).
@@ -208,8 +278,17 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
     const batch = gpu.openBatch();
     gpu.endPass(batch);
     const encoder = batch.encoder;
+    const scale = gpu.scale || 1;
     if (copy_to) {
-      const w = Math.min(src_w, gpu.efb.width - src_x), h = Math.min(src_h, gpu.efb.height - src_y);
+      // The copy's source rectangle is in full EFB pixels; at a reduced internal resolution it
+      // scales with the render target, so the same picture lands in a smaller texture. A draw
+      // samples it with normalised coordinates, so the picture is the same (web/src/play/
+      // resolution.ts; docs/RENDERER_MAP.md's half-scale note).
+      const cx = scale === 1 ? src_x : Math.round(src_x * scale);
+      const cy = scale === 1 ? src_y : Math.round(src_y * scale);
+      const cw = scale === 1 ? src_w : Math.round(src_w * scale);
+      const ch = scale === 1 ? src_h : Math.round(src_h * scale);
+      const w = Math.min(cw, gpu.efb.width - cx), h = Math.min(ch, gpu.efb.height - cy);
       let e = gpu.efbCopies.get(copy_to);
       if (e) gpu.efbCopies.delete(copy_to);
       if (w > 0 && h > 0) {
@@ -221,7 +300,7 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
             usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
           e = {id:-(++gpu.copySerial), texture, view:texture.createView()};
         }
-        encoder.copyTextureToTexture({texture:gpu.efb, origin:[src_x, src_y]}, {texture:e.texture}, [w, h]);
+        encoder.copyTextureToTexture({texture:gpu.efb, origin:[cx, cy]}, {texture:e.texture}, [w, h]);
         gpu.efbCopies.set(copy_to, e);
         if (gpu.efbCopies.size > EFB_COPY_LIMIT) {
           const [oldest, old] = gpu.efbCopies.entries().next().value;
@@ -232,13 +311,36 @@ EM_JS(int, gxw_copy, (int src_x, int src_y, int src_w, int src_h, int to_xfb, in
     }
     if (to_xfb) {
       const target = gpu.xfb ? gpu.xfb : gpu.context.getCurrentTexture();
-      let w = src_w, h = src_h;
-      if (src_x + w > gpu.efb.width) w = gpu.efb.width - src_x;
-      if (src_y + h > gpu.efb.height) h = gpu.efb.height - src_y;
-      if (w > target.width) w = target.width;
-      if (h > target.height) h = target.height;
-      if (w > 0 && h > 0) {
-        encoder.copyTextureToTexture({ texture: gpu.efb, origin: [src_x, src_y] }, { texture: target }, [w, h]);
+      if (scale === 1) {
+        // The full-resolution path, unchanged: a plain texture copy of the source rectangle.
+        let w = src_w, h = src_h;
+        if (src_x + w > gpu.efb.width) w = gpu.efb.width - src_x;
+        if (src_y + h > gpu.efb.height) h = gpu.efb.height - src_y;
+        if (w > target.width) w = target.width;
+        if (h > target.height) h = target.height;
+        if (w > 0 && h > 0) {
+          encoder.copyTextureToTexture({ texture: gpu.efb, origin: [src_x, src_y] }, { texture: target }, [w, h]);
+        }
+      } else {
+        // The visible region, in full EFB coordinates, clamped to the full EFB and the target; the
+        // reduced EFB holds it at `scale` texels per pixel, and the blit samples it back up to the
+        // target's size. This is what shows a frame rendered at fewer pixels at the canvas's.
+        let vw = src_w, vh = src_h;
+        if (src_x + vw > gpu.efbFullW) vw = gpu.efbFullW - src_x;
+        if (src_y + vh > gpu.efbFullH) vh = gpu.efbFullH - src_y;
+        if (vw > target.width) vw = target.width;
+        if (vh > target.height) vh = target.height;
+        if (vw > 0 && vh > 0) {
+          gpu.device.queue.writeBuffer(gpu.blitUniform, 0,
+            new Float32Array([src_x, src_y, gpu.efbFullW, gpu.efbFullH]));
+          const pass = encoder.beginRenderPass({colorAttachments:[{view: target.createView(),
+            loadOp: "load", storeOp: "store"}]});
+          pass.setViewport(0, 0, vw, vh, 0, 1);
+          pass.setPipeline(gpu.blitPipeline);
+          pass.setBindGroup(0, gpu.blitGroup);
+          pass.draw(3);
+          pass.end();
+        }
       }
     }
     if (clear) {
@@ -526,8 +628,24 @@ EM_JS(int, gxw_draw, (const void* vertices, int vertex_bytes, const void* indice
     if (state.near !== r[4] || state.far !== r[5]) {
       pass.setViewport(0,0,gpu.efb.width,gpu.efb.height,r[4],r[5]); state.near = r[4]; state.far = r[5];
     }
-    const scissor = r[6] + "," + r[7] + "," + r[8] + "," + r[9];
-    if (state.scissor !== scissor) { pass.setScissorRect(r[6],r[7],r[8],r[9]); state.scissor = scissor; }
+    // The scissor is in full EFB pixels (r[6..9]); at a reduced internal resolution it scales with
+    // the viewport and is clamped to the render target, so it stays valid. At scale 1 it is passed
+    // through exactly as before.
+    const rscale = gpu.scale || 1;
+    let sx, sy, sw, sh;
+    if (rscale === 1) { sx = r[6]; sy = r[7]; sw = r[8]; sh = r[9]; }
+    else {
+      sx = Math.round(r[6] * rscale); sy = Math.round(r[7] * rscale);
+      sw = Math.round(r[8] * rscale); sh = Math.round(r[9] * rscale);
+      if (sx < 0) sx = 0;
+      if (sy < 0) sy = 0;
+      if (sw > gpu.efb.width - sx) sw = gpu.efb.width - sx;
+      if (sh > gpu.efb.height - sy) sh = gpu.efb.height - sy;
+      if (sw < 0) sw = 0;
+      if (sh < 0) sh = 0;
+    }
+    const scissor = sx + "," + sy + "," + sw + "," + sh;
+    if (state.scissor !== scissor) { pass.setScissorRect(sx,sy,sw,sh); state.scissor = scissor; }
     pass.drawIndexed(count,1,firstIndex,baseVertex);
     return 1;
   } catch(error) {
@@ -748,6 +866,32 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_attach() {
   g_webgpu = new WebGpuBackend();
   host::gx_set_backend(g_webgpu);
   return 1;
+}
+
+// The internal resolution (web/src/play/resolution.ts): recreate the render target at `scale`,
+// between retraces. 1 on success. The batch is flushed first, so nothing open names the textures
+// this replaces.
+EM_JS(int, gxw_set_scale, (float scale), {
+  const gpu = Module["gxWebgpu"];
+  if (!gpu || !gpu.makeEfb) return 0;
+  try {
+    gpu.flush();
+    gpu.makeEfb((typeof scale === "number" && scale > 0 && scale <= 1) ? scale : 1);
+    // Between retraces, not inside a frame: the blit's pipeline and bind group are made here the
+    // first time the level is reduced, and the group is remade on every resize (efbView changed).
+    if (scale < 1) gpu.ensureBlit();
+    return 1;
+  } catch (error) {
+    gpu.recordFailure("resize", error); gpu.failure = "resize: " + error; return 0;
+  }
+});
+
+// Called by the play worker between retraces with the operator's level: 100, 75 or 50. 1 when the
+// render target is at that scale, 0 when it is not (no backend, or the resize threw).
+extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_resolution(int pct) {
+  if (!g_webgpu) return 0;
+  const float scale = (pct <= 0 || pct > 100) ? 1.0f : float(pct) / 100.0f;
+  return gxw_set_scale(scale);
 }
 
 // Frames presented so far (XFB copies that reached the canvas); 0 without a backend.

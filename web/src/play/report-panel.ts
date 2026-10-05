@@ -1,6 +1,7 @@
 import { loadHeartbeat, type StoredHeartbeat } from '../spike/heartbeat.js';
 import { h } from '../ui/context.js';
 import { offeredModes } from './presentation.js';
+import { RESOLUTION_LEVELS } from './resolution.js';
 import { PLAY_STORAGE_KEY, PlayReport } from './report.js';
 import type { PlayPerf } from './session.js';
 
@@ -34,6 +35,13 @@ export class ReportControls {
   /** How frames are handed to the page (presentation.ts); anything but `direct` is an experiment. */
   readonly presentation = h('select', { id: 'game-presentation', 'aria-label': 'Presentation' },
     offeredModes(location.search).map((mode) => h('option', { value: mode.name, text: mode.name })));
+  /**
+   * The internal resolution the frame is drawn at, then scaled up from (resolution.ts). Read live by
+   * the session, so the operator can change it during a match and compare levels in one match. 100%
+   * is the path before this mode.
+   */
+  readonly resolution = h('select', { id: 'game-resolution', 'aria-label': 'Internal resolution' },
+    RESOLUTION_LEVELS.map((level) => h('option', { value: String(level.pct), text: level.name })));
   readonly element: HTMLElement;
   private report: PlayReport | null = null;
   private previous: StoredHeartbeat | null = null;
@@ -76,7 +84,8 @@ export class ReportControls {
     this.element = h('div', {}, [
       h('div', { class: 'row' }, [save, share,
         h('label', { class: 'row' }, [this.split, 'core split (adds the core profiler\'s cost)']),
-        h('label', { class: 'row' }, ['presentation', this.presentation])]),
+        h('label', { class: 'row' }, ['presentation', this.presentation]),
+        h('label', { class: 'row' }, ['internal resolution', this.resolution])]),
       this.line,
     ]);
   }
@@ -85,7 +94,9 @@ export class ReportControls {
   begin(): PlayPerf {
     this.report = new PlayReport(this.split.checked, performance.now());
     this.previous = null;
-    return { report: this.report, split: this.split.checked, presentation: this.presentation.value, line: (text) => { this.line.textContent = text; } };
+    return { report: this.report, split: this.split.checked, presentation: this.presentation.value,
+      // Read live on every animation frame (session.ts): the operator can change the level mid-match.
+      resolution: () => Number(this.resolution.value) || 100, line: (text) => { this.line.textContent = text; } };
   }
 
   private file(): File | null {

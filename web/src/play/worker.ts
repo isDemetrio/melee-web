@@ -2,10 +2,11 @@ import { clockCostNs, timerResolutionMs } from '../spike/clock.js';
 import { observeGpuEvents, openGpu, renderProgress } from '../spike/gpu.js';
 import { heartbeatSender } from '../spike/heartbeat.js';
 import { openCachedDisc, readDiscThrough, type OpfsDirectory, type SyncReadHandle } from './disc-reader.js';
-import { coreSplitOf, CsvTail, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, type FrameRecord,
+import { coreSplitOf, CsvTail, FLIGHT_RESOLUTION, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, type FrameRecord,
   type TailFs, verifyQueueHooks } from './frame-meter.js';
 import { loadRecipes, warmNote, warmPipelines, type PipelineRecipe, type WarmableGpu } from './pipelines.js';
 import { Presenter, presentationMode, TransferProbe, type PresentGpu } from './presentation.js';
+import { resolutionPct } from './resolution.js';
 import { PRESENTED, readPad } from './shared-pad.js';
 
 interface Core {
@@ -17,6 +18,8 @@ interface Core {
   callMain(args: string[]): number;
   _gx_webgpu_selftest?(argb: number, copies: number, geometry: number): number;
   _gx_webgpu_attach?(): number;
+  /** resolution.ts's level percent, applied to the backend's render target between retraces. */
+  _gx_webgpu_resolution?(pct: number): number;
   _melee_live_input_version?(): number;
   _melee_residual_clock_cost_ns?(): number;
   _melee_decoder_cost?(mode: number): number;
@@ -34,6 +37,8 @@ interface PlayRequest {
   alternateBlock?: number;
   /** Frames of the selftest; 3 when absent. A test asks for more to run every probe canvas. */
   selftestFrames?: number;
+  /** resolution.ts's level percent at start; absent or unknown is 100, the path before this mode. */
+  resolution?: number;
 }
 /** How often the frame records are posted to the page; a slow frame is posted at once. */
 const FLUSH_MS = 250;
@@ -49,9 +54,14 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     const shared = new Int32Array(event.data.pad);
     const canvas = new OffscreenCanvas(640, 480);
     const mode = presentationMode(event.data.presentation);
+    // The internal resolution the backend creates its render target at (resolution.ts). Set before
+    // the attach, which reads it; the page's later changes arrive through the flight recorder below.
+    const flight = new Int32Array(event.data.flight);
     const opening = await openGpu(canvas, mode.format);
     const gpu = opening.gpu;
     if (!gpu || gpu.failure) throw new Error(gpu?.failure ?? opening.reason);
+    let currentLevel = resolutionPct(event.data.resolution);
+    gpu.scale = currentLevel.scale;
     // The transfer probe's calls must stay out of the frames' counts, so it takes the device's and
     // the queue's functions before the meter wraps them.
     let probe: TransferProbe | null = null;
@@ -64,7 +74,13 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     const presenter = new Presenter(gpu as unknown as PresentGpu, canvas, mode.schedule, event.data.alternateBlock);
     // Every WebGPU call the backend makes is timed from here on (frame-meter.ts says what that
     // can and cannot see). The calls themselves are forwarded unchanged.
-    const meter = new FrameMeter(new Int32Array(event.data.flight), () => performance.now());
+    const meter = new FrameMeter(flight, () => performance.now());
+    /**
+     * Applies the page's current level to the backend, at a retrace beat: after this frame's record
+     * is built, so a row never names a level the frame was not drawn at, and before the next
+     * retrace's draws, which the backend's flushed batch makes safe to resize under.
+     */
+    let applyResolution: () => void = () => {};
     instrumentGpu(gpu, meter);
     const queueProbe = await verifyQueueHooks(gpu.device, meter);
     const url = '/spike-core/melee_core_web.js';
@@ -161,6 +177,8 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         const delay = deadline - performance.now();
         if (delay > 0) Atomics.wait(shared, PRESENTED, serial, delay);
         const record = meter.cycleEnd();
+        // After this frame's record, before the next retrace's draws: the page's level, if it changed.
+        applyResolution?.();
         pending.push(record);
         if (record.top || performance.now() - flushedAt >= FLUSH_MS) flush();
       },
@@ -171,6 +189,20 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     // After the attach, which gives the renderer its flush (presentation.ts says what is wrapped).
     presenter.install();
     notes.push(`presentation: ${mode.name} (canvas ${mode.format}, ${mode.schedule})`);
+    // The internal resolution the backend attached at; every frame from here is drawn at it until
+    // the page asks for another level (resolution.ts).
+    meter.setResolution(currentLevel);
+    notes.push(`internal resolution: ${currentLevel.name} (${currentLevel.pxDrawn} px drawn, ${currentLevel.pxShown} px shown)`);
+    applyResolution = () => {
+      const wanted = resolutionPct(Atomics.load(flight, FLIGHT_RESOLUTION) || currentLevel.pct);
+      if (wanted.pct === currentLevel.pct) return;
+      if (core._gx_webgpu_resolution?.(wanted.pct) === 1) {
+        currentLevel = wanted;
+        meter.setResolution(wanted);
+      } else if (!notes.includes(`internal resolution ${wanted.name} refused`)) {
+        notes.push(`internal resolution ${wanted.name} refused by the core: staying at ${currentLevel.name}`);
+      }
+    };
     // The render pipelines this device's earlier sessions of this core compiled inside a frame,
     // compiled now, before callMain, where the worker can still await (pipelines.ts says why).
     if (!event.data.selftest && commit) {
@@ -210,7 +242,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
       }
     }
     scope.postMessage({ type: 'perf-meta', commit, opt, queueProbe, timerResolutionMs: resolution, clockCostNs: clockNs, nativeClockCostNs, split, notes, presentation: mode.name,
-      crossOriginIsolated: scope.crossOriginIsolated });
+      resolution: currentLevel.pct, crossOriginIsolated: scope.crossOriginIsolated });
     if (event.data.selftest) {
       if (!core._gx_webgpu_selftest) throw new Error('Core has no renderer selftest');
       meter.start();
