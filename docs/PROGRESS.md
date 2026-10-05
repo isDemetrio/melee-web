@@ -3794,3 +3794,10 @@ that the old sampled `parse_command` and `record_draw` totals could not isolate.
 Do not interpret clock-instrumented fractions as production shares; the overhead
 ratios are part of the result. Memory helpers follow this GX attribution. Renderer
 and entry-hook implementations remain untouched.
+
+The refreshed baseline completed green: [37269543623](https://github.com/isDemetrio/melee-web/actions/runs/37269543623),
+trace `c79c53b9…`, Chromium 153. Attached/headless sampled GX shares 21.318%/32.601%;
+MMIO unresolved 0.994%/1.614%; memory helper regions 10.381%/15.584%. These are
+observed stack regions, not full costs of inlined functions. `trace_enter` has no
+samples. Aggregates saved in `docs/measurements/gx-browser-main-37269543623.json`;
+interpretation and pending region experiment in `docs/GX_MEMORY_BROWSER.md`.

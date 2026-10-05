@@ -1,0 +1,609 @@
+{
+  "run": 37269543623,
+  "branch_commit": "ec01ccccbdea7312fb2ce643b5e47a756dfe6cb1",
+  "source_merge_commit": "1a87e827d6b19265b5c310c209930d02a869728e",
+  "baseline": "main 696ec4f including PR #121 and #127",
+  "browser": {
+    "browser": "153.0.8010.12",
+    "renderer": "fake WebGPU; GPU/API costs excluded",
+    "runs": [
+      {
+        "mode": "trace",
+        "digest": "c79c53b9cdf81426fa0277e7497a69e55bc5f571",
+        "frames": 762,
+        "sim_ms": 14.795045931758532,
+        "samples": null
+      },
+      {
+        "mode": "attached",
+        "digest": null,
+        "frames": 762,
+        "sim_ms": 15.498418635170603,
+        "samples": 69969
+      },
+      {
+        "mode": "headless",
+        "digest": null,
+        "frames": 762,
+        "sim_ms": 10.219717847769035,
+        "samples": 45975
+      }
+    ]
+  },
+  "attached": {
+    "total_sampled_ms": 11836.403,
+    "samples": 69969,
+    "ms_per_frame": 15.533337270341208,
+    "limitations": [
+      "Zero samples means below visibility or inlined, never zero cost.",
+      "FIFO buffer append is unresolved inside gx_write/write_fifo self time.",
+      "mmio self time includes all destinations; it cannot be attributed wholly to GX.",
+      "Helper self time does not separate call overhead from instructions.",
+      "Console profile boundaries add profiler overhead; compare sampled and core elapsed time.",
+      "Real WebGPU API/GPU costs are excluded; this is Chromium, not iPhone JSC."
+    ],
+    "zones": {
+      "renderer_excluded": {
+        "samples": 23823,
+        "percent": 33.87300178947945,
+        "ms_per_frame": 5.261607611548556,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gxw_draw",
+            1819764
+          ],
+          [
+            "(anonymous namespace)::draw_segment(gx::Frame const&, gx::DrawCall const&, gx::DrawSegment const&)",
+            960304
+          ],
+          [
+            "gxw_bind",
+            469339
+          ]
+        ]
+      },
+      "gx_vertices": {
+        "samples": 709,
+        "percent": 1.0124781996692744,
+        "ms_per_frame": 0.15727165354330708,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::decode_vertices(gx::(anonymous namespace)::VertexDesc const&, unsigned char const*, unsigned int, unsigned int)::$_0::operator()(gx::(anonymous namespace)::AttrDesc const&, gx::(anonymous namespace)::ArrayView const&, unsigned int) const",
+            119841
+          ]
+        ]
+      },
+      "gx_texture_snapshot": {
+        "samples": 1,
+        "percent": 0.0014615926814928488,
+        "ms_per_frame": 0.0002270341207349081,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "std::__2::__hash_table<std::__2::__hash_value_type<unsigned long long, gx::TextureSnapshotCache::Entry>, std::__2::__unordered_map_hasher<unsigned long long, std::__2::__hash_value_type<unsigned long long, gx::TextureSnapshotCache::Entry>, std::__2::hash<unsigned long long>, std::__2::equal_to<unsigned long long>, true>, std::__2::__unordered_map_equal<unsigned long long, std::__2::__hash_value_type<unsigned long long, gx::TextureSnapshotCache::Entry>, std::__2::equal_to<unsigned long long>, std::__2::hash<unsigned long long>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned long long, gx::TextureSnapshotCache::Entry>>>::remove(std::__2::__hash_const_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned long long, gx::TextureSnapshotCache::Entry>, void*>*>)",
+            173
+          ]
+        ]
+      },
+      "gx_record_draw": {
+        "samples": 4057,
+        "percent": 5.783750350507667,
+        "ms_per_frame": 0.8984094488188976,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "memcmp",
+            399221
+          ],
+          [
+            "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+            248918
+          ],
+          [
+            "std::__2::vector<gx::DrawSegment, std::__2::allocator<gx::DrawSegment>>::push_back[abi:ne200100](gx::DrawSegment&&)",
+            13254
+          ]
+        ]
+      },
+      "gx_parse_command": {
+        "samples": 6893,
+        "percent": 9.83738049473307,
+        "ms_per_frame": 1.5280734908136484,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+            1131821
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned int, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::__unordered_map_hasher<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::hash<unsigned int>, std::__2::equal_to<unsigned int>, true>, std::__2::__unordered_map_equal<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::equal_to<unsigned int>, std::__2::hash<unsigned int>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned int, unsigned int>>>::__emplace_unique_key_args<unsigned int, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>, std::__2::tuple<>>(unsigned int const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>&&, std::__2::tuple<>&&)",
+            12535
+          ],
+          [
+            "host::try_ptr(unsigned int, unsigned int)",
+            9051
+          ]
+        ]
+      },
+      "gx_fifo_write_unresolved": {
+        "samples": 3282,
+        "percent": 4.684134191781068,
+        "ms_per_frame": 0.7276023622047244,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::gx_write(unsigned int, int)",
+            505867
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            48064
+          ],
+          [
+            "host::try_ptr(unsigned int, unsigned int)",
+            502
+          ]
+        ]
+      },
+      "mmio_unresolved": {
+        "samples": 695,
+        "percent": 0.9937225016755513,
+        "ms_per_frame": 0.15435826771653544,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::mmio_write(unsigned int, unsigned int, int)",
+            106378
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            11079
+          ],
+          [
+            "host::mmio_read(unsigned int, int)",
+            164
+          ]
+        ]
+      },
+      "memory_mark_ram_write": {
+        "samples": 17,
+        "percent": 0.02423878267747389,
+        "ms_per_frame": 0.0037650918635170607,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::mark_ram_write(unsigned int, unsigned int)",
+            2869
+          ]
+        ]
+      },
+      "memory_helpers": {
+        "samples": 7266,
+        "percent": 10.357183681562718,
+        "ms_per_frame": 1.608816272965879,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+            464993
+          ],
+          [
+            "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+            276768
+          ],
+          [
+            "ppc::psq_load(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+            147305
+          ]
+        ]
+      },
+      "fp_emulation": {
+        "samples": 2651,
+        "percent": 3.767326948905001,
+        "ms_per_frame": 0.5851916010498688,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "wasm_compat::fma(double, double, double)",
+            299694
+          ],
+          [
+            "fma",
+            138921
+          ],
+          [
+            "wasm_compat::fmsub(double, double, double)",
+            4800
+          ]
+        ]
+      },
+      "guest_dispatch": {
+        "samples": 459,
+        "percent": 0.6546161025439907,
+        "ms_per_frame": 0.10168372703412074,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::call(ppc::Context&, unsigned char*, unsigned int)",
+            75786
+          ],
+          [
+            "ppc::enter(ppc::Context&, unsigned int)",
+            694
+          ],
+          [
+            "wasm-function[5258]",
+            340
+          ]
+        ]
+      },
+      "entry_trace": {
+        "samples": 0,
+        "percent": 0.0,
+        "ms_per_frame": 0.0,
+        "visibility": "not observed (may be inlined)",
+        "top_self_us": []
+      },
+      "entry_other": {
+        "samples": 344,
+        "percent": 0.49394228973109483,
+        "ms_per_frame": 0.0767257217847769,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::enter(ppc::Context&, unsigned int)",
+            58465
+          ]
+        ]
+      },
+      "guest_and_inlined_helpers": {
+        "samples": 17219,
+        "percent": 24.58657414756831,
+        "ms_per_frame": 3.819115485564305,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "guest::f_80342204(ppc::Context&, unsigned char*)",
+            211911
+          ],
+          [
+            "guest::f_80336000(ppc::Context&, unsigned char*)",
+            191227
+          ],
+          [
+            "guest::f_80379A20(ppc::Context&, unsigned char*)",
+            90802
+          ]
+        ]
+      },
+      "guest_other_helpers": {
+        "samples": 1953,
+        "percent": 3.0599752306507306,
+        "ms_per_frame": 0.47531627296587925,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "send",
+            117008
+          ],
+          [
+            "wasm-function[10134]",
+            29449
+          ],
+          [
+            "wasm-function[10149]",
+            22476
+          ]
+        ]
+      },
+      "unclassified": {
+        "samples": 600,
+        "percent": 0.8702136958331006,
+        "ms_per_frame": 0.13517322834645668,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "(garbage collector)",
+            65042
+          ],
+          [
+            "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+            10629
+          ],
+          [
+            "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+            8388
+          ]
+        ]
+      }
+    }
+  },
+  "headless": {
+    "total_sampled_ms": 7810.06,
+    "samples": 45975,
+    "ms_per_frame": 10.249422572178478,
+    "limitations": [
+      "Zero samples means below visibility or inlined, never zero cost.",
+      "FIFO buffer append is unresolved inside gx_write/write_fifo self time.",
+      "mmio self time includes all destinations; it cannot be attributed wholly to GX.",
+      "Helper self time does not separate call overhead from instructions.",
+      "Console profile boundaries add profiler overhead; compare sampled and core elapsed time.",
+      "Real WebGPU API/GPU costs are excluded; this is Chromium, not iPhone JSC."
+    ],
+    "zones": {
+      "renderer_excluded": {
+        "samples": 118,
+        "percent": 0.2548251870024046,
+        "ms_per_frame": 0.026118110236220474,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::Frame::clear()",
+            19729
+          ],
+          [
+            "(anonymous namespace)::Forwarder::submit_and_recycle(gx::Frame&)",
+            173
+          ]
+        ]
+      },
+      "gx_vertices": {
+        "samples": 714,
+        "percent": 1.5461212845996062,
+        "ms_per_frame": 0.15846850393700787,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::decode_vertices(gx::(anonymous namespace)::VertexDesc const&, unsigned char const*, unsigned int, unsigned int)::$_0::operator()(gx::(anonymous namespace)::AttrDesc const&, gx::(anonymous namespace)::ArrayView const&, unsigned int) const",
+            120753
+          ]
+        ]
+      },
+      "gx_texture_snapshot": {
+        "samples": 1,
+        "percent": 0.0022535038143112855,
+        "ms_per_frame": 0.00023097112860892387,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::__unordered_map_hasher<unsigned char const*, std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::hash<unsigned char const*>, std::__2::equal_to<unsigned char const*>, true>, std::__2::__unordered_map_equal<unsigned char const*, std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>, std::__2::equal_to<unsigned char const*>, std::__2::hash<unsigned char const*>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned char const*, gx::TextureSnapshotCache::Entry>>>::__emplace_unique_key_args<unsigned char const*, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned char const* const&>, std::__2::tuple<>>(unsigned char const* const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned char const* const&>&&, std::__2::tuple<>&&)",
+            176
+          ]
+        ]
+      },
+      "gx_record_draw": {
+        "samples": 3959,
+        "percent": 8.558564210774309,
+        "ms_per_frame": 0.8772034120734907,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "memcmp",
+            392880
+          ],
+          [
+            "gx::(anonymous namespace)::record_draw(unsigned int, unsigned int, unsigned int, unsigned int)",
+            244051
+          ],
+          [
+            "std::__2::vector<gx::DrawSegment, std::__2::allocator<gx::DrawSegment>>::push_back[abi:ne200100](gx::DrawSegment&&)",
+            12290
+          ]
+        ]
+      },
+      "gx_parse_command": {
+        "samples": 6995,
+        "percent": 15.16938410204275,
+        "ms_per_frame": 1.5547742782152232,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "gx::(anonymous namespace)::parse_command(unsigned char const*, unsigned long)",
+            1147303
+          ],
+          [
+            "std::__2::pair<std::__2::__hash_iterator<std::__2::__hash_node<std::__2::__hash_value_type<unsigned int, unsigned int>, void*>*>, bool> std::__2::__hash_table<std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::__unordered_map_hasher<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::hash<unsigned int>, std::__2::equal_to<unsigned int>, true>, std::__2::__unordered_map_equal<unsigned int, std::__2::__hash_value_type<unsigned int, unsigned int>, std::__2::equal_to<unsigned int>, std::__2::hash<unsigned int>, true>, std::__2::allocator<std::__2::__hash_value_type<unsigned int, unsigned int>>>::__emplace_unique_key_args<unsigned int, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>, std::__2::tuple<>>(unsigned int const&, std::__2::piecewise_construct_t const&, std::__2::tuple<unsigned int const&>&&, std::__2::tuple<>&&)",
+            16296
+          ],
+          [
+            "emscripten_builtin_free",
+            6470
+          ]
+        ]
+      },
+      "gx_fifo_write_unresolved": {
+        "samples": 3377,
+        "percent": 7.324783676437825,
+        "ms_per_frame": 0.7507480314960631,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::gx_write(unsigned int, int)",
+            524126
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            46720
+          ],
+          [
+            "host::try_ptr(unsigned int, unsigned int)",
+            700
+          ]
+        ]
+      },
+      "mmio_unresolved": {
+        "samples": 740,
+        "percent": 1.6138416350194493,
+        "ms_per_frame": 0.16540944881889763,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "host::mmio_write(unsigned int, unsigned int, int)",
+            111400
+          ],
+          [
+            "(anonymous namespace)::ensure_initialized()",
+            14477
+          ],
+          [
+            "host::mmio_read(unsigned int, int)",
+            165
+          ]
+        ]
+      },
+      "memory_mark_ram_write": {
+        "samples": 19,
+        "percent": 0.041497760580584526,
+        "ms_per_frame": 0.004253280839895014,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::mark_ram_write(unsigned int, unsigned int)",
+            3241
+          ]
+        ]
+      },
+      "memory_helpers": {
+        "samples": 7174,
+        "percent": 15.542927967262736,
+        "ms_per_frame": 1.5930603674540682,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+            476008
+          ],
+          [
+            "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+            269387
+          ],
+          [
+            "ppc::psq_load(ppc::Context&, unsigned char*, unsigned int, unsigned int, unsigned int, unsigned int)",
+            139133
+          ]
+        ]
+      },
+      "fp_emulation": {
+        "samples": 2704,
+        "percent": 5.840095978776091,
+        "ms_per_frame": 0.5985761154855643,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "wasm_compat::fma(double, double, double)",
+            293578
+          ],
+          [
+            "fma",
+            155165
+          ],
+          [
+            "wasm_compat::fmsub(double, double, double)",
+            5338
+          ]
+        ]
+      },
+      "guest_dispatch": {
+        "samples": 448,
+        "percent": 0.9731551358120168,
+        "ms_per_frame": 0.09974278215223098,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::call(ppc::Context&, unsigned char*, unsigned int)",
+            74815
+          ],
+          [
+            "ppc::enter(ppc::Context&, unsigned int)",
+            663
+          ],
+          [
+            "wasm-function[5258]",
+            180
+          ]
+        ]
+      },
+      "entry_trace": {
+        "samples": 0,
+        "percent": 0.0,
+        "ms_per_frame": 0.0,
+        "visibility": "not observed (may be inlined)",
+        "top_self_us": []
+      },
+      "entry_other": {
+        "samples": 325,
+        "percent": 0.7095207975354862,
+        "ms_per_frame": 0.07272178477690289,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::enter(ppc::Context&, unsigned int)",
+            55414
+          ]
+        ]
+      },
+      "guest_and_inlined_helpers": {
+        "samples": 17270,
+        "percent": 37.4941165624848,
+        "ms_per_frame": 3.842930446194226,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "guest::f_80342204(ppc::Context&, unsigned char*)",
+            214134
+          ],
+          [
+            "guest::f_80336000(ppc::Context&, unsigned char*)",
+            201131
+          ],
+          [
+            "guest::f_80379A20(ppc::Context&, unsigned char*)",
+            95059
+          ]
+        ]
+      },
+      "guest_other_helpers": {
+        "samples": 1945,
+        "percent": 4.530976714647519,
+        "ms_per_frame": 0.4643989501312336,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "send",
+            108470
+          ],
+          [
+            "wasm-function[10134]",
+            29174
+          ],
+          [
+            "ax::(anonymous namespace)::mix_aux_samples(int, unsigned int, unsigned int)",
+            21220
+          ]
+        ]
+      },
+      "unclassified": {
+        "samples": 186,
+        "percent": 0.3979354832101162,
+        "ms_per_frame": 0.04078608923884514,
+        "visibility": "sampled",
+        "top_self_us": [
+          [
+            "ppc::ld32(ppc::Context&, unsigned char*, unsigned int)",
+            8402
+          ],
+          [
+            "ppc::st32(ppc::Context&, unsigned char*, unsigned int, unsigned int)",
+            6650
+          ],
+          [
+            "wasm_compat::fma(double, double, double)",
+            2471
+          ]
+        ]
+      }
+    }
+  }
+}
