@@ -1,6 +1,12 @@
 name: Emulator cost — Chromium attribution
 on:
   workflow_dispatch:
+    inputs:
+      experiment:
+        description: Measurement-only variant after the current-main baseline
+        type: choice
+        options: [memory, gx]
+        default: memory
   pull_request:
     paths:
       - 'experiments/emulator-cost/**'
@@ -66,6 +72,7 @@ jobs:
           done
           cat "$RUNNER_TEMP/results/browser.json" >> "$GITHUB_STEP_SUMMARY"
       - name: Separate GX regions (measurement-only rebuild)
+        if: ${{ inputs.experiment == 'gx' }}
         run: |
           python3 experiments/emulator-cost/instrument.py
           cmake --build "$RUNNER_TEMP/build" --target melee_core_web --parallel 3
@@ -77,6 +84,27 @@ jobs:
           REGIONS=1 node experiments/emulator-cost/browser.mjs "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/regions"
           cp "$RUNNER_TEMP/regions/browser.json" "$RUNNER_TEMP/results/regions.json"
           python3 experiments/emulator-cost/summarize_regions.py "$RUNNER_TEMP/results/browser.json" "$RUNNER_TEMP/results/regions.json" "$RUNNER_TEMP/results/region-summary.json"
+      - name: Expose memory invalidation (measurement-only rebuild)
+        if: ${{ inputs.experiment != 'gx' }}
+        run: |
+          wasm-dis "$RUNNER_TEMP/build/melee_core_web.wasm" -o "$RUNNER_TEMP/build/baseline.wat"
+          python3 experiments/emulator-cost/extract_memory_wat.py "$RUNNER_TEMP/build/baseline.wat" "$RUNNER_TEMP/results/memory-helpers-baseline.txt"
+          python3 experiments/emulator-cost/instrument_memory.py
+          cmake --build "$RUNNER_TEMP/build" --target melee_core_web --parallel 3
+          wasm-opt --enable-bulk-memory --enable-mutable-globals \
+            --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
+            --enable-simd -g -O2 "$RUNNER_TEMP/build/melee_core_web.wasm" \
+            -o "$RUNNER_TEMP/build/optimized.wasm"
+          mv "$RUNNER_TEMP/build/optimized.wasm" "$RUNNER_TEMP/build/melee_core_web.wasm"
+          wasm-dis "$RUNNER_TEMP/build/melee_core_web.wasm" -o "$RUNNER_TEMP/build/memory.wat"
+          python3 experiments/emulator-cost/extract_memory_wat.py "$RUNNER_TEMP/build/memory.wat" "$RUNNER_TEMP/results/memory-helpers-outlined.txt"
+          MEMORY=1 node experiments/emulator-cost/browser.mjs "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/memory"
+          for mode in attached headless; do
+            python3 experiments/emulator-cost/attribute.py "$RUNNER_TEMP/memory/$mode.cpuprofile" "$RUNNER_TEMP/memory/$mode.json"
+            cp "$RUNNER_TEMP/memory/$mode.json" "$RUNNER_TEMP/results/memory-$mode.json"
+          done
+          cp "$RUNNER_TEMP/memory/browser.json" "$RUNNER_TEMP/results/memory.json"
+          python3 experiments/emulator-cost/summarize_memory.py "$RUNNER_TEMP/results/browser.json" "$RUNNER_TEMP/memory/browser.json" "$RUNNER_TEMP/results/memory-summary.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -87,4 +115,4 @@ jobs:
           retention-days: 7
       - name: Remove private inputs and raw profiles
         if: always()
-        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/results" "$RUNNER_TEMP/regions"
+        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/results" "$RUNNER_TEMP/regions" "$RUNNER_TEMP/memory"

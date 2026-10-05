@@ -16,7 +16,7 @@ globalThis.FileReaderSync = class {
   }
 };
 
-globalThis.run = async ({size, trace, attached, profile, regions = false}) => {
+globalThis.run = async ({size, trace, attached, profile, regions = false, memory = false}) => {
   const logs = [];
   let last = 0;
   const gpu = fakeGPU();
@@ -27,6 +27,8 @@ globalThis.run = async ({size, trace, attached, profile, regions = false}) => {
       if (r < 0) return;
       if (r !== last + 1) throw new Error(`nonsequential retrace ${r}`);
       last = r;
+      if (memory && r === 1638) core._emulator_memory_begin();
+      if (memory && r === 2400) core._emulator_memory_end();
       if (regions && r === 1638) core._emulator_regions_begin();
       if (regions && r === 2400) core._emulator_regions_end();
       if (profile && r === 1638) console.profile('inmatch');
@@ -51,7 +53,11 @@ globalThis.run = async ({size, trace, attached, profile, regions = false}) => {
   if (regions && regionLogs.length !== 1) throw new Error('region counter did not report exactly once');
   const measured = regions ? JSON.parse(regionLogs[0].slice('EMULATOR_REGIONS '.length)) : null;
   if (regions && !measured.regions.some(r => r.calls > 0)) throw new Error('region counters measured zero');
-  return {regions: measured, trace: trace ? fs.readFile('/work/trace.csv', {encoding: 'utf8'}) : null,
+  const memoryLogs = logs.filter(l => l.startsWith('EMULATOR_MEMORY '));
+  if (memory && memoryLogs.length !== 1) throw new Error('memory counter did not report exactly once');
+  const memoryCounts = memory ? JSON.parse(memoryLogs[0].slice('EMULATOR_MEMORY '.length)) : null;
+  if (memory && !memoryCounts.calls) throw new Error('memory counters measured zero');
+  return {memory: memoryCounts, regions: measured, trace: trace ? fs.readFile('/work/trace.csv', {encoding: 'utf8'}) : null,
     times: fs.readFile('/work/times.csv', {encoding: 'utf8'}), retraces: last};
 };
 

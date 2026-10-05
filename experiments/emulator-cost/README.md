@@ -77,3 +77,20 @@ probe overhead. `region-summary.json` explicitly reports both ratios. Region
 fractions describe the instrumented module, not production performance. Zero
 calls in any required probe fails; zero elapsed time with calls means below timer
 resolution. The complete oracle must pass again with probes enabled.
+
+## Memory experiment
+
+After the GX experiment, the workflow's default measurement becomes `memory`;
+manual dispatch with `experiment=gx` still reproduces the GX regions. Both begin
+with an unmodified current-main baseline. `instrument_memory.py` makes only
+`mark_ram_write` non-inline so its work becomes a sampled boundary. It does not
+inline guest memory helpers. Disabled counter branches and the extra call are
+explicit perturbations, quantified by unprofiled whole-game controls.
+
+A separate counter run reports invalidator calls, widths, single/multiple-block
+ranges, blocks tested and watched hits. Counters are off in the profiling and
+control runs. The instrumentation must pass the identical full trace and report
+nonzero invalidator samples; otherwise attribution fails. The runner extracts
+only the emitted `ld32`, `st32` and invalidator Wasm bodies, excluding all guest
+functions and data sections, as instruction evidence. This does not turn
+instruction counts into timing estimates.

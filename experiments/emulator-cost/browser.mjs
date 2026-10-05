@@ -49,12 +49,15 @@ const browser = await chromium.launch({headless: true});
 const results = {browser: browser.version(), renderer: 'fake WebGPU; GPU/API costs excluded', runs: []};
 try {
   const instrumented = process.env.REGIONS === '1';
+  const memoryBuild = process.env.MEMORY === '1';
   const modes = instrumented ? ['trace', ...Array.from({length: 3}, (_, i) =>
     [`attached-control-${i}`, `attached-regions-${i}`, `headless-control-${i}`, `headless-regions-${i}`]).flat()]
     : ['trace', 'attached', 'headless', ...Array.from({length: 3}, (_, i) =>
       [`attached-control-${i}`, `headless-control-${i}`]).flat()];
+  if (memoryBuild) modes.push('attached-count', 'headless-count');
   for (const mode of modes) {
     const profiling = mode === 'attached' || mode === 'headless';
+    const memory = memoryBuild && (mode === 'trace' || mode.endsWith('-count'));
     const regions = instrumented && (mode === 'trace' || mode.includes('-regions-'));
     const page = await browser.newPage();
     page.setDefaultTimeout(300000);
@@ -62,7 +65,7 @@ try {
     await page.waitForFunction(() => typeof globalThis.run === 'function');
     const profiler = await attachProfiler(page, profiling);
     const result = await page.evaluate(opts => globalThis.run(opts), {
-      size, trace: mode === 'trace', attached: !mode.startsWith('headless'), profile: profiling, regions,
+      size, trace: mode === 'trace', attached: !mode.startsWith('headless'), profile: profiling, regions, memory,
     });
     const profile = profiling ? await profiler.result() : null;
     const digest = result.trace ? createHash('sha1').update(result.trace).digest('hex') : null;
@@ -72,7 +75,7 @@ try {
     const times = result.times.trim().split('\n').slice(1).map(l => l.split(',').map(Number))
       .filter(([r]) => r >= 1639 && r <= 2400).map(([,ms]) => ms);
     if (times.length !== 762 || times.some(t => !Number.isFinite(t) || t <= 0)) throw new Error('invalid timing window');
-    results.runs.push({mode, digest, regions: result.regions, frames: times.length, sim_ms: times.reduce((a,b) => a+b,0)/times.length,
+    results.runs.push({mode, digest, memory: result.memory, regions: result.regions, frames: times.length, sim_ms: times.reduce((a,b) => a+b,0)/times.length,
       samples: profile?.samples.length ?? null});
     writeFileSync(resolve(out, 'browser.json'), JSON.stringify(results, null, 2));
     console.log(JSON.stringify(results.runs.at(-1)));

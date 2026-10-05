@@ -89,3 +89,34 @@ class RegionAccountingTest(unittest.TestCase):
         measured['runs'][1]['regions']['regions'][0]['calls'] = 0
         with self.assertRaisesRegex(ValueError, 'zero calls'):
             region_module.summarize(baseline, measured)
+
+memory_spec = importlib.util.spec_from_file_location('emulator_memory',
+    Path(__file__).resolve().parents[2] / 'experiments/emulator-cost/summarize_memory.py')
+memory_module = importlib.util.module_from_spec(memory_spec)
+memory_spec.loader.exec_module(memory_module)
+
+
+class MemoryAccountingTest(unittest.TestCase):
+    def inputs(self):
+        base, measured, profiles = {'runs': []}, {'runs': []}, {}
+        for mode in ('attached', 'headless'):
+            for i in range(3):
+                base['runs'].append({'mode': f'{mode}-control-{i}', 'sim_ms': 10})
+                measured['runs'].append({'mode': f'{mode}-control-{i}', 'sim_ms': 12})
+            measured['runs'].append({'mode': mode + '-count', 'memory': {
+                'calls': 100, 'zero_bytes': 0, 'out_of_range': 0, 'single_block': 99,
+                'multi_block': 1, 'block_checks': 101, 'watched_hits': 20}})
+            profiles[mode] = {'ms_per_frame': 13, 'zones': {
+                'memory_helpers': {'samples': 10}, 'memory_mark_ram_write': {'samples': 10}}}
+        return base, measured, profiles
+
+    def test_reports_perturbation_and_watched_fraction(self):
+        out = memory_module.summarize(*self.inputs())['modes']['attached']
+        self.assertEqual(out['outlined_over_baseline'], 1.2)
+        self.assertEqual(out['watched_fraction_of_block_checks'], 20 / 101)
+
+    def test_invisible_mark_boundary_fails_instead_of_reporting_zero_cost(self):
+        base, measured, profiles = self.inputs()
+        profiles['attached']['zones']['memory_mark_ram_write']['samples'] = 0
+        with self.assertRaisesRegex(ValueError, 'zero samples'):
+            memory_module.summarize(base, measured, profiles)
