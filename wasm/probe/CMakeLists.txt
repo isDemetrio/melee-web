@@ -29,6 +29,15 @@ add_executable(texture_snapshot_test "${PORT}/tests/texture_snapshot_test.cpp" "
 foreach(test port_load_test ram_watch_test ax_ucode_test texture_snapshot_test)
   add_test(NAME ${test} COMMAND "${NODE_EXECUTABLE}" "$<TARGET_FILE:${test}>")
 endforeach()
+# Differential corpus for the word-wise texture compare (patch 0012) against the !memcmp it
+# replaced. Built at the two levels the core compiles that header at: -O2 (gx_core.cpp is a hot
+# source, wasm/core/CMakeLists.txt) and -Oz (the core's default); the target option comes after
+# the directory's -O3, so it is the level in force.
+foreach(level O2 Oz)
+  add_executable(texture_compare_test_${level} texture_compare_test.cpp "${PORT}/runtime/gx/gx_texture.cpp")
+  target_compile_options(texture_compare_test_${level} PRIVATE -${level})
+  add_test(NAME texture_compare_test_${level} COMMAND "${NODE_EXECUTABLE}" "$<TARGET_FILE:texture_compare_test_${level}>")
+endforeach()
 add_executable(fma_vectors fma_vectors.cpp)
 # --dump writes 64 MB of raw result bits to the host file system for the native compare.
 target_link_options(fma_vectors PRIVATE -sNODERAWFS=1)
