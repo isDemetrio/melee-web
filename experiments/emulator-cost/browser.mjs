@@ -48,16 +48,23 @@ await new Promise(r => server.listen(0, '127.0.0.1', r));
 const browser = await chromium.launch({headless: true});
 const results = {browser: browser.version(), renderer: 'fake WebGPU; GPU/API costs excluded', runs: []};
 try {
-  for (const mode of ['trace', 'attached', 'headless']) {
+  const instrumented = process.env.REGIONS === '1';
+  const modes = instrumented ? ['trace', ...Array.from({length: 3}, (_, i) =>
+    [`attached-control-${i}`, `attached-regions-${i}`, `headless-control-${i}`, `headless-regions-${i}`]).flat()]
+    : ['trace', 'attached', 'headless', ...Array.from({length: 3}, (_, i) =>
+      [`attached-control-${i}`, `headless-control-${i}`]).flat()];
+  for (const mode of modes) {
+    const profiling = mode === 'attached' || mode === 'headless';
+    const regions = instrumented && (mode === 'trace' || mode.includes('-regions-'));
     const page = await browser.newPage();
     page.setDefaultTimeout(300000);
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(() => typeof globalThis.run === 'function');
-    const profiler = await attachProfiler(page, mode !== 'trace');
+    const profiler = await attachProfiler(page, profiling);
     const result = await page.evaluate(opts => globalThis.run(opts), {
-      size, trace: mode === 'trace', attached: mode !== 'headless', profile: mode !== 'trace',
+      size, trace: mode === 'trace', attached: !mode.startsWith('headless'), profile: profiling, regions,
     });
-    const profile = mode === 'trace' ? null : await profiler.result();
+    const profile = profiling ? await profiler.result() : null;
     const digest = result.trace ? createHash('sha1').update(result.trace).digest('hex') : null;
     if (mode === 'trace' && (digest !== 'c79c53b9cdf81426fa0277e7497a69e55bc5f571' || result.trace.trim().split('\n').length !== 2401))
       throw new Error(`2400 checkpoint oracle failed: ${digest}`);
@@ -65,7 +72,7 @@ try {
     const times = result.times.trim().split('\n').slice(1).map(l => l.split(',').map(Number))
       .filter(([r]) => r >= 1639 && r <= 2400).map(([,ms]) => ms);
     if (times.length !== 762 || times.some(t => !Number.isFinite(t) || t <= 0)) throw new Error('invalid timing window');
-    results.runs.push({mode, digest, frames: times.length, sim_ms: times.reduce((a,b) => a+b,0)/times.length,
+    results.runs.push({mode, digest, regions: result.regions, frames: times.length, sim_ms: times.reduce((a,b) => a+b,0)/times.length,
       samples: profile?.samples.length ?? null});
     writeFileSync(resolve(out, 'browser.json'), JSON.stringify(results, null, 2));
     console.log(JSON.stringify(results.runs.at(-1)));

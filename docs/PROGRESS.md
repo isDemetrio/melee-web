@@ -3779,3 +3779,18 @@ reference's and the choice is the operator's. The device rows M1/M2/M5, the verd
 `docs/PHASE0_REPORT.md` are unchanged and still wait on the operator. On the VPS, all without a build:
 `python3 -m unittest discover -s scripts/tests` (`Ran 210 tests in 19.893s`, `OK`) and `python3
 scripts/check_no_game_data.py --all` (275 tracked files, clean). CI decides the rest.
+
+## 2026-10-05 — Resume emulator attribution on post-FMA main (PR #124)
+
+`feat/gx-browser-attribution` now includes `origin/main` `696ec4f`; PR #121 and
+#127 are both ancestors. The older browser runs in this branch precede these
+gains. Baseline refresh run: `37269543623`, commit `ec01ccc`. No optimization yet.
+The existing private R2 route in `emulator-cost.yml` supplies the ISO exclusively
+on the runner; there is no missing-input blocker and no VPS test/browser run.
+
+Next measurement adds runner-only GX region scopes, mandatory invocation counts,
+repeat unprofiled controls and a second 2400-checkpoint gate. This separates work
+that the old sampled `parse_command` and `record_draw` totals could not isolate.
+Do not interpret clock-instrumented fractions as production shares; the overhead
+ratios are part of the result. Memory helpers follow this GX attribution. Renderer
+and entry-hook implementations remain untouched.

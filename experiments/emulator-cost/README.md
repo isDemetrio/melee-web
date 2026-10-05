@@ -59,3 +59,21 @@ After attribution, any candidate needs alternate baseline/candidate game runs
 with profiling off, a repeated full checkpoint gate, and explicit reporting of
 small, null or negative results. Arithmetic changes additionally require a large
 differential corpus against the old path. No optimization has been made here.
+
+## Region experiment (second, instrumented build)
+
+`instrument.py` inserts measurement-only scopes on the runner after the normal
+patch series. It does not change the production sources in this PR. The baseline
+module is measured first, then only affected C++ files are rebuilt. The scopes
+separate GX-address MMIO, FIFO byte appends, parser overhead, vertex descriptors,
+vertex decoding, draw state copies, texture snapshots and command-vector appends.
+The forwarding backend is an excluded nested region; it is not optimized.
+
+All scopes report calls, inclusive and exclusive elapsed time. Parent exclusive
+time subtracts nested scopes; inclusive times must not be summed. Three unprofiled
+control/measurement pairs in each mode quantify the cost of enabling clocks.
+Three unprofiled runs of the unmodified module also expose code-layout/disabled
+probe overhead. `region-summary.json` explicitly reports both ratios. Region
+fractions describe the instrumented module, not production performance. Zero
+calls in any required probe fails; zero elapsed time with calls means below timer
+resolution. The complete oracle must pass again with probes enabled.

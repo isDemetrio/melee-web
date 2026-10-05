@@ -65,6 +65,18 @@ jobs:
             python3 experiments/emulator-cost/attribute.py "$RUNNER_TEMP/results/$mode.cpuprofile" "$RUNNER_TEMP/results/$mode.json"
           done
           cat "$RUNNER_TEMP/results/browser.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Separate GX regions (measurement-only rebuild)
+        run: |
+          python3 experiments/emulator-cost/instrument.py
+          cmake --build "$RUNNER_TEMP/build" --target melee_core_web --parallel 3
+          wasm-opt --enable-bulk-memory --enable-mutable-globals \
+            --enable-nontrapping-float-to-int --enable-sign-ext --enable-exception-handling \
+            --enable-simd -g -O2 "$RUNNER_TEMP/build/melee_core_web.wasm" \
+            -o "$RUNNER_TEMP/build/optimized.wasm"
+          mv "$RUNNER_TEMP/build/optimized.wasm" "$RUNNER_TEMP/build/melee_core_web.wasm"
+          REGIONS=1 node experiments/emulator-cost/browser.mjs "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/regions"
+          cp "$RUNNER_TEMP/regions/browser.json" "$RUNNER_TEMP/results/regions.json"
+          python3 experiments/emulator-cost/summarize_regions.py "$RUNNER_TEMP/results/browser.json" "$RUNNER_TEMP/results/regions.json" "$RUNNER_TEMP/results/region-summary.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -75,4 +87,4 @@ jobs:
           retention-days: 7
       - name: Remove private inputs and raw profiles
         if: always()
-        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/results"
+        run: rm -rf "$RUNNER_TEMP/generated" "$RUNNER_TEMP/dol" "$RUNNER_TEMP/build" "$RUNNER_TEMP/disc.iso" "$RUNNER_TEMP/results" "$RUNNER_TEMP/regions"
