@@ -18,9 +18,9 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Area | State | Evidence |
 | --- | --- | --- |
 | Disc image, `main.dol` | verified against independent public sources | `docs/OPEN_QUESTIONS.md` Q1, Q2 |
-| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,278,441 bytes web, 15,232,193 Node** on `main` at `696ec4f` | `Phase 0 — WASM core`, run 37263947515; the number moves with every commit, so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
+| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,278,604 bytes web, 15,232,193 Node** on `main` at `fe2e06b` | `Phase 0 — WASM core`, run 37319576228; the number moves with every commit — it was 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
 | Determinism | 2400/2400 checkpoints identical to the native reference, trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | re-checked 2026-10-05 with `scripts/phase0/compare_checkpoints.py` on the stored iPhone trace: `identical: 2400 retraces` |
-| Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" |
+| Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU, and since PR #138 an internal-resolution lever (100/75/50%) for measuring how much of the lag is fill rate. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" and the last entry; `docs/PRESENTATION_COST.md`, "Internal resolution" |
 | Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
 | Device row — mid-range Android, the row that decides | **not measured: there is no such device** | `docs/OPEN_QUESTIONS.md` Q9 |
 | Deploy plan | PR 1–5 landed, plus PR 6's tool (`scripts/phase0/go_no_go.py`, PR #31 — `docs/PHASE0_REPORT.md` is the row below), and `disc-chunks.json` computed; nothing deployed and no Cloudflare credential used | `docs/PHASE0_DEPLOY_PLAN.md` section 6 |
@@ -4035,3 +4035,73 @@ built or dispatched from this machine. The gates that can run here are green on 
 `python3 -m unittest discover -s scripts/tests` → `Ran 214 tests in 21.242s`, `OK`;
 `python3 scripts/check_no_game_data.py --all` → `294 tracked file(s) checked, no game data, no oversized
 files`; `python3 scripts/check_docs.py` → `210 citations in 4 documents, 0 violation(s)`.
+
+## 2026-10-05 — the detailed plan's `-O1` and 87 MB: the level it names is not the level `main` ships (cron, `cron/phase0-oct5j`)
+
+**Why this and not something else.** Every step of `docs/PHASE0_DEPLOY_PLAN.md` section 6 that needs
+neither a credential, a phone nor a decision is done — steps 1–5 landed, step 6 is the O1/Android/route
+decision, step 7 is M1/M2 on real hardware, steps 9–13 are the Cloudflare credentials and the devices,
+and step 14 is the verdict, whose `docs/PHASE0_REPORT.md` waits on the row that decides. The renderer is
+held by the eight open pull requests that own its files (#70, #100, #101, #104, #112, #113, #117,
+#124). Earlier cron sessions re-read the deploy plan and the device plan against the repository;
+`docs/PHASE0_NEXT.md` — the detailed execution plan that the deploy plan's section 6 and the device
+plan's section 6 both cite for its S11, the optimisation-level rule — had never had that pass. Its section 0 is titled "Where things stand" and states that the WASM module is 87,117,533 bytes,
+over the 25 MiB Pages per-file limit, and that both cores are compiled at `-O1`. Neither is true: PR
+#13 put `-Oz` in `main` on 2026-09-30 and the module is 15,278,604 bytes. D4, a decision the operator
+is asked to take, rejects Cloudflare Pages on that 87 MB number.
+
+**Verified 2026-10-05 on `main` at `fe2e06b`, without a build, without a credential and without a
+device**, each fact being a file's own line, a run's own log or a JSON's own field:
+
+- **The level `main` ships is `-Oz`, and it is a variable rather than a constant**:
+  `wasm/core/CMakeLists.txt` line 23 is `set(MELEE_OPT "-Oz" CACHE STRING …)`, line 24 is
+  `set_property(CACHE MELEE_OPT PROPERTY STRINGS -Oz -O1 -O2 -O3)`, line 31 writes `melee_opt.txt` at
+  configure time and line 32 appends `-g0` to the compile options.
+- **The dispatch input is `opt_level`, not `opt`, and it has four options**:
+  `.github/workflows/phase0-build.yml` line 13 is `opt_level:`, lines 16–21 are the `-Oz`/`-O1`/`-O2`/
+  `-O3` choices and `default: '-Oz'`, and line 80 is `MELEE_OPT: ${{ inputs.opt_level || '-Oz' }}`.
+- **`core.json` is not written with a hardcoded level**: the step reads
+  `$RUNNER_TEMP/wasm/melee_opt.txt` and keeps the old `grep` only as a fallback
+  (`phase0-build.yml` lines 233–245). Run 37319576228 on `main` at `fe2e06b` prints
+  `{"commit":"fe2e06bea54c9f8ec9dac2df595dd6a793a14361","opt":"-Oz"}`.
+- **The module is not 87 MB, and it is under the Pages limit**: the same run reports
+  `"wasm_bytes": 15232193`, `"pages_limit_bytes": 26214400`, `"within_pages_limit": true`, and its
+  `wasm-opt` step logs `melee_core_web.wasm 15283670 -> 15278604 bytes`. The 87,117,533 the document
+  quotes is the `-O1` build of 2026-09-30.
+- **The `provisional` rule cannot fire on the shipped core**: `scripts/phase0/go_no_go.py` line 77 is
+  `PROVISIONAL_OPTS = ('-O1',)`, so a non-GO verdict measured on `-Oz` comes out final, not
+  provisional.
+- **`-Oz` is the slower of the two levels, not the faster**: 28,92 ms against `-O1`'s 27,34 ms over
+  the 762 match frames, on the VPS under Node (`docs/OPT_LEVEL_EXPERIMENT.md` lines 6–7 — a VPS
+  ratio, not a phone one). So the framing the document inherited, "another level is what CI cannot
+  afford", runs the other way: the level worth re-measuring is `-O1`, and it is a dispatch with
+  `opt_level=-O1`, not a PR.
+- **Part of section 7's "could not be verified" list is closed**: Node on this VPS runs
+  `melee_core_node.js`, 81 s over 2400 retraces (this file, lines 312–313); `FS.filesystems.WORKERFS`
+  and `callMain`'s return value under `EXIT_RUNTIME=0` are exercised by the S6 CI test (lines 394–396);
+  and `match_frame != 0` is the count `frame_stats --in-match` reports, 762.
+
+**Changed.** `docs/PHASE0_NEXT.md` only: section 0 gains a dated note and its module-size row now
+carries both numbers; the `-O1` paragraph of section 0, S2's expected sizes, S6's `printf` snippet,
+S7's expected `core loaded` line and its crash failure mode, S10's compile/link list, S11, section 7
+and D4 each carry a dated "State as of 2026-10-05" note. S11's is the largest, because the step's
+premise is false: its note says what survives (the 2400 checkpoints must be re-run at whichever level
+is chosen before a verdict on it is called final) and what replaces the step (a dispatch with
+`opt_level=-O1`). `docs/PROGRESS.md`: this entry, and the resume point's module-size row, which now
+carries the measurement of `main` at `fe2e06b` — 15,278,604 web / 15,232,193 Node, run 37319576228 —
+with the older one kept beside it. No number is invented and no historical measurement is changed:
+87,117,533, 952 s, 1066 s and 87.118.045 keep the date and the build they were measured on. No
+workflow, script, renderer, simulation or test-semantics file is touched, and `phase0-build.yml` does
+not list `docs/` in its `pull_request.paths`, so this pull request costs no WASM core build.
+
+**Not done, and why.** Nothing was built, dispatched, deployed, uploaded, served or tunnelled, and no
+Cloudflare credential was used; no `tailscale serve` was started and no server was left running. What
+is blocked, and by what, is unchanged: the verdict by a mid-range Android (`docs/OPEN_QUESTIONS.md`
+Q9 — only an iPhone exists, so the specification's deciding row is unmeasured); any deployment by
+O1–O10 (Q3's Phase 0 subset, and O1 is a legal judgement); `docs/PHASE0_REPORT.md` by those two; Q4,
+Q5, Q10(b) and Q11 by the operator; the renderer by the eight open pull requests that own its files.
+The gates that can run here are green on the edited tree: `python3 -m unittest discover -s
+scripts/tests` → `Ran 214 tests in 17.533s`, `OK (skipped=1)`; `python3 scripts/check_no_game_data.py
+--all` → `OK: 294 tracked file(s) checked, no game data, no oversized files`; `python3
+scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` → `210
+citations in 4 documents, 0 violation(s)`. CI decides the rest.
