@@ -4105,3 +4105,34 @@ scripts/tests` → `Ran 214 tests in 17.533s`, `OK (skipped=1)`; `python3 script
 --all` → `OK: 294 tracked file(s) checked, no game data, no oversized files`; `python3
 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` → `210
 citations in 4 documents, 0 violation(s)`. CI decides the rest.
+
+## 2026-10-05 — envelope skinning: attributed, and the FMA zero-factor path closed
+
+**State.** `docs/FOUR_PLAYER_ATTRIBUTION.md`'s 16.2% skinning line is now broken down per callee
+from the fourcore profile; the reduction found is small and is measured directly.
+
+**Attributed.** `docs/SKINNING_ENVELOPE_COST.md` (new): the samples under `guest::f_8036E4C4`
+(`SetupEnvelopeModelMtx`, `0x8036E4C4`), per callee, 4p against 2p, from `inmatch.cpuprofile`;
+and the counter ratio `envelope_matrix_calls` 115.5 → 245.4 (**2.124×**) against draws 1.322×,
+which is why the extra characters cost more than twice a character. Helper:
+`~/briefs/skinning/attribute_skinning.py`.
+
+**Changed.** `wasm/compat/fma.h`: the zero-factor check is hoisted ahead of the general path, so a
+zero factor no longer pays `exact_product` and then libc's `fma` (three `normalize` calls) before
+reaching the same `x*y + z`. `wasm/probe/fma_shim_test.cpp`: a randomized zero-factor comparison
+against the general path. `docs/PORT_CHANGES.md` and this file. One file of behaviour.
+
+**Measured.** Trace gate on the branch core (`gate.sh`, 2400 retraces, state trace on):
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571`, identical to the reference of
+`docs/ATTRIBUTE_RESIDUAL.md`. The libm `fma`+`normalize` path in the whole 4-player profile:
+**2.41% → 0.44%** of the profile (A-equivalent 915 → 162 ms), and it leaves the skinning subtree's
+top twenty entirely. Worth **0.38 ms/frame at 4p** (0.8% of a ~47 ms frame) and 0.22 at 2p. Eight
+alternating A/B pairs (`~/briefs/skinning/measure_ab.sh`) on the harness's own `sim_ms` metric give
+a paired mean of −2.12 ms (sd 2.44), but the session drifted upward (A's own runs 49.8 → 60.5 ms
+across the pairs) and the profile caps the removable work an order of magnitude below that mean;
+the first four pairs average −0.31 ms, the profile's number. The frame metric cannot resolve a
+gain this size, and the −2.1 ms is drift, not the change.
+
+**Not done.** No renderer, netcode, simulation or recompiler change; no build outside Actions; no
+deployment. The memory helpers (28.4% of the skinning subtree) and the FIFO path (15.3%) are named
+in the new document as out of scope for this change.

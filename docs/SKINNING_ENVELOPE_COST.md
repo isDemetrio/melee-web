@@ -86,8 +86,53 @@ randomized zero-factor comparison against the general path to hold that, and the
 
 See the table below. The fourcore harness's own metric is the mean `sim_ms` over match frames
 1–715, and the same metric's six-pair spread on this VPS is already wide
-(`FOUR_PLAYER_ATTRIBUTION.md`: four-player 43.9–50.5 ms, ±7%), so a change worth ~0.5% of the
+(`FOUR_PLAYER_ATTRIBUTION.md`: four-player 43.9–50.5 ms, ±7%), so a change worth ~0.8% of the
 frame cannot be separated by the frame metric. The profile measurement below is the one that
 targets what the change removes.
 
-<!--MEASUREMENT-->
+Both cores are `-Oz`, built with `--profiling-funcs` so the sampler can name functions, from the
+same base: **A** is `main` at `64dc1d1`, **B** is this branch at `fb8aa14` (A plus the one file).
+Artifacts `melee-spike-dist-names` from runs `37337920947` (A) and `37336312091` (B).
+
+**The trace gate passes.** `gate.sh` on B, 2400 retraces, state trace on:
+`trace c79c53b9cdf81426fa0277e7497a69e55bc5f571 final scene: mode=2 state=2 match_frame=762` —
+byte-identical to the reference of `docs/ATTRIBUTE_RESIDUAL.md`. The reordering changes no
+simulated state.
+
+**The libm `fma` path is gone.** From the 4-player profile (`PROF_FROM=1685 PROF_TO=2400`, 2400
+frames), whole profile:
+
+| | A `fma` | A `normalize` | A total | B `fma` | B `normalize` | B total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ms in window | 593.1 | 321.7 | **914.8** | 151.9 | 51.3 | **203.2** |
+| share of profile | | | **2.41%** | | | **0.44%** |
+
+B's window was 46.6 s against A's 37.9 s (the VPS was busier), so the totals are not comparable
+directly; the shares are. B's non-`fma` work is 1.254× A's, so in A-equivalent time B's libm path
+is 203.2 / 1.254 = **162 ms against A's 915 ms — an 82% drop**, and it is no longer in the top
+twenty of the skinning subtree at all (A: `fma` 347.2 ms and `normalize` 200.5 ms, 7.5% of the
+subtree). The residual the shim was written for was, in this path, entirely the zero-factor case.
+
+**The frame metric cannot resolve it.** The harness's own metric, mean `sim_ms` over match frames
+1–715, eight alternating A/B pairs (`/home/hermes/briefs/skinning/measure_ab.sh`, four-player
+script):
+
+| | mean | min..max | sd |
+| --- | ---: | ---: | ---: |
+| A | 53.406 ms | 49.773..60.460 | 3.428 |
+| B | 51.289 ms | 47.151..54.126 | 2.073 |
+| paired B−A | **−2.117 ms** | −6.334..+1.278 | 2.439 |
+
+Taken at face value that is a 4.0% gain (ratio 0.960). **It is not one, and this note does not
+claim it.** The session drifted upward — A's own single runs go 49.8 → 60.5 ms across the eight
+pairs — and the profile above caps the removable work at 0.38 ms/frame, an order of magnitude
+below the paired mean. Splitting the series where the drift starts, the first four pairs average
+−0.31 ms (the profile's number) and the last four −3.92 ms (the drift). A change worth ~0.7% of
+the frame is not separable from a VPS whose single runs span ±7%.
+
+**Verdict.** A safe reduction exists and is measured directly: the libm `fma`+`normalize` path
+under the skinning subtree is removed, worth **0.38 ms/frame at four players (0.8% of a ~47 ms
+frame) and 0.22 ms/frame at two**. That is the whole of it. The frame metric's eight-pair spread
+cannot confirm a gain that size, and the one number it does produce (−2.1 ms) is drift, not the
+change.
+
