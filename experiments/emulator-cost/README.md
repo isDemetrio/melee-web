@@ -5,10 +5,10 @@ build, browser or tests on the editing VPS. The workflow reads the existing priv
 R2 disc and keeps the DOL, generated C++, module, raw profile and disc in
 `RUNNER_TEMP`. Only aggregate JSON and source/machine metadata are uploaded.
 
-The initial branch is based on `main` at `e80a221`. Contrary to the task handoff,
-PR #121 was merged into `measure/core-cost-browser`, not `main` (verified with
-`gh pr view 121 --json baseRefName,mergedAt`). Until the base is reconciled, this is
-validation of measurement infrastructure, **not the requested post-FMA baseline**.
+The branch now includes `main` at `696ec4f`, including PR #121 (FMA exact-product
+shortcut) and PR #127 (single-entry-hook inline comparison). The earlier run
+37250075985 predates both and is infrastructure evidence only. The refreshed
+baseline is measured before any optimization.
 
 ## Measurement
 

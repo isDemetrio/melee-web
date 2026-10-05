@@ -37,6 +37,12 @@ if(EMSCRIPTEN)
   target_link_options(core_options INTERFACE ${MELEE_OPT} -g0 -fwasm-exceptions -ffp-contract=off -fno-fast-math
     -sERROR_ON_UNDEFINED_SYMBOLS=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB
     -sSTACK_SIZE=8MB -sALLOW_TABLE_GROWTH=1 -sASSERTIONS=0)
+  # Measurement builds only (docs/CORE_COST_BROWSER.md): a name section for sampling profilers.
+  # It names functions; it does not change the compile options of any translation unit.
+  option(MELEE_PROFILING_FUNCS "Keep function names in the linked modules" OFF)
+  if(MELEE_PROFILING_FUNCS)
+    target_link_options(core_options INTERFACE --profiling-funcs)
+  endif()
 endif()
 # P0-04: relocatable list, never a glob or a hand-maintained TU list.
 add_library(guest STATIC ${GUEST_SOURCES}

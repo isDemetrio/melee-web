@@ -127,7 +127,7 @@ traccia DIFFERENT confusa.
 | **A. Download da Safari sulla tailnet, salvataggio in File** | 1 tocco per avviare, poi attesa: a 50 Mbit/s ≈ 4 min, a 10 Mbit/s ≈ 20 min (1,46 GB). Una volta sola per tutte le corse. | Serve spazio libero; se "Download" di Safari punta a iCloud Drive la ISO finisce su iCloud (1,46 GB di quota e una copia fuori dal telefono): va impostato "Sul mio iPhone". |
 | B. AirDrop dal Mac | Due trasferimenti: prima VPS → Mac (stesso tempo di A), poi AirDrop (minuti), più il Mac acceso vicino. | La ISO è solo sulla VPS, quindi il Mac è un passaggio in più e una copia in più da cancellare. |
 | C. La ISO già sul telefono | Zero, se c'è. | Per quanto sappiamo **non c'è**: esiste solo sulla VPS. Una copia d'altra origine ha il problema del "secondo vincolo". |
-| D. Taildrop (`tailscale file cp` dalla VPS all'iPhone) | Zero clic per l'invio, 1 tocco per accettare. | **Da verificare**: che Taildrop sia abilitato nella tailnet e dove iOS salva il file. Non provato. |
+| D. Taildrop (`tailscale file cp` dalla VPS all'iPhone) | Zero clic per l'invio, 1 tocco per accettare. | **Attivo: misurato il 2026-10-05.** `tailscale status --json` dà `TaildropTarget: 5` su **entrambi** i peer (iPhone e Mac) e `NoFileSharingReason: ""`; nell'enum `ipnstate.TaildropTargetStatus` della versione installata (v1.102.2, `ipnstate.go` riga 343) 5 è `TaildropTargetOffline`, non `MissingCap` (4) né `UnsupportedOS` (7), e il campo del motivo è vuoto proprio quando il peer non ha nulla che gli impedisca di ricevere file. Al momento della misura i due peer erano offline (`Online: false`), che è quindi l'unico motivo dichiarato. `tailscale file cp` e `tailscale file get` esistono in 1.102.2 (`tailscale file --help`). **Resta non provato**: dove iOS salva il file, e un trasferimento vero — servono il telefono online. |
 | E. Leggere la ISO dalla rete senza copiarla | Nessuna copia sul telefono. | Richiede di cambiare il Worker (oggi legge solo un `File`) e metterebbe la rete nei tempi. Fuori da questo test. |
 
 **Scelta: A**, download da Safari via HTTPS dalla stessa origine della pagina. Motivo: il server
@@ -137,19 +137,56 @@ l'orologio (presupposto 3). **Ripiego: D**, se A si blocca ripetutamente.
 
 ### Preparazione sulla VPS (la fa l'agente, non l'operatore)
 
-**V1 — La ISO.** Il percorso esatto sulla VPS non è stato letto durante la stesura (il commento del
-server usa come esempio `/home/hermes/incoming/melee-ntsc102.iso`): **da verificare**. Poi:
+**V1, V2 e V3 sono state misurate il 2026-10-05** e i loro "**da verificare**" sono chiusi qui
+sotto, ognuno con il comando che l'ha chiuso. Resta una cosa sola, e non è una verifica: il commit
+del `dist` da servire (V2) e il riferimento di sezione 5 non coincidono.
+
+**V1 — La ISO. Percorso e digest misurati il 2026-10-05.** Il commento del server indovinava: il
+percorso è `/home/hermes/incoming/melee-ntsc102.iso`, e i due comandi qui sotto, eseguiti su quello,
+danno i due valori attesi — `1459978240` byte e SHA-1 `d4e70c064cc714ba8400a849cf299dbd1aa326fc`.
 
 ```bash
-ISO=/percorso/della/iso            # da verificare
-stat -c %s "$ISO"                  # atteso: 1459978240
-sha1sum "$ISO"                     # atteso: d4e70c064cc714ba8400a849cf299dbd1aa326fc
+ISO=/home/hermes/incoming/melee-ntsc102.iso        # misurato
+stat -c %s "$ISO"                  # 1459978240 (misurato)
+sha1sum "$ISO"                     # d4e70c064cc714ba8400a849cf299dbd1aa326fc (misurato)
 ```
 
-**V2 — La pagina costruita (`dist`).** È l'artefatto `melee-spike-dist` del workflow
-`phase0-build.yml` (input `upload_spike`, conservato 3 giorni). Il server l'ha già servito una
-volta, ma il percorso non è stato letto: **da verificare**. Se non c'è più (scaduto), serve un
-nuovo dispatch dal branch giusto (costo ≈ 28 minuti di CI secondo `docs/PHASE0_NEXT.md` S7):
+**V2 — La pagina costruita (`dist`). Percorso e commit misurati il 2026-10-05.** È l'artefatto
+`melee-spike-dist` del workflow `phase0-build.yml` (input `upload_spike`, conservato 3 giorni). Il
+server l'ha già servito più di una volta, e sulla VPS ne restano **sette** copie sotto
+`/home/hermes/incoming/phase0/`, lette con `ls -d /home/hermes/incoming/phase0/spike-dist*/` e
+`cat <dir>/spike-core/core.json`:
+
+| directory | `spike-core/core.json` | modulo (byte) | data |
+| --- | --- | --- | --- |
+| `spike-dist` | `4fba3a08…`, `-Oz` | 16323255 | 2026-09-30 18:00 |
+| `spike-dist-4a3f537` | `4a3f537e…`, `-Oz` | 16323255 | 2026-10-01 08:09 |
+| `spike-dist-9b08acf` | `9b08acfb…`, `-Oz` | 15248094 | 2026-10-02 17:09 |
+| `spike-dist-thrash` | `cd20fa33…`, `-Oz` | 15253943 | 2026-10-02 17:36 |
+| `spike-dist-8305929` | `83059291…`, `-Oz` | 15254307 | 2026-10-02 21:24 |
+| `spike-dist-drawcost` | `118c0405…`, `-Oz` | 15254426 | 2026-10-02 21:35 |
+| `spike-dist-drawcost2` | `df8635e8…`, `-Oz` | 15254426 | 2026-10-02 21:59 |
+
+Le ultime tre tengono il `dist` un livello più in basso (`<dir>/melee-spike-dist/spike-core/`),
+perché `gh run download -D <dir>` crea la cartella dell'artefatto dentro quella che riceve.
+
+**Nessuna delle sette dichiara il commit del riferimento di sezione 5** (`SHA=63511ce6…` in
+`/home/hermes/incoming/phase0/current.env`): la più recente è `spike-dist-drawcost2` (`df8635e8…`),
+del 2026-10-02 21:59, e `main` si è mosso dopo. Il core **pubblicato** su Cloudflare è invece del
+commit del riferimento (aggiornamento 2026-10-01, sezione 5 qui sotto), quindi il disallineamento
+riguarda la strada D — la VPS che serve il `dist` dalla tailnet — non l'anteprima. Prima di una
+sessione sul device lungo quella strada, o si dispatcha un `dist` nuovo e si ricostruisce la traccia
+nativa al **suo** commit, o si ricostruisce il riferimento al commit servito: è la regola di sezione
+5, "Il commit del riferimento", e oggi i due non coincidono. **Nessun dispatch è stato fatto qui**:
+`main` riceve ancora le PR della campagna di performance, un `dist` costruito adesso sarebbe
+superato entro l'ora, e quale commit servire è la decisione dell'operatore.
+
+Il numero che il comando qui sotto si aspettava era **≈ 87,1 MB**: è la build `-O1` del 2026-09-30
+(§0), mentre dal 2026-10-02 i moduli serviti sono ≈ 15,25 MB, cioè cinque volte meno. Fa fede il file
+servito.
+
+Se un `dist` non c'è più (scaduto), serve un nuovo dispatch dal branch giusto (costo ≈ 28 minuti di
+CI secondo `docs/PHASE0_NEXT.md` S7):
 
 ```bash
 gh workflow run phase0-build.yml --ref main -f upload_spike=true
@@ -160,8 +197,8 @@ Mai scaricarlo dentro il checkout del repository. Poi controllare cosa si sta pe
 
 ```bash
 DIST=/home/hermes/incoming/phase0/spike-dist      # o il percorso trovato
-cat "$DIST/spike-core/core.json"                  # {"commit":"<sha>","opt":"-O1"} — opt non è affidabile, vedi §0.5
-stat -c %s "$DIST/spike-core/melee_core_web.wasm" # ≈ 87,1 MB; annotare il numero esatto
+cat "$DIST/spike-core/core.json"                  # {"commit":"<sha>","opt":"-Oz"} — opt non è affidabile, vedi §0.5
+stat -c %s "$DIST/spike-core/melee_core_web.wasm" # 15254426 su spike-dist-drawcost2 (2026-10-02 21:59); annotare il numero esatto
 ls "$DIST/spike-core/"                            # melee_core_web.js, melee_core_web.wasm, parity_vs_onett.txt, core.json
 ```
 
@@ -194,12 +231,23 @@ manifest sbagliato. Se l'HTTPS della tailnet non è disponibile,
 `scripts/phase0/device_test_serve.sh` avvia questo stesso server e un tunnel in un comando solo, e
 stampa utente, password e indirizzi.
 
-**Da verificare, e non verificato durante la stesura** (il comando `tailscale` non è stato
-eseguito): la sintassi esatta dipende dalla versione (`tailscale serve --help`); può servire
-`sudo`; nel pannello della tailnet devono essere attivi MagicDNS e i certificati HTTPS.
-**Conseguenza da far accettare all'operatore:** attivare i certificati HTTPS rende pubblico il
-nome della macchina nei registri di Certificate Transparency (i registri pubblici di tutti i
-certificati emessi). Il contenuto resta visibile solo dalla tailnet.
+**Verificato il 2026-10-05, senza aprire alcun tunnel** (`tailscale serve` non è stato eseguito:
+`tailscale serve status` risponde `No serve config`). Il client sulla VPS è **1.102.2**
+(`tailscale version`), e la sintassi scritta qui sopra è quella della sua `--help`, che documenta
+`tailscale serve <target>` con `--bg` e un numero di porta come target — `tailscale serve --bg 3000`
+è l'esempio della pagina stessa. **Non serve `sudo`**: tutti i comandi di questa misura sono girati
+come utente `hermes` e hanno risposto, quindi la CLI raggiunge il demone senza privilegi; il nodo
+porta anche le capacità `https://tailscale.com/cap/is-admin` e `https://tailscale.com/cap/is-owner`
+(`tailscale status --json`, `.Self.Capabilities`). **MagicDNS e i certificati HTTPS sono già
+attivi**, quindi la condizione che questa riga chiedeva all'operatore è già soddisfatta: `tailscale
+dns status` dice "MagicDNS: enabled tailnet-wide (suffix = tailfbaf46.ts.net)" e `tailscale status
+--json` porta `CertDomains: ["hermesagent.tailfbaf46.ts.net"]`, che la definizione del campo dà come
+"the set of DNS names for which the control plane server will assist with provisioning TLS
+certificates" (`ipnstate.go`, v1.102.2) — cioè l'abilitazione è già stata fatta, e il nome della
+macchina entrerà nel registro di Certificate Transparency **quando un certificato viene emesso**,
+non prima (la pagina della KB lo lega all'esecuzione di `tailscale cert`). **Resta non verificato**:
+un `tailscale serve` vero e una pagina caricata dal telefono, che richiedono il tunnel e il telefono;
+nessuno dei due è stato aperto in questa sessione.
 
 Controllo dalla VPS stessa (utente fisso `fabri`, scritto nel server):
 
@@ -356,8 +404,10 @@ tab normale, le tre corse cronometrate restano nella tab privata.
     complete.
 12. Manda all'agente i JSON (la prova corta e le tre corse) **senza aprirli né modificarli**, più
     il modello di iPhone e la versione di iOS. Strada proposta: condivisione dall'app File verso la
-    VPS con Taildrop (**da verificare** che sia attivo; sulla VPS si ricevono con
-    `tailscale file get <cartella>`); ripiego: AirDrop al Mac e `scp` verso la VPS.
+    VPS con Taildrop (**misurato attivo il 2026-10-05**, sezione 2 riga D: `TaildropTarget: 5` =
+    `TaildropTargetOffline` su iPhone e Mac, motivo vuoto, cioè l'unico ostacolo è che il peer è
+    offline; sulla VPS si ricevono con `tailscale file get <cartella>`, che in 1.102.2 esiste);
+    ripiego: AirDrop al Mac e `scp` verso la VPS.
 13. A test finito cancella `disc.iso` dall'app File (e da "Eliminati di recente").
 
 ---

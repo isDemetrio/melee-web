@@ -39,10 +39,8 @@ jobs:
         run: scripts/phase0/fetch_and_recompile.sh offline "$RUNNER_TEMP/generated"
       - name: Build named web module
         run: |
-          # Measurement-only name section: append after the normal -g0 link options.
-          printf '\ntarget_link_options(core_options INTERFACE --profiling-funcs)\n' >> wasm/core/CMakeLists.txt
           emcmake cmake -S wasm/core -B "$RUNNER_TEMP/build" -G Ninja \
-            -DMELEE_GEN="$RUNNER_TEMP/generated"
+            -DMELEE_GEN="$RUNNER_TEMP/generated" -DMELEE_PROFILING_FUNCS=ON
           cmake --build "$RUNNER_TEMP/build" --target melee_core_web --parallel 3
           npm install -g binaryen@132.0.0
           wasm-opt --enable-bulk-memory --enable-mutable-globals \
