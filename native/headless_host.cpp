@@ -6,6 +6,7 @@
 #include "guest_symbols.h"
 #include "ax_ucode.h"
 #include "gecko_data.h"
+#include "texture_snapshot.h"
 #include "wasm/compat/sha1.h"
 #include <chrono>
 #ifdef MELEE_OFFLINE_COST
@@ -74,10 +75,13 @@ const double tsc_seconds = 0;
 static double g_cost_seconds[SIM_COST_COUNT]{};
 static uint64_t g_cost_calls[SIM_COST_COUNT]{};
 static FILE* g_decoder_cost = nullptr;
+// Its own file: decoder_cost.csv has a fixed column set that the pages validate.
+static FILE* g_texture_capture = nullptr;
 static void reset_decoder_cost() {
   std::memset(g_cost_seconds, 0, sizeof g_cost_seconds);
   std::memset(g_cost_calls, 0, sizeof g_cost_calls);
   ppc::offline_watched_block_writes = 0;
+  gx::texture_capture_counts = {};
 }
 void sim_cost_add(int slot, double seconds) {
   if (slot >= 0 && slot < SIM_COST_COUNT) {
@@ -92,10 +96,18 @@ extern "C" EMSCRIPTEN_KEEPALIVE int melee_decoder_cost(int mode) {
     g_decoder_cost = std::fopen("/work/decoder_cost.csv", "w");
     if (!g_decoder_cost) return 0;
     std::fputs("retrace,sim_ms,match_frame,record_ms,texture_ms,observer_ms,rest_ms,decode_ms,decode_rest_ms,non_decode_ms,record_calls,texture_calls,observer_calls,decode_calls,observer_game_ms,end_frame_ms,non_decode_rest_ms,allocate_joint_calls,load_joint_calls,release_joint_calls,display_joint_calls,rigid_matrix_calls,other_matrix_calls,envelope_matrix_calls,end_frame_calls,watched_ram_block_writes,watched_ram_blocks\n", g_decoder_cost);
+    g_texture_capture = std::fopen("/work/texture_capture.csv", "w");
+    if (g_texture_capture) {
+      std::fputs("retrace,match_frame,calls,version_hits,compares,compare_bytes,hash_bytes,copies,copy_bytes", g_texture_capture);
+      for (const char* reason : {"new_source", "no_version", "ram_version", "palette_version", "other"})
+        std::fprintf(g_texture_capture, ",miss_%s,equal_%s,equal_bytes_%s", reason, reason, reason);
+      std::fputc('\n', g_texture_capture);
+    }
   }
   reset_decoder_cost();
   offline_cost_mode = mode;
   ppc::offline_watch_count_enabled = mode == 1;
+  gx::texture_capture_counting = g_texture_capture != nullptr;
   return 1;
 }
 static void record_decoder_cost(double sim_ms, uint32_t match_frame) {
@@ -125,6 +137,18 @@ static void record_decoder_cost(double sim_ms, uint32_t match_frame) {
   std::fprintf(g_decoder_cost, ",%llu,%llu,%u\n", (unsigned long long)g_cost_calls[SIM_END_FRAME],
       (unsigned long long)ppc::offline_watched_block_writes, watched_blocks);
   std::fflush(g_decoder_cost);
+  if (g_texture_capture) {
+    const gx::TextureCaptureCounts& t = gx::texture_capture_counts;
+    std::fprintf(g_texture_capture, "%u,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu", g_retraces, match_frame,
+        (unsigned long long)t.calls, (unsigned long long)t.version_hits, (unsigned long long)t.compares,
+        (unsigned long long)t.compare_bytes, (unsigned long long)t.hash_bytes, (unsigned long long)t.copies,
+        (unsigned long long)t.copy_bytes);
+    for (int r = 0; r < gx::MISS_COUNT; ++r)
+      std::fprintf(g_texture_capture, ",%llu,%llu,%llu", (unsigned long long)t.miss[r],
+          (unsigned long long)t.equal[r], (unsigned long long)t.equal_bytes[r]);
+    std::fputc('\n', g_texture_capture);
+    std::fflush(g_texture_capture);
+  }
 }
 #else
 void sim_cost_add(int, double) {}

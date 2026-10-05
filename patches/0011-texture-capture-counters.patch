@@ -1,0 +1,93 @@
+diff --git a/port/runtime/gx/texture_snapshot.h b/port/runtime/gx/texture_snapshot.h
+index 8f665dd..df7730f 100644
+--- a/port/runtime/gx/texture_snapshot.h
++++ b/port/runtime/gx/texture_snapshot.h
+@@ -8,6 +8,21 @@
+ #include <unordered_map>
+ 
+ namespace gx {
++#ifdef MELEE_OFFLINE_COST
++// Offline WASM diagnostic: what each capture did, counted only while the decoder cost is collected
++// (melee_decoder_cost(1)), and written per retrace to /work/texture_capture.csv. The miss reasons
++// say why the RAM-version shortcut did not return the cached snapshot: no snapshot for this
++// address yet, no version (outside RAM), a guest store in a watched 64 KB block, a TLUT load
++// anywhere in TMEM (the palette version is a global TMEM generation), or a different palette
++// address or size. `equal` counts the misses whose bytes then compared equal: false invalidations.
++enum TextureMiss { MISS_NEW_SOURCE, MISS_NO_VERSION, MISS_RAM_VERSION, MISS_PALETTE_VERSION, MISS_OTHER, MISS_COUNT };
++struct TextureCaptureCounts {
++  uint64_t calls, version_hits, compares, compare_bytes, hash_bytes, copies, copy_bytes;
++  uint64_t miss[MISS_COUNT], equal[MISS_COUNT], equal_bytes[MISS_COUNT];
++};
++inline bool texture_capture_counting = false;
++inline TextureCaptureCounts texture_capture_counts{};
++#endif
+ struct TextureSnapshot {
+   std::vector<uint8_t> image, palette;
+   uint64_t hash;
+@@ -25,6 +40,12 @@ class TextureSnapshotCache {
+   static constexpr uint64_t KEEP_FRAMES = 3;   // a texture unused for this long is dropped
+   static bool equal(const TextureSnapshot& s, const uint8_t* image, size_t image_size,
+                     const uint8_t* palette, size_t palette_size) {
++#ifdef MELEE_OFFLINE_COST
++    if (texture_capture_counting && s.image.size() == image_size && s.palette.size() == palette_size) {
++      ++texture_capture_counts.compares;
++      texture_capture_counts.compare_bytes += image_size + palette_size;
++    }
++#endif
+     return s.image.size() == image_size && s.palette.size() == palette_size &&
+         !std::memcmp(s.image.data(), image, image_size) &&
+         (!palette_size || !std::memcmp(s.palette.data(), palette, palette_size));
+@@ -49,6 +70,20 @@ public:
+     // Most draws reuse their source. Vectorized memcmp avoids rehashing
+     // every byte with a serial hash recurrence; changes still receive a new copy.
+     auto previous = last_source.find(image);
++#ifdef MELEE_OFFLINE_COST
++    int miss = MISS_COUNT;
++    if (texture_capture_counting) {
++      ++texture_capture_counts.calls;
++      const Entry* p = previous != last_source.end() ? &previous->second : nullptr;
++      miss = !p ? MISS_NEW_SOURCE : !source_version ? MISS_NO_VERSION :
++          p->source_version != source_version ? MISS_RAM_VERSION :
++          p->palette_version != palette_version ? MISS_PALETTE_VERSION :
++          p->palette_source != palette || p->snapshot->image.size() != image_size ||
++          p->snapshot->palette.size() != palette_size ? MISS_OTHER : MISS_COUNT;
++      if (miss == MISS_COUNT) ++texture_capture_counts.version_hits;
++      else ++texture_capture_counts.miss[miss];
++    }
++#endif
+     // There used to be a fast path here that returned the cached snapshot for a source already seen
+     // this frame, comparing only the address and the two sizes. Melee rewrites texture and palette
+     // memory in place, so any draw after such a write rendered the bytes from before it: a texture
+@@ -65,6 +100,12 @@ public:
+       return previous->second.snapshot;
+     }
+     if (previous != last_source.end() && equal(*previous->second.snapshot, image, image_size, palette, palette_size)) {
++#ifdef MELEE_OFFLINE_COST
++      if (texture_capture_counting && miss < MISS_COUNT) {
++        ++texture_capture_counts.equal[miss];
++        texture_capture_counts.equal_bytes[miss] += image_size + palette_size;
++      }
++#endif
+       previous->second.used = generation;
+       previous->second.source_version = source_version;
+       previous->second.palette_version = palette_version;
+@@ -72,6 +113,9 @@ public:
+       return previous->second.snapshot;
+     }
+     uint64_t hash = hash_bytes(image, image_size) ^ (hash_bytes(palette, palette_size) * 31);
++#ifdef MELEE_OFFLINE_COST
++    if (texture_capture_counting) texture_capture_counts.hash_bytes += image_size + palette_size;
++#endif
+     auto range = entries.equal_range(hash);
+     for (auto i = range.first; i != range.second; ++i) {
+       if (equal(*i->second.snapshot, image, image_size, palette, palette_size)) {
+@@ -84,6 +128,9 @@ public:
+     s->image.assign(image, image + image_size);
+     if (palette_size) s->palette.assign(palette, palette + palette_size);
+     s->hash = hash;
++#ifdef MELEE_OFFLINE_COST
++    if (texture_capture_counting) { ++texture_capture_counts.copies; texture_capture_counts.copy_bytes += image_size + palette_size; }
++#endif
+     entries.emplace(hash, Entry{s, generation, 0, 0, nullptr});
+     last_source[image] = Entry{s, generation, source_version, palette_version, palette};
+     return s;
