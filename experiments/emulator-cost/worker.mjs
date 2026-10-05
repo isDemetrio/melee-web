@@ -8,10 +8,11 @@ globalThis.FileReaderSync = class {
   readAsArrayBuffer(blob) {
     const xhr = new XMLHttpRequest();
     xhr.open('GET', `/disc?start=${blob.start}&end=${blob.end}`, false);
-    xhr.overrideMimeType('text/plain; charset=x-user-defined');
+    xhr.responseType = 'arraybuffer';
     xhr.send();
     if (xhr.status !== 200) throw new Error(`disc read: ${xhr.status}`);
-    return Uint8Array.from(xhr.responseText, c => c.charCodeAt(0) & 255).buffer;
+    if (xhr.response.byteLength !== blob.end - blob.start) throw new Error('short disc response');
+    return xhr.response;
   }
 };
 
@@ -41,9 +42,9 @@ globalThis.run = async ({size, trace, attached, profile}) => {
     '--time-base', '1', '--volume', '0', '--script', '/work/script.txt', '--card-dir', '/work/card',
     '--state-trace', trace ? '/work/trace.csv' : '', '--sim-times', '/work/times.csv']);
   if (gpu.failure || gpu.firstFailure) throw new Error(gpu.failure || gpu.firstFailure);
-  if (exit && exit !== 0) throw new Error(`core exit ${exit}`);
+  if (exit && exit !== 0) throw new Error(`core exit ${exit} at retrace ${last}: ${logs.slice(-12).join(' | ')}`);
   if (last !== 2400 || !logs.some(l => l.includes('match_frame=762 (retraces=2400)')))
-    throw new Error('reference match window not reached');
+    throw new Error(`reference match window not reached (${last}): ${logs.slice(-4).join(' | ')}`);
   return {trace: trace ? fs.readFile('/work/trace.csv', {encoding: 'utf8'}) : null,
     times: fs.readFile('/work/times.csv', {encoding: 'utf8'}), retraces: last};
 };

@@ -22,6 +22,8 @@ BOUNDARIES = [
     ('mmio_unresolved', r'mmio_write|mmio_read'),
     ('memory_mark_ram_write', r'mark_ram_write'),
     ('memory_helpers', r'ppc::(?:ld|st)(?:8|16|32|64)r?\b|ppc::psq_(?:load|store)|host::(?:ptr|rd\d+|wr\d+)\b'),
+    ('fp_emulation', r'^(?:fma|fmaf|normalize)$|wasm_compat::f|ppc::f(?:madd|msub|nmadd|nmsub)\b'),
+    ('guest_dispatch', r'ppc::(?:call|lookup)\b'),
     ('entry_trace', r'trace_enter'),
     ('entry_other', r'ppc::enter\b'),
     ('guest_and_inlined_helpers', r'\bf_[0-9A-Fa-f]{8}\b'),
@@ -52,7 +54,8 @@ def analyse(profile):
         for name in stack:
             if RULES[-1][1].search(name):
                 category = next((key for key, rx in RULES[7:-1] if any(rx.search(n) for n in stack)),
-                                'guest_and_inlined_helpers')
+                                'guest_and_inlined_helpers' if RULES[-1][1].search(stack[0])
+                                else 'guest_other_helpers')
                 break
             match = next((key for key, rx in RULES[:7] if rx.search(name)), None)
             if match:
@@ -76,7 +79,7 @@ def analyse(profile):
                             'ms_per_frame': totals[key] / 1000 / 762,
                             'visibility': 'sampled' if counts[key] else 'not observed (may be inlined)',
                             'top_self_us': leaves[key].most_common(20)}
-                      for key in [k for k, _ in BOUNDARIES] + ['unclassified']}}
+                      for key in [k for k, _ in BOUNDARIES] + ['guest_other_helpers', 'unclassified']}}
 
 
 if __name__ == '__main__':
