@@ -1,0 +1,134 @@
+# Four-port load workload: one match with FOUR human controllers, four characters on screen.
+#
+# The canonical parity script (upstream/melee-unlocked/port/scripts/parity_vs_onett.txt) is not
+# touched; this is a separate workload in the shape of experiments/texture-simd and the
+# (never landed) experiments/beyond-core/four-player.txt, with the character-select join fixed.
+#
+# Boot path from boot_to_menu.txt: A dismisses the "no memory card" prompt, START skips the
+# intro movie and the title once each. The entries after @scene 1:0 are relative to the retrace
+# where the host first observes GM_MENU, so the CSS/SSS sequence stays aligned despite the
+# opening-movie and disc-read timing; the @match entries follow simulated match frames.
+#
+# WHY PORTS 3 AND 4 MOVE UP, AND WHY THE STICK'S X COMPONENT MATTERS. Every hand starts at
+# y = -21.5 (mncharsel.c:4513), below the character grid, and a port's own door only becomes human
+# while its hand sits on the grid, at y in (0.2, 22) (mncharsel.c:3319). The stick's Y sign is the
+# direction that matters: sy=+127 drives the hand up into the grid, sy=-127 drives it further down.
+# Ports 1 and 2 use the canonical move (sx=61 sy=127) and press A. Reusing exactly that move for
+# ports 3 and 4 leaves their door claimed but with no character (sel_icon >= 0x19), so the CSS
+# never advances to the stage select and the run ends at `mode=2 state=0` with no match -- what the
+# recovered perf/beyond-core/four-player.txt did (sx=61 sy=127 for all four; its own harness would
+# have failed its `four_hud_frames > 600` assertion). Sweeping the move in CI (see sweep_css.py and
+# the four-player-sweep workflow) shows ports 3/4 with no X component (sy=127 alone) or a negative
+# one (sx=-61 sy=127) reach the stage select with all FOUR HUD slots live; a positive X component
+# (sx=61 or sx=127) or a negative Y leaves the CSS stuck. This file uses sy=127 alone.
+# The A presses are held ten frames and released, because the CSS reads the trigger edge.
+#
+# One more property this script relies on: the CSS only shows PRESS START (and only then lets
+# START advance) when every non-CPU door has a character that is not the random slot
+# (mncharsel.c fn_80262F44: `doors[i].sel_icon >= 0x19` hides it). Reaching the match at all
+# therefore certifies that all four doors picked a real character.
+130 A
+140
+400 START
+410
+520 START
+530
+700 START
+710
+
+@scene 1:0
+# Frame 0 = the retrace GM_MENU was first observed. Move to VS Mode, confirm, then bring up four
+# human hands on the character select.
+100 sy=-127
+106
+160 A
+168
+230 A
+238
+# Plug ports 2, 3 and 4 (port 1 is always connected).
+240 p=2
+240 p=3
+240 p=4
+# Ports 1 and 2: the canonical down-right hand move onto a character.
+400 sx=61 sy=127
+400 p=2 sx=61 sy=127
+# Ports 3 and 4: the hand move UP that actually claims their door.
+400 p=3 sy=127
+400 p=4 sy=127
+430
+430 p=2
+430 p=3
+430 p=4
+# Lock in on all four ports.
+440 A
+440 p=2 A
+440 p=3 A
+440 p=4 A
+450
+450 p=2
+450 p=3
+450 p=4
+# Confirm the character select, then pick a stage on the stage select.
+500 START
+510
+700 sy=100
+740
+760 A
+770
+
+# Match: all four ports walk in and jab, then cycle a shield, a roll, a jump and a taunt, so the
+# cost is measured with four characters actually acting, not four characters standing still.
+@match
+@loop 360
+0 p=1
+0 p=2
+0 p=3
+0 p=4
+30 p=1 sx=80
+30 p=2 sx=80
+30 p=3 sx=80
+30 p=4 sx=80
+70 p=1 A
+70 p=2 A
+70 p=3 A
+70 p=4 A
+75 p=1
+75 p=2
+75 p=3
+75 p=4
+100 p=1 X
+100 p=2 X
+100 p=3 X
+100 p=4 X
+105 p=1
+105 p=2
+105 p=3
+105 p=4
+150 p=1 sx=-80
+150 p=2 sx=-80
+150 p=3 sx=-80
+150 p=4 sx=-80
+190 p=1 B
+190 p=2 B
+190 p=3 B
+190 p=4 B
+195 p=1
+195 p=2
+195 p=3
+195 p=4
+230 p=1 cx=127
+230 p=2 cx=127
+230 p=3 cx=127
+230 p=4 cx=127
+235 p=1
+235 p=2
+235 p=3
+235 p=4
+280 p=1 L
+280 p=2 L
+280 p=3 L
+280 p=4 L
+300 p=1
+300 p=2
+300 p=3
+300 p=4

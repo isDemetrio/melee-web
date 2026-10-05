@@ -1,0 +1,74 @@
+# Two-port load workload: the same match as four-player.txt with TWO human controllers.
+#
+# Same boot path, same character select route and the same in-match input schedule as
+# four-player.txt, but only ports 1 and 2 are plugged and join. It is the control that separates
+# "four controllers instead of two" from "a different route to the match": the two scripts differ
+# only in how many ports are plugged and driven.
+#
+# A one-port script cannot be the baseline: Melee's character select refuses to advance with a
+# single human door (mncharsel.c fn_80262F44 only shows PRESS START, and only then lets START
+# advance, when at least two non-CPU doors hold a character). Measured: a one-port script ends at
+# `mode=2 state=0 match_frame=0` after 2400 retraces, i.e. it never reaches the stage select. Two
+# human doors is the smallest Vs match this game starts.
+130 A
+140
+400 START
+410
+520 START
+530
+700 START
+710
+
+@scene 1:0
+100 sy=-127
+106
+160 A
+168
+230 A
+238
+240 p=2
+400 sx=61 sy=127
+400 p=2 sx=61 sy=127
+430
+430 p=2
+440 A
+440 p=2 A
+450
+450 p=2
+500 START
+510
+700 sy=100
+740
+760 A
+770
+
+# Match: ports 1 and 2 walk in and jab, then cycle a shield, a roll, a jump and a taunt, on the
+# same schedule as four-player.txt's ports 1 and 2.
+@match
+@loop 360
+0 p=1
+0 p=2
+30 p=1 sx=80
+30 p=2 sx=80
+70 p=1 A
+70 p=2 A
+75 p=1
+75 p=2
+100 p=1 X
+100 p=2 X
+105 p=1
+105 p=2
+150 p=1 sx=-80
+150 p=2 sx=-80
+190 p=1 B
+190 p=2 B
+195 p=1
+195 p=2
+230 p=1 cx=127
+230 p=2 cx=127
+235 p=1
+235 p=2
+280 p=1 L
+280 p=2 L
+300 p=1
+300 p=2

@@ -1,0 +1,54 @@
+# One-port load workload: the same match as four-player.txt with ONE human controller.
+#
+# Identical boot path and character select as four-player.txt, but ports 2, 3 and 4 are never
+# plugged: the host reports one connected pad (PADRead's connected mask has one bit), the CSS
+# shows one hand, and the match has one human player. Everything else -- the menu walk, the
+# down-right hand move onto a character, the A lock-in, the stage pick -- is the same, so the
+# difference between the two runs is the number of controllers, not the route to the match.
+#
+# The four-player script's in-match input schedule is kept for port 1 unchanged; the other three
+# ports simply do not exist here.
+130 A
+140
+400 START
+410
+520 START
+530
+700 START
+710
+
+@scene 1:0
+100 sy=-127
+106
+160 A
+168
+230 A
+238
+400 sx=61 sy=127
+430
+440 A
+450
+500 START
+510
+700 sy=100
+740
+760 A
+770
+
+# Match: the one port walks in and jabs, then cycles a shield, a roll, a jump and a taunt, on the
+# same schedule as four-player.txt's port 1.
+@match
+@loop 360
+0 p=1
+30 p=1 sx=80
+70 p=1 A
+75 p=1
+100 p=1 X
+105 p=1
+150 p=1 sx=-80
+190 p=1 B
+195 p=1
+230 p=1 cx=127
+235 p=1
+280 p=1 L
+300 p=1
