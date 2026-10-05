@@ -1,5 +1,5 @@
 import { clockCostNs, timerResolutionMs } from '../spike/clock.js';
-import { openGpu, renderProgress } from '../spike/gpu.js';
+import { observeGpuEvents, openGpu, renderProgress } from '../spike/gpu.js';
 import { heartbeatSender } from '../spike/heartbeat.js';
 import { openCachedDisc, readDiscThrough, type OpfsDirectory, type SyncReadHandle } from './disc-reader.js';
 import { coreSplitOf, CsvTail, FrameMeter, instrumentGpu, matchFrameOf, meterDiscReads, type FrameRecord,
@@ -30,6 +30,8 @@ interface PlayRequest {
   selftest?: boolean;
   /** presentation.ts's mode name; absent or unknown is `direct`, the path before the experiments. */
   presentation?: string;
+  /** Frames per `alternate` block; a test's 3-frame selftest asks for 1. */
+  alternateBlock?: number;
 }
 /** How often the frame records are posted to the page; a slow frame is posted at once. */
 const FLUSH_MS = 250;
@@ -57,7 +59,7 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
       probe = new TransferProbe(() => createEncoder.call(device), (buffers) => submit.call(device.queue, buffers),
         device, (width, height) => new OffscreenCanvas(width, height) as never, () => performance.now());
     }
-    const presenter = new Presenter(gpu as unknown as PresentGpu, canvas, mode.schedule);
+    const presenter = new Presenter(gpu as unknown as PresentGpu, canvas, mode.schedule, event.data.alternateBlock);
     // Every WebGPU call the backend makes is timed from here on (frame-meter.ts says what that
     // can and cannot see). The calls themselves are forwarded unchanged.
     const meter = new FrameMeter(new Int32Array(event.data.flight), () => performance.now());
@@ -89,7 +91,11 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
     let flushedAt = performance.now();
     let simTail: CsvTail | null = null;
     let decoderTail: CsvTail | null = null;
+    // WebGPU validation errors arrive as events (gpu.ts collects them), never as exceptions: they
+    // reach the report as notes, the first few of them, so an experiment that breaks is not silent.
+    let errorsSeen = 0;
     const flush = (): void => {
+      for (; errorsSeen < Math.min(gpu.errors.length, 20); errorsSeen++) meter.notes.push(`webgpu error: ${gpu.errors[errorsSeen]}`);
       scope.postMessage({ type: 'perf', rows: pending, sim, decoder, totals: meter.totals(), notes: meter.notes });
       pending = [];
       sim = [];
@@ -212,6 +218,8 @@ scope.onmessage = async (event: MessageEvent<PlayRequest>) => {
         options.heartbeat(frame);
         options.heartbeatReturned(frame);
       }
+      // The selftest can yield: let the device's error events arrive before the last flush.
+      await observeGpuEvents(gpu);
       flush();
       scope.postMessage({ type: 'ended', exitCode: 0 });
       return;

@@ -109,8 +109,9 @@ export class Presenter {
   private canvasWritten = false;
   private frames = 0;
 
+  /** `block`: frames per block of `alternate`; only a test asks for fewer than ALTERNATE_BLOCK. */
   constructor(private readonly gpu: PresentGpu, private readonly canvas: Canvas,
-    private readonly schedule: PresentSchedule) {}
+    private readonly schedule: PresentSchedule, private readonly block = ALTERNATE_BLOCK) {}
 
   /** After the backend's attach, which defines `gpu.flush`. Nothing to install unless alternating. */
   install(): void {
@@ -155,7 +156,7 @@ export class Presenter {
     const bitmap = this.canvas.transferToImageBitmap();
     this.canvasWritten = false;
     this.written = null;
-    if (this.schedule === 'alternate' && ++this.frames % ALTERNATE_BLOCK === 0) {
+    if (this.schedule === 'alternate' && ++this.frames % this.block === 0) {
       this.late = !this.late;
       this.last = null;
     }
