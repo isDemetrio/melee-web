@@ -23,7 +23,7 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" |
 | Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
 | Device row — mid-range Android, the row that decides | **not measured: there is no such device** | `docs/OPEN_QUESTIONS.md` Q9 |
-| Deploy plan | PR 1–6 landed, `go_no_go.py` landed, `disc-chunks.json` computed; nothing deployed and no Cloudflare credential used | `docs/PHASE0_DEPLOY_PLAN.md` section 6 |
+| Deploy plan | PR 1–5 landed, plus PR 6's tool (`scripts/phase0/go_no_go.py`, PR #31 — `docs/PHASE0_REPORT.md` is the row below), and `disc-chunks.json` computed; nothing deployed and no Cloudflare credential used | `docs/PHASE0_DEPLOY_PLAN.md` section 6 |
 | `docs/PHASE0_REPORT.md` (P0-12) | **not written**: it carries the verdict and waits on the deciding device row | `docs/PHASE0_DEPLOY_PLAN.md` section 6, step 14 |
 | Repository visibility | public; whether that is intended is the operator's call | `docs/OPEN_QUESTIONS.md` Q11 |
 
@@ -3810,3 +3810,53 @@ scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee
 citations in 4 documents, 0 violations). No workflow, script, renderer, simulation or
 test-semantics file is touched, and `phase0-build.yml` does not list `docs/` in its
 pull_request.paths, so this pull request costs no WASM core build. CI decides the rest.
+
+## 2026-10-05 — the deploy plan's §5 still reads as a to-do list of files that exist, and its §6 says the verdict is written (cron, `cron/phase0-oct5f`)
+
+**Why this and not something else.** Every autonomous step of `docs/PHASE0_DEPLOY_PLAN.md` section 6
+is done or held by the operator: steps 1–5 done, step 6 the O1 decision, step 7 the M1/M2 device runs,
+step 8 the C1–C8 checks (done on all seven JSONs, `docs/PHASE0_DEVICE_PLAN.md` section 5), steps 9–13
+the credentials and the devices, step 14 the verdict — and the renderer is in flight on the eight open
+pull requests that own its files (#70, #100, #101, #104, #112, #113, #117, #124), while the emulator
+branch is held by Codex's quota. So this session first re-checked that the repository's own gates are
+green, and then fixed what is not a step of the plan but a defect in the file those remaining steps are
+executed from: section 5, "Cosa cambia nel repo", is the file-by-file map of PR 1–6 written on
+2026-10-01, and it still presents five landed PRs as pending work and names a file that was never
+created.
+
+**Verified 2026-10-05, each fact with the check that produced it, on the VPS and without a build.**
+`ls functions/phase0/` answers `[[path]].ts` and no `disc.ts`, and
+`git log --diff-filter=A -- functions/phase0/` names `2208884` — PR #16, merged 2026-09-30T18:52:24Z.
+`scripts/phase0/go_no_go.py` is 29,277 bytes and in `main` (`bef2c56`, PR #31, merged
+2026-10-01T04:43:18Z), while `ls docs/PHASE0_REPORT.md` fails. PR 1 = #13 (merged
+2026-09-30T16:58:09Z) and `wasm/core/CMakeLists.txt:23` holds `MELEE_OPT "-Oz"`. PR 2 = #14
+(`3de2ed3`, 17:19:54Z), and `scripts/phase0/disc_chunks.py`, `scripts/phase0/upload_disc.sh` and its
+guard cases at `scripts/tests/test_deploy_guard.sh:140` exist. PR 4 = #26, #28, #29, #30. PR 5 = #24
+(`b58ce6b`, 22:28:10Z), with `deploy_spike` at `.github/workflows/phase0-build.yml:26` and its step at
+`:311`. `which rclone` answers nothing, which is why `upload_disc.sh:10` already records curl as the
+path. The gates: `python3 -m unittest discover -s scripts/tests` (`Ran 214 tests in 20.066s`, `OK`),
+`python3 scripts/check_no_game_data.py --all` (278 tracked files, clean) and
+`python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked`
+(210 citations in 4 documents, 0 violations).
+
+**Changed.** `docs/PHASE0_DEPLOY_PLAN.md`, section 5: a "Stato al 2026-10-05" note at its head, one
+**Fatta** line per PR group naming the PR and the file or line that proves it, PR 6 marked **a metà**
+(the tool is in `main`, the report is deliberately not), and two instructions corrected in the text —
+the Function's file is `functions/phase0/[[path]].ts`, and `go_no_go.py` is written. Section 6,
+step 14: the bolded "**Il verdetto è scritto.**" keeps its original text and carries the correction
+under it, because the command is written and the verdict is not. `docs/PROGRESS.md`: the current-state
+row "Deploy plan" said "PR 1–6 landed" while the row below it says the report is not written; it now
+says PR 1–5 plus PR 6's tool. Nothing else is edited: this log is append-only and no entry, number or
+claim in it changed.
+
+**Not done, and why.** Nothing was built, dispatched, deployed, uploaded, served or tunnelled, and no
+Cloudflare credential was used. What is blocked, and by what: the verdict by a mid-range Android
+(`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the specification's deciding row is
+unmeasured); any deployment by O1–O10 (Q3's Phase 0 subset, and O1 is a legal judgement);
+`docs/PHASE0_REPORT.md` by those two; Q4, Q5, Q10(b) and Q11 by the operator; the renderer by the eight
+open pull requests that own its files. The emulator branch is blocked by a quota, not by a decision:
+the operator's relaunch loop answers `You've hit your usage limit. … try again at Oct 10th, 2026 5:52
+PM` (`/home/hermes/briefs/codex-emulator.log`) and `/home/hermes/projects/melee-web-emulator` is clean
+at `main`. No workflow, script, renderer, simulation or test-semantics file is touched, and
+`phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull request costs no
+WASM core build. CI decides the rest.
