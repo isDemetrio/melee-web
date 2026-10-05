@@ -185,8 +185,23 @@ errori, traccia identica; il JS di `gxw_draw` scende al **6,6%** dei campioni. M
 #123, 4 coppie alternate: 45,51 / 47,63 / 44,06 / 45,75 → 52,53 / 48,56 / 46,39 / 51,51 ms, **+4,0 ms,
 4 su 4 a sfavore**. Spiegazione coerente con i numeri: il `memcmp` di questo build confronta **un
 byte alla volta** — già nel profilo della sezione 2 il `memcmp` della `ShaderUid` (304 byte) costava
-l'1,78% del fotogramma, ~1,9 ns/byte; su ~2000 byte di costanti fa ~3,8 µs, più del ciclo JS. In
-prova: lo stesso confronto a parole da 8 byte.
+l'1,78% del fotogramma, ~1,9 ns/byte; su ~2000 byte di costanti fa ~3,8 µs, più del ciclo JS.
+
+**A parole da 8 byte: confermato** (PR #125, run 37250152529). Digest identico, 0 errori, traccia
+identica; contro il core di #123, 4 coppie: 45,34 / 48,36 / 43,78 / 44,46 → 41,74 / 43,55 / 39,69 /
+40,93 ms, **−4,0 ms, 0,91×, 4 su 4**.
+
+**Cumulativo, `main` contro #123 + #125** (core di CI, 4 coppie alternate): 55,06 / 53,13 / 56,94 /
+51,91 → 42,19 / 45,82 / 43,46 / 44,75 ms, **−10,2 ms su 54,3, 0,81×, 4 su 4**: il JS del renderer
+che costava il 22,6% del fotogramma attaccato è circa un quinto del fotogramma tolto, con le stesse
+2.744.711 chiamate WebGPU byte per byte.
+
+**Candidati successivi, attribuiti ma non provati** (sezione 2, % del fotogramma):
+- il confronto della `ShaderUid` nella ricerca dello shader passa per lo stesso `memcmp` a byte
+  (1,78%) più il suo hash (0,44%), a ogni segmento;
+- il `std::vector` degli indici è allocato e liberato a ogni segmento (~2,1% con malloc/free);
+- il frame meter della pagina play (sezione 3, 3–7%): scelta dell'operatore;
+- `gxw_bind` 8 volte per draw (2,6–3,0%).
 
 ## 5. Limite dichiarato
 
