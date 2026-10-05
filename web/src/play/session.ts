@@ -4,7 +4,7 @@ import { InputController } from '../input/controller.js';
 import { neutralPad, padStatusBytes } from '../input/pad.js';
 import type { TouchControls } from '../input/touch.js';
 import { storeHeartbeat } from '../spike/heartbeat.js';
-import { createFlight, FLIGHT_HIDDEN } from './frame-meter.js';
+import { createFlight, FLIGHT_HIDDEN, FLIGHT_RESOLUTION } from './frame-meter.js';
 import { RecipeStore } from './pipelines.js';
 import { PLAY_STORAGE_KEY, type PlayReport } from './report.js';
 import { createSharedPad, PRESENTED, publishPad } from './shared-pad.js';
@@ -19,6 +19,12 @@ export interface PlayPerf {
   split: boolean;
   /** presentation.ts's mode name: how the worker hands frames over. */
   presentation: string;
+  /**
+   * resolution.ts's level percent, read on every animation frame: the operator can change the
+   * internal resolution during a match and compare levels in one match (session.ts writes it into
+   * the flight recorder; the worker applies it to the backend between retraces).
+   */
+  resolution(): number;
   line(text: string): void;
 }
 
@@ -72,6 +78,8 @@ export class PlaySession {
       this.input.attach(window);
       const poll = (): void => {
         this.publish();
+        // The operator's current level, read live: the worker applies it between retraces.
+        Atomics.store(this.flight, FLIGHT_RESOLUTION, this.perf.resolution());
         this.perf.report.sample(this.flight, performance.now(), !document.hidden);
         this.animation = requestAnimationFrame(poll);
       };
@@ -124,7 +132,7 @@ export class PlaySession {
         }
       };
       worker.postMessage({ iso, discIdentity, pad: this.shared.buffer, flight: this.flight.buffer, split: this.perf.split,
-        presentation: this.perf.presentation });
+        presentation: this.perf.presentation, resolution: this.perf.resolution() });
     } catch (error) {
       if (!this.disposed) this.fail(String(error));
       else this.log(`Stopped loading: ${String(error)}`);

@@ -245,3 +245,25 @@ test('texture pool evicts past its limit without breaking submitted draws', asyn
   expect(resources.texture.destroyed).toBe(1200 - 1024); // TEXTURE_POOL_LIMIT in gx_webgpu.cpp
   for (const count of Object.values(resources)) expect(count.failed).toBe(0);
 });
+
+// The internal resolution (web/src/play/resolution.ts): the render target is 640*scale x 528*scale,
+// the same geometry is drawn into it, and the XFB copy scales it back up to the target. The clear
+// colour is uniform, so the pixel read back through the scaled blit is the colour the full-resolution
+// path reads: what the backend presents does not depend on the internal resolution, only how many
+// pixels it drew to get there. This is the whole CI claim for the mode -- no runner has the GPU to
+// measure the time it saves (docs/FOUR_PLAYER_LOAD.md).
+test('a 75% internal resolution presents the same clear colour', async ({ page }) => {
+  const result = await selftest(page, `${QUERY}&copies=2&target=texture&resolution=75`);
+  expectReplayed(result, 2, 'texture');
+  expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
+  expect(result.render?.readback).not.toEqual(result.sentinel);
+  expect(result.render?.readback).toEqual(COLOUR_RGBA);
+});
+
+test('a 50% internal resolution presents the same clear colour', async ({ page }) => {
+  const result = await selftest(page, `${QUERY}&copies=2&target=texture&resolution=50`);
+  expectReplayed(result, 2, 'texture');
+  expect(result.render?.errors, JSON.stringify(result.render?.diagnostic, null, 1)).toEqual([]);
+  expect(result.render?.readback).not.toEqual(result.sentinel);
+  expect(result.render?.readback).toEqual(COLOUR_RGBA);
+});

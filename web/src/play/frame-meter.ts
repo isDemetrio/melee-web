@@ -42,7 +42,9 @@ export const FLIGHT_CALL = 2;
 export const FLIGHT_DRAWS = 3;
 export const FLIGHT_HIDDEN = 4;
 export const FLIGHT_MATCH = 5;
-export const FLIGHT_WORDS = 6;
+/** The internal resolution the page asks for, as a percent (resolution.ts). The page writes it. */
+export const FLIGHT_RESOLUTION = 6;
+export const FLIGHT_WORDS = 7;
 export function createFlight(): Int32Array {
   return new Int32Array(new SharedArrayBuffer(FLIGHT_WORDS * Int32Array.BYTES_PER_ELEMENT));
 }
@@ -87,7 +89,10 @@ export const FRAME_COLUMNS = ['retrace', 'match_frame', 'cycle_ms', 'core_ms', '
   'previous_bridge_outside_js_ms', 'bridge_entry_ms', 'residual_unexplained_ms',
   // Presentation (presentation.ts): how the canvas got its picture (PRESENT_*), and the transfer probe,
   // null in frames without one: its whole time, the transfer alone, the probe canvas's pixels and format.
-  'present_mode', 'probe_ms', 'probe_transfer_ms', 'probe_px', 'probe_bgra'] as const;
+  'present_mode', 'probe_ms', 'probe_transfer_ms', 'probe_px', 'probe_bgra',
+  // Internal resolution (resolution.ts): the level this frame was rendered at, its render target's
+  // pixels and the canvas's, so the reduction is visible in the numbers.
+  'res_pct', 'px_drawn', 'px_shown'] as const;
 export type FrameColumn = (typeof FRAME_COLUMNS)[number];
 export const COLUMN = Object.fromEntries(FRAME_COLUMNS.map((name, index) => [name, index])) as Record<FrameColumn, number>;
 
@@ -140,6 +145,8 @@ export class FrameMeter {
   private probeEndAt = 0;
   private presentMode = 0;
   private probe: ProbeTiming | null = null;
+  /** The internal resolution this frame was rendered at (resolution.ts); the worker sets it. */
+  private resolution = { pct: 100, pxDrawn: 640 * 528, pxShown: 640 * 480 };
   private resume = BOOT;
   private draws = 0;
   private discMs = 0;
@@ -223,6 +230,15 @@ export class FrameMeter {
   draw(): void {
     this.draws++;
     this.flight[FLIGHT_DRAWS] = this.draws;
+  }
+
+  /**
+   * The internal resolution the frames from here on are rendered at (resolution.ts). The worker
+   * applies the level to the backend first, then records it, so a frame's row never names a level
+   * the frame was not drawn at.
+   */
+  setResolution(level: { pct: number; pxDrawn: number; pxShown: number }): void {
+    this.resolution = level;
   }
 
   /** The retrace beat: the core part of the frame ends; presentation starts. */
@@ -327,6 +343,7 @@ export class FrameMeter {
       present_mode: this.presentMode, probe_ms: this.probe ? round(this.probeEndAt - this.ackEndAt) : null,
       probe_transfer_ms: this.probe ? round(this.probe.transferMs) : null, probe_px: this.probe?.px ?? null,
       probe_bgra: this.probe ? (this.probe.bgra ? 1 : 0) : null,
+      res_pct: this.resolution.pct, px_drawn: this.resolution.pxDrawn, px_shown: this.resolution.pxShown,
       decode_ms: this.split ? round(this.split.decodeMs) : null,
       non_decode_ms: this.split ? round(this.split.nonDecodeMs) : null,
     };

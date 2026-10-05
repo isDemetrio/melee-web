@@ -60,6 +60,8 @@ export interface PerfMeta {
   crossOriginIsolated: boolean;
   /** presentation.ts's mode name; absent before the presentation experiments. */
   presentation?: string;
+  /** resolution.ts's level percent at start; absent before the internal-resolution mode. */
+  resolution?: number;
 }
 
 /** The page's canvas as the phone shows it, for the transferred / shown pixel ratio. */
@@ -243,6 +245,33 @@ function countStats(values: number[]) {
   const total = values.reduce((a, b) => a + b, 0);
   return { count: values.length, mean: round(total / values.length), p95: nearestRank(values, 0.95),
     max: Math.max(...values), total };
+}
+
+/**
+ * The internal resolution levels a session used (resolution.ts), and what each cost: the per-frame
+ * rows grouped by `res_pct`, so a match that changed level carries both halves and the two can be
+ * compared frame by frame. `px_drawn` is the internal render target's pixels (the resolution the
+ * frame was drawn at, 640x528 scaled); `px_shown` is the canvas's (640x480, constant).
+ */
+export function resolutionSummary(rows: Row[]) {
+  const visible = rows.filter((row) => value(row, 'hidden') === 0);
+  if (!visible.length) return null;
+  const levels = [...new Set(visible.map((row) => value(row, 'res_pct')))].sort((a, b) => b - a);
+  const stats = (values: number[]) => values.length ? { count: values.length, mean: round(mean(values)),
+    p50: nearestRank(values, 0.5), p95: nearestRank(values, 0.95), p99: nearestRank(values, 0.99) } : null;
+  const by_level: Record<string, unknown> = {};
+  for (const pct of levels) {
+    const these = visible.filter((row) => value(row, 'res_pct') === pct);
+    by_level[`${pct}%`] = {
+      frames: these.length, px_drawn: these.length ? value(these[0]!, 'px_drawn') : null,
+      px_shown: these.length ? value(these[0]!, 'px_shown') : null,
+      cycle_ms: stats(these.map((row) => value(row, 'cycle_ms'))),
+      core_ms: stats(these.map((row) => value(row, 'core_ms'))),
+      webgpu_ms: stats(these.map((row) => value(row, 'webgpu_ms'))),
+      bitmap_ms: stats(these.map((row) => value(row, 'bitmap_ms'))),
+    };
+  }
+  return { levels, by_level };
 }
 
 /**
@@ -478,6 +507,7 @@ export class PlayReport {
       `${(1000 / cycle).toFixed(0)} fps, ${cycle.toFixed(1)} ms/frame = core ${mean('core_ms').toFixed(1)} ` +
       `(WebGPU ${mean('webgpu_ms').toFixed(1)} in ${mean('webgpu_calls').toFixed(0)} calls, ${mean('draws').toFixed(0)} draws) ` +
       `+ bitmap ${mean('bitmap_ms').toFixed(1)} + page ${mean('ack_ms').toFixed(1)} + idle ${mean('idle_ms').toFixed(1)} · ` +
+      `internal ${value(last, 'res_pct').toFixed(0)}% (${value(last, 'px_drawn').toFixed(0)} px drawn) · ` +
       `slow frames ${this.slowTotal} · freezes ${this.freezesTotal}`;
   }
 
@@ -520,6 +550,9 @@ export class PlayReport {
       sampled_phases: this.sampled(),
       page_transfer_ms: transfers.length ? countStats(transfers) : null,
       presentation: presentationSummary(rows, this.meta?.presentation ?? null, this.display),
+      // The internal resolution levels used (resolution.ts), grouped so a match that changed level
+      // carries both halves; the px_drawn / px_shown columns are in frames_csv too.
+      resolution: resolutionSummary(rows),
       // The spike's own statistics over the core's sim_times rows: sim_ms is the core's measure of core_ms.
       stats_all: statsAll, stats_in_match: statsInMatch,
       decoder_cost: split ? decoderCostReport('profile', true, `${DECODER_COST_HEADER}\n${this.decoder.slice(-ROWS_KEPT).join('\n')}`) : null,

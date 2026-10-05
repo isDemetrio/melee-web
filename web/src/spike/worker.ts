@@ -58,7 +58,7 @@ interface RunRequest {
    * The render test (web/tests/spike/render.spec.ts): feed the decoder `copies` clearing XFB copies.
    * `target: 'texture'` renders into an offscreen texture instead of a canvas (gpu.ts says why).
    */
-  selftest?: { argb: number; copies: number; repeats: number; geometry: number; sampleX: number; target?: 'canvas' | 'texture' };
+  selftest?: { argb: number; copies: number; repeats: number; geometry: number; sampleX: number; target?: 'canvas' | 'texture'; resolution?: number };
 }
 
 /** What the renderer did, reported in the result; `null` when no canvas was handed in. */
@@ -155,6 +155,9 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     const coreLoadMs = performance.now() - startedMs;
     scope.postMessage({ type: 'core', commit: meta.commit, opt: meta.opt, coreLoadMs });
     if (gpu) { mark(gpu, 'core instantiated'); await probe(gpu, 'after core, before attach'); }
+    // The internal resolution (play/resolution.ts): set before the attach, which is when the
+    // backend sizes its render target from it. 100 (or absent) is the full-resolution path.
+    if (gpu) gpu.scale = Math.min(1, Math.max(0.01, (selftest?.resolution ?? 100) / 100));
     const attached = opening ? attach(core, gpu, opening.reason) : null;
     if (gpu) mark(gpu, `attach returned ${attached?.attached}`);
     if (selftest) {

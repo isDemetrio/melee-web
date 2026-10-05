@@ -73,6 +73,12 @@ export interface SpikeGpu {
    * `bgra8unorm` is the play page's presentation experiment (play/presentation.ts says why).
    */
   format: CanvasFormat;
+  /**
+   * The internal resolution scale the backend creates its render target at (play/resolution.ts):
+   * set by the worker before `_gx_webgpu_attach`, read by `gxw_open` and `gxw_set_scale`. Absent or
+   * 1 is the full-resolution path before this mode.
+   */
+  scale?: number;
   /** Written by the backend: the last clear colour (ARGB), and why it stopped if it did. */
   lastClearArgb?: number;
   failure?: string;

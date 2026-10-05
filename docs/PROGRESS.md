@@ -3995,3 +3995,43 @@ scripts/tests` → `Ran 214 tests in 21.892s`, `OK`; `python3 scripts/check_no_g
 `291 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py
 --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` → `210 citations in 4
 documents, 0 violation(s)` (its four documents are the maps, not this one). CI decides the rest.
+
+## 2026-10-05 12:4x UTC — internal resolution: a presentation-only reduced render target
+
+**What and why.** The operator's iPhone lag tracks the pixels covered, not the draws: inside a match the
+slowest decile is 55.59 ms for 42% more draws (2869 vs 2023), three times a fast frame's 18.85 ms — the
+signature of fill rate, and the camera zooming out or a special effect covers more. This adds a
+**presentation-only** internal-resolution mode so he can measure how much of the lag is that fill. It
+renders the frame at 100%, 75% or 50% of the 640×528 EFB and scales it up to the 640×480 canvas; the
+geometry, commands and materials are unchanged and only the pixels filled change.
+
+**State.** Branch `feat/internal-resolution`, based on `d9a1838` (PR #137's merge); pull request open.
+The mode is complete and the local gates are green; CI (a WASM core build and the browser render tests)
+decides the rest, and **CI cannot measure the gain** — a headless runner has no GPU, so fill rate does
+not exist there and any number it produced would be false (`docs/FOUR_PLAYER_LOAD.md`). CI proves only
+that the game did not change: the 2400-checkpoint trace is byte-identical (it runs the node core, which
+carries no WebGPU backend), and two new `render.spec.ts` tests read the clear colour back through the
+scaled blit at 75% and 50%.
+
+**How it is wired.** `web/src/play/resolution.ts` is the model (levels, wire percent, pixels drawn vs
+shown). The Game screen's report panel gets an `internal resolution` `<select>` beside `presentation`,
+read live so one match can compare levels; `session.ts` writes the level into a new flight-recorder word
+(`FLIGHT_RESOLUTION`), and the play worker applies it to the backend between retraces. New per-frame
+columns `res_pct`, `px_drawn`, `px_shown`, and a report `resolution` block grouped by level. The backend
+(`wasm/render/gx_webgpu.cpp`) sizes its render target from `gpu.scale` (`gxw_open`/`makeEfb`), scales
+the scissor with the viewport, scales the EFB-copy source rectangle, and on the XFB copy blits the
+reduced EFB back up to the target through one pipeline created before `callMain`; `gx_webgpu_resolution`
+(pct) resizes between retraces. **At scale 1 every path is the one that ran before.**
+
+**The WebGPU call digest will change, and that is expected.** The geometry, the commands and the
+materials are the same; the viewport is not, and the XFB copy is a blit rather than a
+`copyTextureToTexture`. That is the mode doing its job, not a defect, and it is stated rather than
+hidden. No graphics oracle was run here (it needs a GPU); if one exists it should confirm vertices,
+commands and materials are unchanged, and a viewport-sensitive comparison is expected to differ.
+
+**Not done, and why.** No number for the gain is promised or invented: only the operator's phone can
+measure it (`docs/PRESENTATION_COST.md`, "Internal resolution", has the two-line procedure). Nothing was
+built or dispatched from this machine. The gates that can run here are green on the edited tree:
+`python3 -m unittest discover -s scripts/tests` → `Ran 214 tests in 21.242s`, `OK`;
+`python3 scripts/check_no_game_data.py --all` → `294 tracked file(s) checked, no game data, no oversized
+files`; `python3 scripts/check_docs.py` → `210 citations in 4 documents, 0 violation(s)`.
