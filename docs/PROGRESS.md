@@ -18,7 +18,7 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Area | State | Evidence |
 | --- | --- | --- |
 | Disc image, `main.dol` | verified against independent public sources | `docs/OPEN_QUESTIONS.md` Q1, Q2 |
-| Recompiled core | builds and links in CI at `-Oz`; 16,323,255 bytes web, 16,323,657 Node | `Phase 0 — WASM core` on `main`; `docs/OPEN_QUESTIONS.md` Q8 |
+| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,278,441 bytes web, 15,232,193 Node** on `main` at `696ec4f` | `Phase 0 — WASM core`, run 37263947515; the number moves with every commit, so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
 | Determinism | 2400/2400 checkpoints identical to the native reference, trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | re-checked 2026-10-05 with `scripts/phase0/compare_checkpoints.py` on the stored iPhone trace: `identical: 2400 retraces` |
 | Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" |
 | Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
@@ -3761,3 +3761,52 @@ reference's and the choice is the operator's. The device rows M1/M2/M5, the verd
 `docs/PHASE0_REPORT.md` are unchanged and still wait on the operator. On the VPS, all without a build:
 `python3 -m unittest discover -s scripts/tests` (`Ran 210 tests in 19.893s`, `OK`) and `python3
 scripts/check_no_game_data.py --all` (275 tracked files, clean). CI decides the rest.
+
+## 2026-10-05 — the shipped module is 15,278,441 bytes, and three documents still gave the size it had before the `wasm-opt` step (cron, `cron/phase0-oct5e`)
+
+**Why this and not something else.** Every autonomous step of `docs/PHASE0_DEPLOY_PLAN.md` section 6
+is done or held by the operator — steps 1-5 done, step 6 the O1 decision, step 7 the M1/M2 device
+runs, steps 8-13 those rows or the credentials, step 14 the verdict and `docs/PHASE0_REPORT.md` — and
+the renderer is in flight on the branches the operator owns (`wasm/render/**`, `web/src/spike/**`,
+`native/**`: PR #70, #100, #101, #104, #112, #113, #117, #124). What was left is not a step of the
+plan but a defect in the documents the next session resumes from and the operator is about to follow:
+the size of the module, which three of them state in the present tense and none of them states
+correctly.
+
+**Measured 2026-10-05, with the run that reports it.** `Phase 0 — WASM core` on `main` at `696ec4f`
+(run 37263947515, success, 2026-10-05 04:32 UTC) reports, in its own size step,
+"wasm_bytes": 15232193 for `melee_core_node.wasm` and "wasm_bytes": 15278441 for
+`melee_core_web.wasm`, both `within_pages_limit: true` against `pages_limit_bytes: 26214400`, and its
+`wasm-opt` step logs `melee_core_node.wasm 15237276 -> 15232193 bytes` and
+`melee_core_web.wasm 15283496 -> 15278441 bytes`. That post-processing step is not old:
+`git log --oneline -S wasm-opt -- .github/workflows/phase0-build.yml` names `8f44970` (PR #43,
+"perf: post-process the shipped modules with wasm-opt, and check they still compile"), merged
+2026-10-01 12:50 UTC. Before it the shipped `-Oz` module was the **16,323,255** bytes of
+`docs/OPEN_QUESTIONS.md` Q8 and of `docs/PHASE0_DEPLOY_PLAN.md` section 0.3, and the 2026-09-30 `-O1`
+build of the same plan was **87,118,045** bytes.
+
+**Changed.** Four present-tense claims, each naming its evidence now: `docs/PROGRESS.md`, the
+current-state table row "Recompiled core" (it said 16,323,255 web and 16,323,657 Node with no run
+behind them); `docs/DEPLOY.md` section 1 (16,323,255); `docs/PHASE0_DEVICE_PLAN.md` section 3, the
+memory row (87 MB) and section 7, the download risk row (87 MB). The device plan is the one that
+matters here: section 2 V2 already listed the seven local `dist` copies at 15,248,094-15,254,426
+bytes from 2026-10-02 and corrected the old 87.1 MB expectation, while section 3 and section 7 went
+on telling the operator that the module is 87 MB — so the download and memory risk the device
+session is preparing for was stated 5.7 times too large. `docs/PROGRESS.md` is this entry.
+
+**Not changed, and why.** Q8 of `docs/OPEN_QUESTIONS.md`, sections 0.3, 1 and 3 of
+`docs/PHASE0_DEPLOY_PLAN.md`, `docs/OPT_LEVEL_EXPERIMENT.md` and `docs/WASM_OPT_EXPERIMENT.md` keep
+their numbers: each names the run it measured (36753728272, 36776512026, 37232193610), so they are
+measurements of a date and not claims about today. The conclusion they support is unchanged — at
+15,278,441 bytes the web module is 58.3% of the 26,214,400-byte per-file limit of Pages, further
+under it than the 16,323,255 they record. The exact figure moves with every commit, which is why
+the corrected row names the run and says so.
+
+**Not done, and why.** Nothing was built, dispatched, deployed or uploaded, and no Cloudflare
+credential was used: every number above comes from the log of a run that was already green. On the
+VPS, all without a build: `python3 -m unittest discover -s scripts/tests` (Ran 214 tests in 19.634s,
+OK), `python3 scripts/check_no_game_data.py --all` (278 tracked files, clean) and `python3
+scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` (210
+citations in 4 documents, 0 violations). No workflow, script, renderer, simulation or
+test-semantics file is touched, and `phase0-build.yml` does not list `docs/` in its
+pull_request.paths, so this pull request costs no WASM core build. CI decides the rest.
