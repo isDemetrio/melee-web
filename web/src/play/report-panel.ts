@@ -1,6 +1,6 @@
 import { loadHeartbeat, type StoredHeartbeat } from '../spike/heartbeat.js';
 import { h } from '../ui/context.js';
-import { PRESENTATION_MODES } from './presentation.js';
+import { offeredModes } from './presentation.js';
 import { PLAY_STORAGE_KEY, PlayReport } from './report.js';
 import type { PlayPerf } from './session.js';
 
@@ -33,7 +33,7 @@ export class ReportControls {
   readonly split = h('input', { id: 'game-split', type: 'checkbox' });
   /** How frames are handed to the page (presentation.ts); anything but `direct` is an experiment. */
   readonly presentation = h('select', { id: 'game-presentation', 'aria-label': 'Presentation' },
-    PRESENTATION_MODES.map((mode) => h('option', { value: mode.name, text: mode.name })));
+    offeredModes(location.search).map((mode) => h('option', { value: mode.name, text: mode.name })));
   readonly element: HTMLElement;
   private report: PlayReport | null = null;
   private previous: StoredHeartbeat | null = null;
@@ -43,8 +43,10 @@ export class ReportControls {
     if (typeof stored === 'string') this.line.textContent = stored;
     else if (stored) {
       this.previous = stored;
-      const perf = (stored.perf ?? {}) as { state?: string; line?: string };
-      this.line.textContent = `previous session (${stored.startedAt}): ${perf.state ?? 'unknown state'}; ` +
+      const perf = (stored.perf ?? {}) as { state?: string; line?: string; presentation?: { mode?: string } };
+      // A session the page never saw end -- it closed, or the browser killed it -- is still `running`.
+      const state = perf.state === 'running' ? 'did not end (the page closed or was killed)' : perf.state ?? 'unknown state';
+      this.line.textContent = `previous session (${stored.startedAt}, presentation ${perf.presentation?.mode ?? 'unknown'}): ${state}; ` +
         `last heartbeat frame ${stored.last?.frame ?? 'none'}; ${perf.line ?? ''} — Save report sends it`;
     }
     const save = h('button', { id: 'game-report', text: 'Save report', onClick: () => {

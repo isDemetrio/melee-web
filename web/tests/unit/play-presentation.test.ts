@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COLUMN, createFlight, FRAME_COLUMNS, FrameMeter, type FrameColumn, type FrameRecord } from '../../src/play/frame-meter';
-import { ALTERNATE_BLOCK, PRESENT_DIRECT, PRESENT_LATE, PRESENT_LATE_FIRST, presentationMode, Presenter, PROBE_EVERY,
+import { ALTERNATE_BLOCK, offeredModes, PRESENT_DIRECT, PRESENT_LATE, PRESENT_LATE_FIRST, presentationMode, Presenter, PROBE_EVERY,
   PROBE_FORMATS, PROBE_SIZES, TransferProbe, type PresentGpu } from '../../src/play/presentation';
 import { alternatePairs, BLOCK_MIN_FRAMES, BLOCK_SETTLE, presentationSummary } from '../../src/play/report';
 
@@ -59,6 +59,12 @@ describe('presentation modes', () => {
     expect(presentationMode('bgra-alternate')).toMatchObject({ format: 'bgra8unorm', schedule: 'alternate' });
     expect(presentationMode(undefined)).toMatchObject({ name: 'direct', format: 'rgba8unorm', schedule: 'direct' });
     expect(presentationMode('nonsense').name).toBe('direct');
+  });
+  it('lists the probe only to a page opened with ?probe (the bgra-probe crash)', () => {
+    expect(offeredModes('').map((mode) => mode.name)).toEqual(['direct', 'alternate', 'bgra', 'bgra-alternate']);
+    expect(offeredModes('?disc=x').map((mode) => mode.name)).not.toContain('bgra-probe');
+    expect(offeredModes('?probe').map((mode) => mode.name)).toEqual(
+      ['direct', 'probe', 'alternate', 'bgra', 'bgra-probe', 'bgra-alternate']);
   });
 });
 

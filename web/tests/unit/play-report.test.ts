@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadHeartbeat, storeHeartbeat } from '../../src/spike/heartbeat';
 import { COLUMN, createFlight, FLIGHT_CALL, FLIGHT_DRAWS, FLIGHT_FRAME, FLIGHT_MATCH, FLIGHT_PHASE, FRAME_COLUMNS,
   METHODS, PHASES, type FrameColumn, type FrameRecord, type MethodTotals } from '../../src/play/frame-meter';
-import { FREEZE_MS, motive, NOT_MEASURED, PLAY_STORAGE_KEY, PlayReport, summarize, type PerfMeta } from '../../src/play/report';
+import { FREEZE_MS, motive, NOT_MEASURED, PLAY_STORAGE_KEY, PlayReport, STORED_ROWS, summarize, type PerfMeta } from '../../src/play/report';
 
 /** A frame record from named cells; every other cell 0, the split columns null. */
 function row(cells: Partial<Record<FrameColumn, number>>, top?: FrameRecord['top']): FrameRecord {
@@ -164,6 +164,31 @@ describe('persisted record', () => {
       logTail: ['scene: major 02 minor 02 (frame 1395)'] });
     expect(loaded.perf).toMatchObject({ schema: 'melee-play-perf/1', state: 'running', frames_total: 1, core_split: true,
       last_600_frames: { frames: 1, core_split_percent_of_time: { decode: 56.3, non_decode: 43.8 } } });
+  });
+
+  it('says what a probe session that closed the page was doing in its last frames', () => {
+    const report = new PlayReport(false, 0);
+    report.onMeta({ ...meta, presentation: 'bgra-probe' });
+    // A probe after every second frame, as the worker records it: null in the frames without one.
+    const rows = Array.from({ length: STORED_ROWS + 5 }, (_, i) => {
+      const record = row({ retrace: i + 1, cycle_ms: 16, core_ms: 16, probe_ms: 3, probe_transfer_ms: 2.5,
+        probe_px: 1228800, probe_bgra: 1 });
+      if (i % 2 === 0) for (const column of ['probe_ms', 'probe_transfer_ms', 'probe_px', 'probe_bgra'] as const) record.row[COLUMN[column]] = null;
+      return record;
+    });
+    report.onBatch({ rows, totals, notes: [], sim: [], decoder: [] });
+    const perf = report.stored(0).perf as { state: string; presentation: { mode: string; probe_transfer_ms: unknown };
+      last_frames_csv: string };
+    expect(perf.state).toBe('running');
+    expect(perf.presentation.mode).toBe('bgra-probe');
+    expect(perf.presentation.probe_transfer_ms).toMatchObject({ '1228800 px bgra8unorm': { count: (STORED_ROWS + 5 - 1) / 2 } });
+    const [header, ...lines] = perf.last_frames_csv.split('\n');
+    expect(header).toBe(FRAME_COLUMNS.join(','));
+    expect(lines).toHaveLength(STORED_ROWS);
+    const last = lines.at(-1)!.split(',');
+    expect(last[COLUMN.retrace]).toBe(String(STORED_ROWS + 5));
+    expect(last[COLUMN.probe_px]).toBe('');
+    expect(lines.at(-2)!.split(',')[COLUMN.probe_px]).toBe('1228800');
   });
 });
 
