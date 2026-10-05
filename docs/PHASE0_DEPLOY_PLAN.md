@@ -485,9 +485,41 @@ dell'operatore; **[credenziali]** serve O2–O9; **[device]** serve l'operatore 
     (PR #31) e decide la riga iPhone (`VERDICT: DESKTOP-ONLY`), mentre `docs/PHASE0_REPORT.md`
     aspetta la riga che decide (M2).
 
+**Stato al 2026-10-05: i passi 9–11 non sono più in attesa, e di O1–O10 resta una decisione sola.**
+Verificato oggi da questa macchina, senza usare alcuna credenziale Cloudflare, senza toccare il deploy
+e senza un telefono, ogni fatto con la sua prova:
+
+- **O5 è fatto, quindi il passo 11 è eseguibile così com'è**: `gh api
+  repos/isDemetrio/melee-web/actions/secrets` elenca `CLOUDFLARE_API_TOKEN` e
+  `CLOUDFLARE_ACCOUNT_ID`, e `gh api repos/isDemetrio/melee-web/actions/variables` risponde
+  `CF_PAGES_PROJECT=melee-web`.
+- **O2 e O3 sono in uso**: il bucket privato `melee-phase0-disc` esiste e **contiene il disco**. La
+  prova più recente è di oggi: la run `37300691991` (`four-player-load.yml`, 2026-10-05 11:05 UTC,
+  `success`) registra `Downloading "melee-ntsc102.iso" from "melee-phase0-disc"` e poi `disc image
+  verified: 1459978240 bytes, sha1 d4e70c064cc714ba8400a849cf299dbd1aa326fc`. Lo stesso oggetto è
+  quello che `ci.yml`'s `checkpoint-replay` legge, misurato il 2026-10-03 (run `37148808325`,
+  download in 27 s, `docs/ATTRIBUTE_RESIDUAL.md`). Che il bucket non abbia accesso pubblico `r2.dev`
+  resta una proprietà del pannello che questa macchina non può leggere.
+- **O6 e O7 sono fatti, e il servizio concorda con il file**: oggi una richiesta a
+  `https://phase0-spike.melee-web.pages.dev/spike.html` riceve la pagina di login di Access ("Log in
+  to melee-web phase0 spike preview", team `jolly-frost-8cc9.cloudflareaccess.com`), e il claim `aud`
+  di quel flusso è `a3079f1bb92f23c5299cc29d4436377594caa9cfc3b655c3571206548028906d` — il valore che
+  `wrangler.toml` righe 18 e 48 tengono come `ACCESS_AUD`; O8 è alle righe 52–57 dello stesso file.
+- **Il passo 11 è già stato eseguito almeno una volta**: la run `36868675226` (2026-10-01 13:26 UTC,
+  `success`, `head_sha 63511ce6…`) ha pubblicato l'anteprima dietro Access, ed è l'entry "The spike is
+  live on Pages, behind Access" di `docs/PROGRESS.md`. Il core servito è però quello del 2026-10-01:
+  un deploy con il core di `main` resta da fare, ed è la pagina di M5.
+- **Cosa resta davvero di O1–O10**: O1 (la decisione legale — l'unica voce di §3 che non è una
+  credenziale), O10 (il modello dell'Android) e, **solo** se il disco va ricaricato o l'agente deve
+  interrogare l'anteprima con `curl`, le chiavi S3 (O4) e il service token opzionale (O9).
+
 Se le credenziali tardano, il verdetto si può scrivere dopo il passo 8 con M1 e M2, annotando
-che M5 manca; la riga M5 si aggiunge dopo. Se il core servito è ancora `-O1` (passo 1 non fatto),
-ogni esito diverso da GO è **provvisorio** (`docs/PHASE0_NEXT.md` S11).
+che M5 manca; la riga M5 si aggiunge dopo. **Correzione 2026-10-05**: il caso del core `-O1` non può
+presentarsi, perché il passo 1 è fatto (§5, "Fatta"): `wasm/core/CMakeLists.txt` riga 23 tiene
+`MELEE_OPT` a `-Oz`, e `core.json` della run `37319576228` dice
+`{"commit":"fe2e06be…","opt":"-Oz"}`. La regola del provvisorio è cablata su `-O1`
+(`scripts/phase0/go_no_go.py` riga 77: `PROVISIONAL_OPTS = ('-O1',)`), quindi un esito diverso da GO
+misurato sul core che la CI spedisce esce **definitivo**, non provvisorio.
 
 Alla fine della Fase 0: cancellare il disco dal bucket (o il bucket), togliere il binding
 `PHASE0_DISC`, e cancellare il disco dall'OPFS dei telefoni con il bottone della pagina.

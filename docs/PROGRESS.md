@@ -23,16 +23,19 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU, and since PR #138 an internal-resolution lever (100/75/50%) for measuring how much of the lag is fill rate. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" and the last entry; `docs/PRESENTATION_COST.md`, "Internal resolution" |
 | Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
 | Device row — mid-range Android, the row that decides | **not measured: there is no such device** | `docs/OPEN_QUESTIONS.md` Q9 |
-| Deploy plan | PR 1–5 landed, plus PR 6's tool (`scripts/phase0/go_no_go.py`, PR #31 — `docs/PHASE0_REPORT.md` is the row below), and `disc-chunks.json` computed; nothing deployed and no Cloudflare credential used | `docs/PHASE0_DEPLOY_PLAN.md` section 6 |
+| Deploy plan | PR 1–5 landed, plus PR 6's tool (`scripts/phase0/go_no_go.py`, PR #31 — `docs/PHASE0_REPORT.md` is the row below), and `disc-chunks.json` computed; the Cloudflare side is in place and in use — the bucket holds the disc (run 37300691991, 2026-10-05), the Pages token and account ID are repository secrets and `CF_PAGES_PROJECT` is set, and the spike preview is published behind Access (run 36868675226, 2026-10-01) | `docs/PHASE0_DEPLOY_PLAN.md` section 6, "Stato al 2026-10-05" |
 | `docs/PHASE0_REPORT.md` (P0-12) | **not written**: it carries the verdict and waits on the deciding device row | `docs/PHASE0_DEPLOY_PLAN.md` section 6, step 14 |
 | Repository visibility | public; whether that is intended is the operator's call | `docs/OPEN_QUESTIONS.md` Q11 |
 
-**Open blockers.** Q3's Phase 0 subset, O1–O10 — a Cloudflare account with R2, a private bucket, S3
-keys scoped to it, the Pages token and account ID, Access, and O1's legal judgement. It does **not**
-block the go/no-go: the plan keeps that on the tailnet route, which needs no Cloudflare credential.
-Then the mid-range Android row, without which the specification's verdict cannot be reached at all,
-and the operator's decisions Q4, Q5, Q10(b) and Q11. `docs/OPEN_QUESTIONS.md` is the list, with what
-each one blocks.
+**Open blockers.** Of the ten items of `docs/PHASE0_DEPLOY_PLAN.md` section 3 only O1 is a decision and
+only O10 is hardware: the account with R2, the private bucket with the disc in it, the Pages token and
+account ID, `CF_PAGES_PROJECT` and the Access application exist and are in use — the dated note in
+section 6 of that plan carries the proof of each one — so O4's S3 keys are needed only if the disc has
+to be re-uploaded and O9's service token is optional. What is left is O1's legal judgement and the
+mid-range Android row, without which the specification's verdict cannot be reached at all, and the
+operator's decisions Q4, Q5, Q10(b) and Q11. It does **not** block the go/no-go: the plan keeps that
+on the tailnet route, which needs no Cloudflare credential. `docs/OPEN_QUESTIONS.md` is the list, with
+what each one blocks.
 
 **Next step.** Of `docs/PHASE0_DEPLOY_PLAN.md` section 6, steps 1–5 are done and the first step not
 done is step 6 — an operator decision (O1, which Android, which route). The first step that needs
@@ -4136,3 +4139,64 @@ size, and the −2.1 ms is reported, not claimed.
 **Not done.** No renderer, netcode, simulation or recompiler change; no build outside Actions; no
 deployment. The memory helpers (28.4% of the skinning subtree) and the FIFO path (15.3%) are named
 in the new document as out of scope for this change.
+
+## 2026-10-05 — the resume point says nothing was deployed and no Cloudflare credential was used, while the bucket holds the disc and the preview is published behind Access (cron, `cron/phase0-oct5k`)
+
+**Why this and not something else.** Every step of `docs/PHASE0_DEPLOY_PLAN.md` section 6 that needs
+neither a credential, a phone nor a decision is done — steps 1–5 landed, step 6 is the O1/Android/route
+decision, step 7 is M1/M2 on hardware this machine does not have, step 8 is applied by
+`scripts/phase0/go_no_go.py` itself to every JSON that exists, steps 9–11 are the Cloudflare
+credentials and the deploy, steps 12–13 are the Android, and step 14 is the verdict, whose
+`docs/PHASE0_REPORT.md` waits on the row that decides. The renderer is held by the open pull requests
+that own its files (#70, #100, #101, #104, #112, #113, #117, #124) and the operator merged three pull
+requests of his own in the hour before this run (#138, #139, #141). So this session read the two
+documents that decide what is left — section 6 and this file's own resume point — against the
+repository, and the resume point's deploy row is false in the direction that costs the most: it says
+"nothing deployed and no Cloudflare credential used", and its blocker list asks the operator for a
+Cloudflare account, a bucket, the Pages token and account ID and Access, all of which exist and are in
+use.
+
+**Verified 2026-10-05, without a build, without a Cloudflare credential and without a device**, each
+fact being an API answer, a run's own log or a live HTTP response:
+
+- **The repository carries the Pages credential and the project variable**: `gh api
+  repos/isDemetrio/melee-web/actions/secrets` answers `CLOUDFLARE_ACCOUNT_ID`,
+  `CLOUDFLARE_API_TOKEN` and `DOL_REPO_TOKEN`, and `.../actions/variables` answers
+  `CF_PAGES_PROJECT=melee-web`. That is O5 of section 3, and it is what step 11 needs.
+- **The private bucket exists and holds the disc**: run `37300691991` (`four-player-load.yml`,
+  2026-10-05 11:05 UTC, success) logs `Downloading "melee-ntsc102.iso" from "melee-phase0-disc"` and
+  then `disc image verified: 1459978240 bytes, sha1 d4e70c064cc714ba8400a849cf299dbd1aa326fc`. The
+  same object is what `ci.yml`'s `checkpoint-replay` reads, measured on 2026-10-03 (run `37148808325`,
+  27 s; `docs/ATTRIBUTE_RESIDUAL.md`).
+- **The Access application is live and agrees with `wrangler.toml`**: a request to
+  `https://phase0-spike.melee-web.pages.dev/spike.html` today answers the Access login page ("Log in to
+  melee-web phase0 spike preview", team `jolly-frost-8cc9.cloudflareaccess.com`), and the `aud` claim of
+  that flow is `a3079f1bb92f23c5299cc29d4436377594caa9cfc3b655c3571206548028906d` — the value
+  `wrangler.toml` lines 18 and 48 carry as `ACCESS_AUD`. O8 is at lines 52–57 of the same file.
+- **The preview was published**: run `36868675226` (2026-10-01 13:26 UTC, success, `head_sha
+  63511ce6…`) — the deploy `docs/PHASE0_DEVICE_PLAN.md` section 5 calls "deploy 36868675226" and this
+  file records as "The spike is live on Pages, behind Access". The core it serves is that day's, so a
+  deploy with `main`'s core is still to be done: that is M5's page, not a missing credential.
+
+**Changed.** `docs/PROGRESS.md`, the resume point: the "Deploy plan" row and the "Open blockers"
+paragraph. `docs/PHASE0_DEPLOY_PLAN.md`, section 6: a dated "Stato al 2026-10-05" note after step 11
+with the four proofs above and what genuinely remains of O1–O10 (O1, O10, and O4/O9 only for a re-upload
+or a `curl` session), plus the correction of the closing paragraph, which still made a verdict
+provisional on a core at `-O1`: step 1 landed on 2026-09-30 (§5, "Fatta"), `wasm/core/CMakeLists.txt`
+line 23 holds `MELEE_OPT` at `-Oz`, and `scripts/phase0/go_no_go.py` line 77 pins that rule to `-O1`
+(`PROVISIONAL_OPTS = ('-O1',)`), so a non-GO measured on the core the CI ships is final. This entry. No
+number is invented and no historical measurement is changed.
+
+**Not done, and why.** Nothing was built, dispatched, deployed, uploaded, served or tunnelled: no
+`tailscale serve`, no `deploy_spike`, no Cloudflare credential used from this machine, and no file of
+the operator's in-flight pull requests (#140, and the renderer drafts) was touched. What stays
+unverified here, and by what: whether the preview deployment is still live and serves the disc (Access
+answers before any content, and this machine holds no Cloudflare credential), the panel-side properties
+of O3 and O4 (no public `r2.dev` access, the scoping of the S3 keys), and whether O9's service token was
+ever created. The verdict is still blocked by the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9) and
+`docs/PHASE0_REPORT.md` by that verdict. The gates that can run here are green on the edited tree:
+`python3 -m unittest discover -s scripts/tests` → `Ran 214 tests in 17.870s`, `OK (skipped=1)`;
+`python3 scripts/check_no_game_data.py --all` → `OK: 295 tracked file(s) checked, no game data, no
+oversized files`; `python3 scripts/check_docs.py --submodule
+/home/hermes/projects/melee-web/upstream/melee-unlocked` → `210 citations in 4 documents, 0
+violation(s)`. CI decides the rest.
