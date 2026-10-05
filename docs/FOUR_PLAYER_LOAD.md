@@ -24,11 +24,41 @@ The split is the point: **+16.57 ms of simulation and +218 draws per frame** for
 characters. Draw calls rise 32%; simulation rises 49%. Four players is a real cost increase, not a
 rounding error, and it lands on the core, which is the side the project has been optimising.
 
-`sim_ms` here is the same quantity the browser reports as `core_ms` (see `docs/CORE_COST_BROWSER.md`,
-which measures the core timer headlessly because the browser's `core_ms` wraps it). Applying the
-ratio to the iPhone's 10.15 ms core would give about 15 ms, and a cycle of about 37 ms, i.e. about
-27 fps -- but that is an **extrapolation across machines and is not measured here**. What is
-measured is the ratio, on the CI machine, for the same match.
+### This ratio comes from CI on the VPS, not from the phone
+
+Every millisecond above was measured headlessly on the GitHub Actions runner (see `machine.txt` in
+the artifact for that machine). The runner is a VPS, not the operator's iPhone, and the browser-side
+timers were not measured at all. **Only the ratio transfers. The absolute milliseconds do not.**
+The ratio is the part that answers the question, because it is the ratio of the same match, with the
+same inputs, on the same machine, differing only in how many characters are on screen.
+
+### Projection onto the operator's phone number -- a projection, not a measurement
+
+The operator's real measurement (40.5 fps, 24.67 ms mean cycle, 10.15 ms core, iPhone, two
+characters) was never re-run with four characters, and could not be from CI. If the CI ratio held on
+the phone, and if only the core term scaled while the rest of the cycle stayed fixed, the phone's
+numbers would move as follows. **This is a projection by arithmetic on a ratio measured on another
+machine; it is not a measurement and it must not be reported as one.**
+
+| basis | core | cycle | fps |
+|---|---|---|---|
+| operator's measurement (2 characters) | 10.15 ms | 24.67 ms | 40.5 |
+| projected (4 characters), four/reference ratio 1.520 | 15.43 ms | 29.95 ms | 33.4 |
+| projected (4 characters), four/two-control ratio 1.489 | 15.12 ms | 29.64 ms | 33.7 |
+
+The projection assumes the non-core part of the cycle (browser/WebGPU submission, bitmap, ack,
+idle) does not itself change with character count. That assumption is **untested**: it is exactly
+what the missing browser-side columns would have settled.
+
+### Was it really four characters on screen? Yes -- and an earlier run was not
+
+The first revision of this harness reported a four-controller cost while the oracle certified only
+`two_hud_frames: 885, four_hud_frames: 0` -- two characters. That number was wrong and was not
+reported as the four-player cost. The cause: ports 3 and 4 were moved the wrong way on the stick and
+never actually joined, so the extra milliseconds were pad polling and input replay, not two extra
+characters. The sweep below found the working move, the workload was fixed, and the certified run
+now reports `four_hud_frames: 838, two_hud_frames: 0, max_hud_present: 4` -- **every in-match frame
+had four HUD slots**. The table above is from that run.
 
 ## What was already there, and what had to be written
 
