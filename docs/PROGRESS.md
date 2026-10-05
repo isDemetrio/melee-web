@@ -3923,3 +3923,75 @@ by those two, and Q4, Q5, Q10(b) and Q11 by the operator. The operator's in-flig
 `.github/workflows/four-player-load.yml` only, so no file of this pull request is one they are
 working on, and `phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull
 request costs no WASM core build. CI decides the rest.
+
+## 2026-10-05 — the device plan still sends the operator to look for a core that no longer exists: `-O1` and 87 MB, against `-Oz` and 15,3 MB (cron, `cron/phase0-oct5i`)
+
+**Why this and not something else.** Every step of `docs/PHASE0_DEPLOY_PLAN.md` section 6 that needs
+neither a credential, a phone nor a decision is done: steps 1–5 landed (step 5, `disc_chunks.py` on
+the ISO: 88 pieces, SHA-1 `d4e70c06…`), step 6 is the O1/Android/route decision, step 7 is M1/M2 on
+real hardware, steps 9–13 are the Cloudflare credentials and the devices, step 14 is the verdict and
+`docs/PHASE0_REPORT.md`, which carries a verdict the deciding row has not produced. Step 8 (C1–C8) is
+already done on every JSON that exists (`docs/PHASE0_DEVICE_PLAN.md` section 5; `go_no_go.py` applies
+those checks itself). The renderer is in flight on the eight open pull requests that own its files
+(#70, #100, #101, #104, #112, #113, #117, #124), and the four-player campaign is the operator's own —
+`perf/four-player-load` and `perf/presentation` were merged as PR #132 and #134 at 11:08 UTC, minutes
+before this run, and a `Phase 0 — WASM core` dispatch of theirs was in flight throughout it. So this
+session did to `docs/PHASE0_DEVICE_PLAN.md` — the file the operator executes step 7 from, by hand, on
+the phone — what the previous five cron sessions did to the deploy plan: it read the document against
+the repository. Its procedure still describes a core that stopped existing on 2026-09-30.
+
+**Verified 2026-10-05 on `main` at `2413654`, without a build, without a credential and without a
+device**, each fact being a file's own line or a JSON's own field:
+
+- **The level `main` ships is `-Oz`**: `wasm/core/CMakeLists.txt` riga 23 is
+  `set(MELEE_OPT "-Oz" CACHE STRING …)` and riga 32 appends `-g0`. The document said the opposite in
+  six places — §0.5 ("il branch corrente `phase0/oz-size-experiment` compila invece a `-Oz`"), §1
+  ("bisogna aspettarsi un NO-GO a `-O1`, e sapere già che sarebbe **provvisorio**"), §2 V2 ("Servire
+  un `dist` costruito da `main`, non dal branch `-Oz`, finché `-Oz` non ha ripassato i 2400
+  checkpoint"), §4 passo 6 ("`core loaded: <commit> -O1`"), §6 ("Se il core servito è a `-O1` (quello
+  di `main` oggi)") and §8 ("Con il core a `-O1` il risultato vale per `-O1`") — while the branch is
+  in `main` since PR #13, 2026-09-30 (`docs/PHASE0_DEPLOY_PLAN.md` §5, riga "Fatta").
+- **`core.json`'s `"opt"` is not hardcoded any more**: `.github/workflows/phase0-build.yml` riga 21 is
+  the `-Oz` default of the `opt_level` input, and the field is read from
+  `$RUNNER_TEMP/wasm/melee_opt.txt`, which `wasm/core/CMakeLists.txt` riga 31 writes at configure
+  time, with the old `grep` kept only as a fallback (righe 233–245). The document cited "riga 125" as
+  the place that writes `"opt":"-O1"` fixed.
+- **The module the operator downloads is not 87 MB**: the web module on `main` at `696ec4f` is
+  **15,278,441** bytes (run 37263947515, this file's "Recompiled core" row), and §2 V2 of the same
+  document already lists the seven local `dist` copies at 15,248,094–15,254,426 bytes since
+  2026-10-02.
+- **Every device row measured on this machine ran on a `-Oz` core**, and that is what inverts §6's
+  proviso rather than merely dating it. Read from the `core_opt` field of each JSON in
+  `/home/hermes/incoming/phase0/devices/`: the three `iphone-safari` runs are `core_commit
+  4fba3a08…`, `core_opt -Oz`; the two `iphone-safari-opfs-2026-10-01`, the three
+  `firefox-linux-2026-10-01` and `chrome-oneplus-2026-10-01-run1.json` are `core_commit 4a3f537e…`,
+  `core_opt -Oz`. So the served core is at the same level as every row already measured, and the
+  lever the rule describes runs the other way: `-Oz` is the **slowest** of the levels compared —
+  28,92 ms against `-O1`'s 27,34 ms over the 762 match frames on the VPS under Node
+  (`docs/OPT_LEVEL_EXPERIMENT.md` righe 6–7) — and that document says itself that the ratio is a VPS
+  ratio, not a phone one.
+
+**Changed.** `docs/PHASE0_DEVICE_PLAN.md` only, ten places: §0.5 item 5 (what the field is, plus a
+dated "Stato al 2026-10-05"), §0.4's size note (the three 87,1 MB figures are labelled as the `-O1`
+builds of 2026-09-30), §1 (the `-Oz` measurement of the same comparison, with its source), §2 V2
+(the `dist` instruction), §4 passo 6 (the operator now expects `core loaded: <commit> -Oz` and about
+15,3 MB, and the check on `core loaded` covers the level as well as the commit), §6 (the rule
+restated, with the correction that `-O1` is not `main`'s level and that every measured row is `-Oz`),
+§7 and §3's memory rows (the "modulo più piccolo" remedy, which is the shipped module already), §8
+(the result holds for `-Oz`). `docs/PROGRESS.md`: this entry. No number is invented and no historical
+measurement is changed: 27,34 ms, 87.118.045 bytes and the 87,1 MB figures keep the date and the build
+they were measured on. No workflow, script, renderer, simulation or test-semantics file is touched,
+and `phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull request costs
+no WASM core build.
+
+**Not done, and why.** Nothing was built, dispatched, deployed, uploaded, served or tunnelled, and no
+Cloudflare credential was used; no `tailscale serve` was started and no server was left running. What
+is blocked, and by what, is unchanged: the verdict by a mid-range Android (`docs/OPEN_QUESTIONS.md`
+Q9 — only an iPhone exists, so the specification's deciding row is unmeasured); any deployment by
+O1–O10 (Q3's Phase 0 subset, and O1 is a legal judgement); `docs/PHASE0_REPORT.md` by those two; Q4,
+Q5, Q10(b) and Q11 by the operator; the renderer by the eight open pull requests that own its files.
+The gates that can run here are green on the edited tree: `python3 -m unittest discover -s
+scripts/tests` → `Ran 214 tests in 21.892s`, `OK`; `python3 scripts/check_no_game_data.py --all` →
+`291 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py
+--submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` → `210 citations in 4
+documents, 0 violation(s)` (its four documents are the maps, not this one). CI decides the rest.
