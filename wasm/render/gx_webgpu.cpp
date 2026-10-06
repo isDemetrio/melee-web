@@ -9,8 +9,8 @@
 //
 // Geometry is drawn with gx_wgsl.cpp's WGSL -- the TEV, texture coordinate generation, colour
 // channels and their lights, alpha test and fog; one shader that reads each draw's state from
-// uniforms (g_specialized says why) -- then GX's blend state (gxw_draw). Indirect texturing remains
-// open (gx_wgsl.cpp says what it falls back to). Clears cover the whole
+// uniforms (g_shader_mode says why, and what else it can be) -- then GX's blend state (gxw_draw).
+// Indirect texturing remains open (gx_wgsl.cpp says what it falls back to). Clears cover the whole
 // EFB; half-scale, Y scale, gamma, copy formats and depth copies remain open (priorities 2-5).
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
@@ -670,10 +670,14 @@ EM_JS(int, gxw_flush, (), {
   catch(error) { gpu.recordFailure("submit", error); gpu.failure = "submit: " + error; return 0; }
 });
 
-// Whether this page asked for the generated shader of each draw state (Module.gxWebgpu.specializedShaders)
-// instead of the one shader: wasm/render/pixel_pipeline_check.mjs draws the same states both ways.
-EM_JS(int, gxw_specialized, (), {
-  const gpu = Module["gxWebgpu"]; return gpu && gpu.specializedShaders ? 1 : 0;
+// The shaders this page asked for (Module.gxWebgpu.shaderMode): 1 "specialized", the generated shader
+// of each draw state; 2 "stages", one shader per TEV stage count; 0 otherwise, the one shader.
+// `specializedShaders` is the older name of "specialized". wasm/render/pixel_pipeline_check.mjs draws
+// the same states every way.
+EM_JS(int, gxw_shader_mode, (), {
+  const gpu = Module["gxWebgpu"];
+  const mode = gpu ? gpu.shaderMode ?? (gpu.specializedShaders ? "specialized" : "uber") : "uber";
+  return mode === "specialized" ? 1 : mode === "stages" ? 2 : 0;
 });
 
 // The one shader (gxw::generate_uber_wgsl) as shader `shader`, and the pipeline of the draw state the
@@ -785,7 +789,12 @@ bool upload_textures(const gx::DrawCall& dc) {
 // gxw_draw when the backend attaches (gxw_prepare): a draw state is then uniform values (its uid in
 // rows 186-204), and a new one creates at most a pipeline, never a new WGSL text.
 //
-// With `specialized` (gxw_specialized), each draw state's own generated WGSL instead: g_shaders maps
+// With `stages` (gxw_shader_mode), the one shader cut to each TEV stage count, ids 1-16: a draw of
+// N stages uses id N, whose WGSL has exactly N stage blocks and no guards
+// (gxw::generate_uber_wgsl(N)). Still no WGSL text after the attach, which prepares all 16, and less
+// work per fragment than the one shader's 16 guarded blocks.
+//
+// With `specialized` (gxw_shader_mode), each draw state's own generated WGSL instead: g_shaders maps
 // gx_wgsl.cpp's uid of the draw state each was generated from to the id gxw_draw knows it by. A uid
 // is generated and its WGSL handed over once; every later draw with the same uid names the id alone.
 // Bounded by the shader state the game uses (the pipelines map in gxw_draw holds as many). That was
@@ -793,7 +802,8 @@ bool upload_textures(const gx::DrawCall& dc) {
 // for ~450 ms, 31 freezes and 56 s of them in a 149 s session (docs/PROGRESS.md). It stays as the
 // reference the one shader is checked against (wasm/render/pixel_pipeline_check.mjs).
 constexpr int UBER_SHADER = 0;
-bool g_specialized = false;
+enum class ShaderMode { Uber, Specialized, Stages };
+ShaderMode g_shader_mode = ShaderMode::Uber;
 std::unordered_map<gxw::ShaderUid, int, gxw::ShaderUidHash> g_shaders;
 
 // Baseline projection/viewport rules transcribed from gx_shader.cpp:671-748 and
@@ -844,17 +854,19 @@ bool draw_segment(const gx::Frame& frame, const gx::DrawCall& dc, const gx::Draw
   gxw::fill_uid_rows(uid,u);
   int shader=UBER_SHADER;
   std::string code;
-  if (g_specialized) {
+  if (g_shader_mode==ShaderMode::Specialized) {
     auto found=g_shaders.find(uid);
     if (found==g_shaders.end()) {
       found=g_shaders.emplace(uid,int(g_shaders.size())+1).first;
       code=gxw::generate_wgsl(uid);
     }
     shader=found->second;
+  } else if (g_shader_mode==ShaderMode::Stages) {
+    shader=gxw::tev_stages(uid);   // make_uid's 1-16 stages: ids 1-16, as gx_webgpu_attach prepared
   }
   if (!upload_textures(dc)) return false;
   // The one shader reads the uid rows, which come after the lights: every row, lit or not.
-  const int rows=g_specialized ? gxw::uniform_rows(uid) : gxw::MAX_ROWS;
+  const int rows=g_shader_mode==ShaderMode::Specialized ? gxw::uniform_rows(uid) : gxw::MAX_ROWS;
   return gxw_draw(frame.vertices.data()+segment.first_vertex,segment.vertex_count*sizeof(gx::Vertex),indices.data(),indices.size(),
                   &u[0][0],rows,r,topology==gx::DrawTopology::Lines,dc.bp.cullmode(),dc.bp.zmode(),
                   dc.bp.reg,shader,code.empty() ? nullptr : code.c_str());
@@ -910,8 +922,12 @@ WebGpuBackend* g_webgpu = nullptr;
 extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_attach() {
   if (g_webgpu) return 1;
   if (!gxw_open(gx::EFB_WIDTH, gx::EFB_HEIGHT, gxw::MAX_ROWS)) return 0;
-  g_specialized=gxw_specialized();
-  if (!g_specialized && !gxw_prepare(UBER_SHADER, gxw::generate_uber_wgsl().c_str())) return 0;
+  const int mode=gxw_shader_mode();
+  g_shader_mode=mode==1 ? ShaderMode::Specialized : mode==2 ? ShaderMode::Stages : ShaderMode::Uber;
+  if (g_shader_mode==ShaderMode::Uber && !gxw_prepare(UBER_SHADER, gxw::generate_uber_wgsl().c_str())) return 0;
+  if (g_shader_mode==ShaderMode::Stages) {
+    for (int s=1; s<=16; ++s) if (!gxw_prepare(s, gxw::generate_uber_wgsl(s).c_str())) return 0;
+  }
   g_webgpu = new WebGpuBackend();
   host::gx_set_backend(g_webgpu);
   return 1;
@@ -1170,7 +1186,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
       dc.bp.reg[gx::BP_TREF]=0;                                        // no texture, channel 0
     }
     // 52-55: the one shader against the generated ones. wasm/render/pixel_pipeline_check.mjs draws each
-    // twice, once with Module.gxWebgpu.specializedShaders, and requires the same bytes in every cell.
+    // with every Module.gxWebgpu.shaderMode, and requires the same bytes in every cell.
     // 48 pseudo-random draw states, as 49's, each a quad filling its own 80x80 cell of the 640x480
     // frame (column k % 8, row k / 8), with its own vertex colours, normals and texture coordinates,
     // eight textures of different formats, materials, lights and an alpha test that passes half the time.

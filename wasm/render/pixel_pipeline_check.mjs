@@ -40,13 +40,14 @@
 // `shaders=specialized`: the backend draws with one shader for every state (gx_wgsl.cpp,
 // generate_uber_wgsl), and the generated shaders are what 49 is about.
 //
-// Geometry 52-55 compare the two. The backend draws with one shader that reads each draw's state from
-// uniforms, so that a new draw state is not a new shader compile (on the operator's iPhone each one
-// blocked the GPU process for ~450 ms); the generated shader of each state stays as its reference.
-// Each geometry draws 48 pseudo-random states, each in its own 80x80 cell, once with the one shader
-// and once with `shaders=specialized`; every cell must hash the same, and enough cells must be drawn
-// for the comparison to mean something. The other probes run with the one shader, so their values
-// hold for it too.
+// Geometry 52-55 compare the shaders. The backend draws with one shader that reads each draw's state
+// from uniforms, so that a new draw state is not a new shader compile (on the operator's iPhone each
+// one blocked the GPU process for ~450 ms); `shaders=stages` draws with that shader cut to each TEV
+// stage count (16 shaders, all compiled when the backend attaches); the generated shader of each state
+// (`shaders=specialized`) is the reference of both. Each geometry draws 48 pseudo-random states, each
+// in its own 80x80 cell, once with every mode; every cell must hash as the generated shaders' does,
+// and enough cells must be drawn for the comparison to mean something. The other probes run with the
+// one shader, so their values hold for it too.
 //
 // usage: SPIKE_DIST=<built spike dist> node wasm/render/pixel_pipeline_check.mjs
 import { spawn } from 'node:child_process';
@@ -82,10 +83,12 @@ const PROBES = [
   { geometry: 51, name: 'a triangle 2^-23 beyond the near plane is drawn (Dolphin 1 - 1e-7)', expected: [0, 255, 0, 255] },
   // Ambient 50 + light 100 facing the normal = 150; material 200 * (150 + 1) >> 8 = 117. Unlit: 200.
   { geometry: 56, name: 'a lit colour channel: ambient plus a light facing the normal, times the material', expected: [117, 117, 117, 255] },
-  ...[52, 53, 54, 55].map((geometry) => ({ geometry, name: '48 pseudo-random states: the one shader draws what the generated ones draw', differential: true })),
+  ...[52, 53, 54, 55].map((geometry) => ({ geometry, name: '48 pseudo-random states: the one shader and the per-stage-count ones draw what the generated ones draw', differential: true })),
 ];
 // A differential probe fails if fewer cells than this are drawn: most of the 48 states draw something.
 const MIN_DRAWN_CELLS = 24;
+// The shaders a differential probe compares with the generated ones (`shaders=specialized`).
+const COMPARED = [{ label: 'one shader', shaders: null }, { label: 'stages', shaders: 'stages' }];
 
 const server = spawn(process.execPath, [`${web}scripts/serve.mjs`, '--dir', dist, '--port', String(PORT)],
   { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -118,17 +121,24 @@ try {
   };
   for (const probe of PROBES) {
     if (probe.differential) {
-      const one = await run(probe, null), generated = await run(probe, 'specialized');
-      const problems = [...one.problems.map((p) => `one shader: ${p}`), ...generated.problems.map((p) => `generated: ${p}`)];
-      const a = one.render.cells, b = generated.render.cells;
-      let summary = 'no cells';
-      if (!a || !b || a.cells.length !== 48 || b.cells.length !== 48) problems.push(`cells ${JSON.stringify(a)} / ${JSON.stringify(b)}`);
-      else {
+      const generated = await run(probe, 'specialized');
+      const problems = generated.problems.map((p) => `generated: ${p}`);
+      const b = generated.render.cells;
+      const valid = Boolean(b) && b.cells.length === 48;
+      if (!valid) problems.push(`generated: cells ${JSON.stringify(b)}`);
+      else if (b.drawn < MIN_DRAWN_CELLS) problems.push(`generated: only ${b.drawn} cells drawn, want >= ${MIN_DRAWN_CELLS}`);
+      const identical = [];
+      for (const { label, shaders } of COMPARED) {
+        const other = await run(probe, shaders);
+        problems.push(...other.problems.map((p) => `${label}: ${p}`));
+        const a = other.render.cells;
+        if (!a || a.cells.length !== 48) { problems.push(`${label}: cells ${JSON.stringify(a)}`); continue; }
+        if (!valid) continue;
         const differ = a.cells.flatMap((h, k) => (h === b.cells[k] ? [] : [k]));
-        summary = `${48 - differ.length}/48 cells identical, ${a.drawn} drawn (generated: ${b.drawn})`;
-        if (differ.length) problems.push(`cells ${differ.join(', ')} differ`);
-        if (a.drawn < MIN_DRAWN_CELLS) problems.push(`only ${a.drawn} cells drawn, want >= ${MIN_DRAWN_CELLS}`);
+        identical.push(`${label} ${48 - differ.length}/48`);
+        if (differ.length) problems.push(`${label}: cells ${differ.join(', ')} differ`);
       }
+      const summary = valid ? `cells identical: ${identical.join(', ') || 'none compared'}; ${b.drawn} drawn` : 'no cells';
       console.log(`${problems.length ? 'FAIL' : 'ok  '} geometry ${probe.geometry} ${probe.name}: ${summary}`);
       for (const problem of problems) console.log(`       ${problem}`);
       failures += problems.length ? 1 : 0;

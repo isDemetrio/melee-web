@@ -243,6 +243,7 @@ uint32_t light_mask(uint32_t control) { return ((control >> 2) & 15) | (((contro
 // A lit draw reads the light rows, which come last of a generated shader's (the uid rows after them
 // are the one shader's).
 int uniform_rows(const ShaderUid& uid) { return lit(uid) ? ROW_UID : ROW_TEXGEN + 3 * int(uid.w[U_NUMTEXGENS]); }
+int tev_stages(const ShaderUid& uid) { return int(uid.w[U_STAGES]); }
 
 std::string generate_wgsl(const ShaderUid& uid) {
   const Uid g{uid};
@@ -495,7 +496,15 @@ std::string generate_wgsl(const ShaderUid& uid) {
 //     register may be outside 0-255 (RegState); every other one is within 0-255, where the mask is
 //     the identity. The same holds for the final PREV;
 //   - the alpha test is always evaluated; the states generate_wgsl omits it for always pass.
-std::string generate_uber_wgsl() {
+//
+// `stages` 1-16 is the same text for the draw states of that many TEV stages only: exactly that many
+// stage blocks, each with its constant `n` and no guard (gx_webgpu.cpp's `stages` mode, one shader
+// per stage count, all compiled when the backend attaches). 0 is every state: 16 guarded blocks.
+std::string generate_uber_wgsl(int stages) {
+  if (stages < 0 || stages > 16) {
+    std::fprintf(stderr, "gx_wgsl: %d TEV stages, want 0-16\n", stages);
+    std::abort();
+  }
   Code o;
   o.w("struct Constants { rows: array<vec4f, %d> }\n@group(0) @binding(0) var<uniform> u: Constants;\n", MAX_ROWS);
   for (int n = 0; n < 8; ++n)
@@ -794,8 +803,10 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
   // was finite (make_uid supplies 1..16). Avoid its back edge on the stalled CI SwiftShader
   // path, keeping the arithmetic and runtime state. See docs/LIT_TEV_FLOW.md for evidence.
   // This expansion is independent of the draw uid: still one shader compiled at attach.
-  for (unsigned stage = 0; stage < 16; ++stage) {
-    s += "  if (stages > " + std::to_string(stage) + "u) {\n    let n = " + std::to_string(stage) + "u;\n";
+  // With a stage count, exactly that many blocks and no guard: the shader of those states only.
+  for (int stage = 0; stage < (stages ? stages : 16); ++stage) {
+    s += stages ? "  {\n" : "  if (stages > " + std::to_string(stage) + "u) {\n";
+    s += "    let n = " + std::to_string(stage) + "u;\n";
     s += R"WGSL(    let cc = uid($U_COLOR_ENV + n);
     let ac = uid($U_ALPHA_ENV + n);
     let tref = uid($U_TREF + n / 2u);

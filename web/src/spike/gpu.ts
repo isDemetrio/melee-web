@@ -92,9 +92,12 @@ export interface SpikeGpu {
   /** Where the readback dies, for the CI log: see `Diagnostic`. */
   diagnostic: Diagnostic;
   /**
-   * Read by gx_webgpu.cpp when it attaches: each draw state's own generated shader instead of the one
-   * shader (`?shaders=specialized`, for wasm/render/pixel_pipeline_check.mjs, which compares the two).
+   * Read by gx_webgpu.cpp when it attaches (`?shaders=`): `specialized`, each draw state's own generated
+   * shader; `stages`, one shader per TEV stage count, all compiled at the attach; anything else, the
+   * one shader. wasm/render/pixel_pipeline_check.mjs compares them.
    */
+  shaderMode?: ShaderMode;
+  /** The older name of `shaderMode: 'specialized'`, read when `shaderMode` is unset. */
   specializedShaders?: boolean;
   /** Written by gx_webgpu.cpp's gxw_open/gxw_copy: the device object it rendered with, and how often. */
   backendDevice?: GpuDevice | null;
@@ -189,6 +192,8 @@ const XFB_WIDTH = 640;
 const XFB_HEIGHT = 480;
 
 export type CanvasFormat = 'rgba8unorm' | 'bgra8unorm';
+/** The shaders gx_webgpu.cpp draws with (`SpikeGpu.shaderMode`). */
+export type ShaderMode = 'uber' | 'specialized' | 'stages';
 
 /**
  * A device with an XFB target -- `canvas` configured for WebGPU, or, with `null`, an offscreen
