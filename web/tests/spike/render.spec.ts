@@ -57,10 +57,12 @@ interface SelftestResult {
 /** ARGB, as EfbCopy::clear_color packs it: A=FF R=20 G=80 B=C0. Not black, so not a default. */
 const COLOUR = 0xff2080c0;
 const COLOUR_RGBA = [0x20, 0x80, 0xc0, 0xff];
-// The harness runs the third shader mode (`stages`): one WGSL text per TEV stage count, all compiled
-// at attach. It is the candidate, so the suite validates it; `uber` is one URL parameter away
-// (`&shaders=uber`) and its three stress probes are the ones this suite does not pass.
-const QUERY = `gx-selftest=${COLOUR.toString(16)}&shaders=stages`;
+// The harness draws in `specialized` — the generated shader of each state, which is the mode this
+// suite was written against and the only one Chromium's *software* rasteriser runs at speed. The
+// heavy modes are not absent from CI: the differential step compares their pixels against the
+// generated shaders (geometries 52-55). Measured on run 37495135697, the same suite in `stages`
+// passed 34 of 49 and ran out of its global timeout; in `uber`, 44. Neither is a harness mode.
+const QUERY = `gx-selftest=${COLOUR.toString(16)}&shaders=specialized`;
 
 /** Open the self-test page and wait for the JSON the worker answers with. */
 async function selftest(page: Page, query: string): Promise<SelftestResult> {
