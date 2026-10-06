@@ -8,9 +8,9 @@
 // copy to RAM is kept as a texture that draws sampling its address read (gxw_copy, as upstream).
 //
 // Geometry is drawn with gx_wgsl.cpp's WGSL -- the TEV, texture coordinate generation, colour
-// channels, alpha test and fog; one shader that reads each draw's state from uniforms (g_specialized
-// says why) -- then GX's blend state (gxw_draw). Lighting and
-// indirect texturing remain open (gx_wgsl.cpp says what each falls back to). Clears cover the whole
+// channels and their lights, alpha test and fog; one shader that reads each draw's state from
+// uniforms (g_specialized says why) -- then GX's blend state (gxw_draw). Indirect texturing remains
+// open (gx_wgsl.cpp says what it falls back to). Clears cover the whole
 // EFB; half-scale, Y scale, gamma, copy formats and depth copies remain open (priorities 2-5).
 //
 // The XFB target is the canvas's current texture, or -- when Module.gxWebgpu.xfb is set -- a plain
@@ -1173,7 +1173,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
     // twice, once with Module.gxWebgpu.specializedShaders, and requires the same bytes in every cell.
     // 48 pseudo-random draw states, as 49's, each a quad filling its own 80x80 cell of the 640x480
     // frame (column k % 8, row k / 8), with its own vertex colours, normals and texture coordinates,
-    // eight textures of different formats, materials and an alpha test that passes half the time.
+    // eight textures of different formats, materials, lights and an alpha test that passes half the time.
     // Each geometry is another set of states (its own seed).
     if (geometry>=52 && geometry<=55) {
       uint32_t seed=0x9E3779B9u*uint32_t(geometry);
@@ -1200,6 +1200,12 @@ extern "C" EMSCRIPTEN_KEEPALIVE int gx_webgpu_selftest(uint32_t argb, int copies
         for(auto& c:r.tev_colors) for(auto& v:c) v=int32_t(next()%2048)-1024;
         for(auto& c:r.tev_kcolors) for(auto& v:c) v=int32_t(next()%256);
         for(auto& f:r.postMatrices) f=unit();
+        // The lights a lit channel reads (fill_tev_rows): colour, then cosine and distance attenuation,
+        // position and direction.
+        for(auto& L:r.lights) {
+          const uint32_t colour=next()<<8 | next()%256; std::memcpy(L+12,&colour,4);
+          float f[12]; for(auto& v:f) v=unit(); std::memcpy(L+16,f,sizeof f);
+        }
         r.first_vertex=frame.vertices.size(); r.first_segment=frame.segments.size(); r.segment_count=1;
         // Clip x is position x + 0.5 (position matrix 3), y is position y.
         const float x0=float(k%8)*0.25f-1.0f, y0=1.0f-float(k/8)*(1.0f/3.0f), w=0.25f, h=1.0f/3.0f;

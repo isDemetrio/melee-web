@@ -519,6 +519,39 @@ fn vertex_colour(components: u32, j: u32, color0: vec4f, color1: vec4f) -> vec4f
   return vec4f(255.0);
 }
 
+// The light mask of a channel control: lights 0-3 in bits 2-5, 4-7 in bits 11-14.
+fn light_mask(control: u32) -> u32 { return bitfield(control, 2u, 4u) | (bitfield(control, 11u, 4u) << 4u); }
+
+// gen_light (gx_shader.cpp:70-100), generate_wgsl's light_factor with the channel control's
+// attenuation (bits 9-10) and diffuse (bits 7-8) functions read at run time: the factor the light
+// at rows `l` to `l + 4` scales its colour by, from the vertex position `p` and its normal `n0`.
+fn light_factor(l: u32, control: u32, p: vec4f, n0: vec3f) -> f32 {
+  let attn_fn = bitfield(control, 9u, 2u);
+  let diffuse_fn = bitfield(control, 7u, 2u);
+  var ldir = u.rows[l + 3u].xyz - p.xyz;
+  var attn = 1.0;
+  if (attn_fn == 1u) {
+    ldir = normalize(ldir);
+    attn = select(0.0, max(0.0, dot(n0, u.rows[l + 4u].xyz)), dot(n0, ldir) >= 0.0);
+    let q = vec3f(1.0, attn, attn * attn);
+    if (diffuse_fn != 0u) { attn = max(0.0, dot(u.rows[l + 1u].xyz, q)) / dot(normalize(u.rows[l + 2u].xyz), q); }
+    else { attn = max(0.0, dot(u.rows[l + 1u].xyz, q)) / dot(u.rows[l + 2u].xyz, q); }
+  } else if (attn_fn == 3u) {
+    let dist2 = dot(ldir, ldir);
+    let dist = sqrt(dist2);
+    ldir = ldir / dist;
+    attn = max(0.0, dot(ldir, u.rows[l + 4u].xyz));
+    attn = max(0.0, dot(u.rows[l + 1u].xyz, vec3f(1.0, attn, attn * attn))) / dot(u.rows[l + 2u].xyz, vec3f(1.0, dist, dist2));
+  } else {
+    ldir = normalize(ldir);
+    if (length(ldir) == 0.0) { ldir = n0; }
+  }
+  var factor = attn;
+  if (diffuse_fn == 1u) { factor = attn * dot(ldir, n0); }
+  if (diffuse_fn >= 2u) { factor = attn * max(0.0, dot(ldir, n0)); }
+  return factor;
+}
+
 @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f,
   @location(2) color0: vec4f, @location(3) color1: vec4f,
   @location(4) rawtex0: vec2f, @location(5) rawtex1: vec2f, @location(6) rawtex2: vec2f, @location(7) rawtex3: vec2f,
@@ -535,22 +568,52 @@ fn vertex_colour(components: u32, j: u32, color0: vec4f, color1: vec4f) -> vec4f
   var o: Out;
   o.clip = clip;
   o.pos = vec4f(clip.xy * u.rows[102].xy + clip.w * u.rows[102].zw, clip.zw);
-  // Colour channels (gen_lighting without lights).
+  // Colour channels (gen_lighting). A channel control is its bit 0 alone when unlit, else every bit
+  // the light accumulator reads (make_uid).
   let components = uid($U_COMPONENTS);
   let nchan = uid($U_NUMCHANS);
   if (nchan == 0u) {
     o.colors_0 = select(vec4f(1.0), color0, (components & $COL0) != 0u);
     o.colors_1 = select(o.colors_0, color1, (components & $COL1) != 0u);
   } else {
+    // The normal through the normal matrix of the position matrix (Dolphin: index & 31).
+    let ni = select(m, m - 32u, m >= 32u);
+    var n0 = vec3f(0.0);
+    if ((components & $NRM0) != 0u) {
+      n0 = normalize(vec3f(dot(u.rows[70u + ni].xyz, normal), dot(u.rows[71u + ni].xyz, normal), dot(u.rows[72u + ni].xyz, normal)));
+    }
     var colors = array<vec4f, 2>(vec4f(0.0), vec4f(0.0));
     for (var j = 0u; j < min(nchan, 2u); j++) {
-      let color_vertex = uid($U_CHANS + j) != 0u;
-      let alpha_vertex = uid($U_CHANS + 2u + j) != 0u;
+      let color = uid($U_CHANS + j);
+      let alpha = uid($U_CHANS + 2u + j);
+      let color_vertex = (color & 1u) != 0u;
+      let alpha_vertex = (alpha & 1u) != 0u;
       let material = u.rows[$ROW_MATERIALS + 2u + j];
       let vcolor = vertex_colour(components, j, color0, color1);
       var mtl = select(material, vcolor, color_vertex);
       if (alpha_vertex != color_vertex) { mtl.w = select(material.a, vcolor.w, alpha_vertex); }
-      colors[j] = mtl / 255.0;
+      // Lighting disabled: the light accumulator is 255, and (mtl * 256) >> 8 is the material.
+      if (((color | alpha) & 2u) == 0u) { colors[j] = mtl / 255.0; continue; }
+      // The accumulator starts at the ambient colour (from the vertex or the XF register) of a lit
+      // channel, 255 for an unlit one; each light in the mask adds its rounded contribution.
+      let ambient = u.rows[$ROW_MATERIALS + j];
+      var lacc = vec4f(255.0);
+      if ((color & 2u) != 0u) { lacc = select(ambient, vcolor, (color & 64u) != 0u); }
+      lacc.w = 255.0;
+      if ((alpha & 2u) != 0u) { lacc.w = select(ambient.a, vcolor.w, (alpha & 64u) != 0u); }
+      let color_lights = select(0u, light_mask(color), (color & 2u) != 0u);
+      let alpha_lights = select(0u, light_mask(alpha), (alpha & 2u) != 0u);
+      for (var i = 0u; i < 8u; i++) {
+        let lrow = $ROW_LIGHTS + 5u * i;
+        if ((color_lights & (1u << i)) != 0u) {
+          lacc = vec4f(lacc.rgb + round(light_factor(lrow, color, p, n0) * u.rows[lrow].rgb), lacc.a);
+        }
+        if ((alpha_lights & (1u << i)) != 0u) {
+          lacc.w = lacc.w + round(light_factor(lrow, alpha, p, n0) * u.rows[lrow].a);
+        }
+      }
+      let il = clamp(vec4i(lacc), vec4i(0), vec4i(255));
+      colors[j] = vec4f((vec4i(mtl) * (il + (il >> vec4u(7u)))) >> vec4u(8u)) / 255.0;
     }
     o.colors_0 = colors[0];
     o.colors_1 = select(select(o.colors_0, color1, (components & $COL1) != 0u), colors[1], nchan >= 2u);
@@ -826,7 +889,7 @@ fn alpha_compare(f: u32, a: i32, r: i32) -> bool {
 )WGSL";
   const std::pair<const char*, int> tokens[] = {
     {"$ROW_UID", ROW_UID}, {"$ROW_TEV_COLORS", ROW_TEV_COLORS}, {"$ROW_KCOLORS", ROW_KCOLORS},
-    {"$ROW_MATERIALS", ROW_MATERIALS}, {"$ROW_FOG", ROW_FOG}, {"$ROW_TEXGEN", ROW_TEXGEN},
+    {"$ROW_MATERIALS", ROW_MATERIALS}, {"$ROW_FOG", ROW_FOG}, {"$ROW_TEXGEN", ROW_TEXGEN}, {"$ROW_LIGHTS", ROW_LIGHTS},
     {"$U_COMPONENTS", U_COMPONENTS}, {"$U_NUMCHANS", U_NUMCHANS}, {"$U_CHANS", U_CHANS},
     {"$U_NUMTEXGENS", U_NUMTEXGENS}, {"$U_DUALTEX", U_DUALTEX}, {"$U_TEXGEN", U_TEXGEN},
     {"$U_POSTINFO", U_POSTINFO}, {"$U_STAGES", U_STAGES}, {"$U_COLOR_ENV", U_COLOR_ENV},
