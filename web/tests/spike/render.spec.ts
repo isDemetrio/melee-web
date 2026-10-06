@@ -57,7 +57,10 @@ interface SelftestResult {
 /** ARGB, as EfbCopy::clear_color packs it: A=FF R=20 G=80 B=C0. Not black, so not a default. */
 const COLOUR = 0xff2080c0;
 const COLOUR_RGBA = [0x20, 0x80, 0xc0, 0xff];
-const QUERY = `gx-selftest=${COLOUR.toString(16)}`;
+// The harness runs the third shader mode (`stages`): one WGSL text per TEV stage count, all compiled
+// at attach. It is the candidate, so the suite validates it; `uber` is one URL parameter away
+// (`&shaders=uber`) and its three stress probes are the ones this suite does not pass.
+const QUERY = `gx-selftest=${COLOUR.toString(16)}&shaders=stages`;
 
 /** Open the self-test page and wait for the JSON the worker answers with. */
 async function selftest(page: Page, query: string): Promise<SelftestResult> {
