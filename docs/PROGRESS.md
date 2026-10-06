@@ -4524,3 +4524,61 @@ violation(s)`. CI decides the rest.
 **Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or tunnelled, and no Cloudflare credential was used. What is blocked, and by what, is unchanged: the verdict by the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the deciding row is unmeasured); `docs/PHASE0_REPORT.md` by that verdict; any deployment by O1, a legal judgement, and by O10, the Android model; the single-PUT check by the S3 keys of O4; Q4, Q5, Q10(b) and Q11 by the operator; the renderer by the eight open pull requests that own its files. One operational fact, unchanged: the root filesystem of this VPS is at 100 percent, 142 MB free of 38 GB (`df -h /`).
 
 **Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in 20.913s`, `OK`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0 violation(s)`. CI decides the rest.
+
+## 2026-10-06 — the device plan's V2 says the newest dist is of 2026-10-02 and `main` has moved past it; the VPS holds a dist of `main`'s own core commit (cron, `cron/phase0-oct6h`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs
+neither a credential, a phone nor a decision: steps 1-5 landed, step 6 is the O1/Android/route decision,
+step 7 is M1/M2 on hardware this machine does not have, step 8 waits on 7, steps 9-13 are the
+Cloudflare credentials and the devices, and step 14, `docs/PHASE0_REPORT.md`, waits on the row that
+decides. What this session found instead is the row a device session on route D reads first,
+`docs/PHASE0_DEVICE_PLAN.md` section 2 V2, stating something the filesystem contradicts.
+
+**Verified, without a build, without a Cloudflare credential and without a device.**
+
+- **The dist of `main`'s own core commit is already on this VPS.** `ls -d
+  /home/hermes/incoming/phase0/spike-dist*/` still answers the seven the row lists, but `find
+  /home/hermes/incoming/phase0 -maxdepth 4 -name core.json -path '*spike-core*' -print` answers
+  **eighteen** trees, and the newest is `spike-140-141` (2026-10-05 18:04). Its
+  `spike-core/core.json` is `{"commit":"688a1b268562018e548738d46480179d770286bc","opt":"-Oz"}` — the merge
+  of PR #140 — and its `melee_core_web.wasm` is **15,280,251 bytes**, the number run `37351694903`
+  (`Phase 0 — WASM core`, `688a1b2`, 2026-10-05 17:52, `success`) prints as `wasm_bytes: 15280251`
+  with `within_pages_limit: true`. Two independent signals, the commit hash and the module size, so the
+  row's "la più recente è `spike-dist-drawcost2` (`df8635e8…`), del 2026-10-02 21:59, e `main` si è
+  mosso dopo" is false in the direction that costs a dispatch.
+- **`main`'s core is still that commit**, so that dist is not stale: `git diff --stat 688a1b2
+  origin/main -- wasm/ native/ patches/ upstream/ web/ .github/workflows/phase0-build.yml` is empty
+  (re-run here; the resume point's own row).
+- **None of the eighteen declares the section-5 reference commit.** The eighteen `core.json` files
+  name `4fba3a0`, `f008e27` (`-O1`), `4a3f537`, `9b08acf`, `cd20fa3`, `8305929`, `118c040`, `df8635e`,
+  `0456ea5`, `87c7a33`, `03617cc`, `2edd36a`, `2413654`, `b6b1cf7`, `d103254`, `64dc1d1`, `fb8aa14`,
+  and `688a1b2`; `63511ce6…` is not among them. The native traces this machine holds are `4fba3a0…`
+  (`reference-4fba3a0`), `4a3f537…` (`reference-4a3f537`) and `63511ce6…` (`reference-63511ce`), all
+  three with SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571`, and none is at `688a1b2`.
+- **What that does not force.** Section 5's rule ("Il commit del riferimento") already accepts a trace
+  identical to the reference while annotating both commits, so a native trace at the served commit is
+  needed only if C5 differs. The correction therefore adds an option the row did not have — serve
+  `spike-140-141` at no dispatch cost — and leaves the choice of commit with the operator.
+- **`current.env` was right and the command reading it was wrong.** Section 5's extraction snippet
+  carried `# SHA=f0d76a28…, D=/home/hermes/incoming/phase0/f0d76a2816ec`, while the file has said
+  `SHA=63511ce6c5f4e39be07b9acc9b517b2010ca01db` and `D=/home/hermes/incoming/phase0/reference-63511ce`
+  since 2026-10-01 (it keeps the old pair in its own comment, and section 5's "Aggiornamento
+  2026-10-01" says so). The comment now names what the file holds. Checked, not assumed: `sha1sum` of
+  the three reference traces, and `runs/native-1` is a symlink to `run-1`, so C5's
+  `$D/runs/native-1/trace.csv` resolves.
+
+**Changed.** `docs/PHASE0_DEVICE_PLAN.md` only: the dated correction under V2, and the comment on the
+`source` line in section 5. No workflow, script, patch, renderer, simulation or test-semantics file, and
+`phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull request pays no WASM
+core build.
+
+**Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or
+tunnelled, no Cloudflare credential was used, no phone was touched, and `spike-140-141` was read, not
+moved. What is blocked is unchanged: the verdict by the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9
+— only an iPhone exists); `docs/PHASE0_REPORT.md` by that verdict; any deployment by O1 and O10; the
+single-PUT check by O4's S3 keys; Q4, Q5, Q10(b) and Q11 by the operator; the renderer by the eight
+open pull requests that own its files (`gh pr list --state open` answers `#70`, `#100`, `#101`, `#104`,
+`#112`, `#113`, `#117`, `#124`, and #70 and #101 are `CONFLICTING`). One operational fact, unchanged:
+the root filesystem is at 100 percent, 138 MB free of 38 GB (`df -h /`).
+
+**Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in 19.769s`, `OK`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0 violation(s)`. CI decides the rest.

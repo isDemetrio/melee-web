@@ -192,6 +192,31 @@ nativa al **suo** commit, o si ricostruisce il riferimento al commit servito: è
 `main` riceve ancora le PR della campagna di performance, un `dist` costruito adesso sarebbe
 superato entro l'ora, e quale commit servire è la decisione dell'operatore.
 
+**Correzione 2026-10-06 — le sette sono ancora sette, ma non sono tutte, e la più recente è del commit di `main`.**
+Il comando qui sopra filtra per nome (`spike-dist*/`) e risponde ancora sette; le cartelle sotto
+`/home/hermes/incoming/phase0/` che contengono uno `spike-core/core.json` sono però **diciotto** al
+2026-10-06, lette con
+`find /home/hermes/incoming/phase0 -maxdepth 4 -name core.json -path '*spike-core*' -print`. La più
+recente non è `spike-dist-drawcost2`: è **`spike-140-141`**, scaricata il 2026-10-05 18:04, e il suo
+`core.json` dichiara `{"commit":"688a1b268562018e548738d46480179d770286bc","opt":"-Oz"}` — il merge
+di PR #140, cioè il commit di cui questo repository dice che il core spedito è **ancora** quello
+(`docs/PROGRESS.md`, riga "Recompiled core": `git diff --stat 688a1b2 origin/main -- wasm/ native/
+patches/ upstream/ web/ .github/workflows/phase0-build.yml` è vuoto). Il modulo di quella cartella è
+`melee_core_web.wasm`, **15.280.251 byte**: è lo stesso numero che la run `37351694903` (`Phase 0 —
+WASM core`, `688a1b2`, `wasm_bytes: 15280251`, `within_pages_limit: true`) riporta per il modulo web,
+quindi due segnali indipendenti — l'hash del commit scritto in `core.json` e la dimensione del modulo
+— dicono che un `dist` al commit del core di `main` **è già sulla VPS**, e che servire il core di
+`main` non costa alcun dispatch. Per la riga qui sopra questo toglie un'obbligazione: la regola di
+sezione 5, "Il commit del riferimento", accetta una traccia identica al riferimento **annotando
+entrambi i commit**, quindi una traccia nativa del commit servito serve solo se C5 mostra una
+differenza. Su questa macchina le tracce native presenti sono quelle di `4fba3a0…`
+(`reference-4fba3a0`), `4a3f537…` (`reference-4a3f537`) e `63511ce6…` (`reference-63511ce`, dove la
+traccia sta in `run-1`/`run-2` e `runs/native-1` è un collegamento a `run-1`), tutte con SHA-1
+`c79c53b9cdf81426fa0277e7497a69e55bc5f571`; nessuna è del commit `688a1b2`, e nessuna delle diciotto
+dichiara il commit del riferimento di sezione 5 (`63511ce6…`). **Quale commit servire resta la
+decisione dell'operatore**: questa correzione dice che una delle due strade che la riga nominava è
+già pronta, non che la scelta sia stata fatta.
+
 Il numero che il comando qui sotto si aspettava era **≈ 87,1 MB**: è la build `-O1` del 2026-09-30
 (§0), mentre dal 2026-10-02 i moduli serviti sono ≈ 15,25 MB, cioè cinque volte meno. Fa fede il file
 servito.
@@ -450,7 +475,7 @@ dichiarati: si possono solo controllare per coerenza (C5–C8), non dimostrare.
 **Estrazione** (per ogni JSON; `R` è il file):
 
 ```bash
-source /home/hermes/incoming/phase0/current.env     # SHA=f0d76a28…, D=/home/hermes/incoming/phase0/f0d76a2816ec
+source /home/hermes/incoming/phase0/current.env     # SHA=63511ce6…, D=/home/hermes/incoming/phase0/reference-63511ce (aggiornato il 2026-10-01)
 R=/home/hermes/incoming/phase0/devices/iphone-safari/<file>.json
 W=$(mktemp -d)
 python3 - "$R" "$W" <<'EOF'
