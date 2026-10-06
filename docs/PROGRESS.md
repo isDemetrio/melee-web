@@ -21,7 +21,7 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,280,251 bytes web, 15,233,853 Node** on `main` at `688a1b2`, and no build input of the module has changed since that build: `git diff --stat 688a1b2 origin/main -- wasm/ native/ patches/ upstream/ web/ .github/workflows/phase0-build.yml` is **empty**. **This row deliberately states that command instead of a count of merges.** On 2026-10-06 it carried a count three times — three, then four, then six — and every one of them went stale on the very next merge while the command stayed empty (the count is seven as this is written), so the command is the evidence and the count is not. What the emptiness leaves is documentation and the Pages deploy script: `git diff --name-only 688a1b2 origin/main` names `docs/DEPLOY.md`, `docs/FIFO_WRITE_COST.md`, `docs/PHASE0_DEPLOY_PLAN.md`, `docs/PORT_CHANGES.md`, `docs/PROGRESS.md`, `scripts/deploy.sh`, `scripts/tests/test_deploy_guard.sh`, none of which is a build input, which is what makes the core `main` ships still the core of `688a1b2` | `Phase 0 — WASM core`, run 37351694903 (`MELEE_PROFILING_FUNCS: OFF`, `-Oz`, `within_pages_limit: true`); the number moves with every commit — it was 15,278,604 / 15,232,193 at `fe2e06b` (run 37319576228) and 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
 | Determinism | 2400/2400 checkpoints identical to the native reference, trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | re-checked 2026-10-05 with `scripts/phase0/compare_checkpoints.py` on the stored iPhone trace: `identical: 2400 retraces` |
 | Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU, and since PR #138 an internal-resolution lever (100/75/50%) for measuring how much of the lag is fill rate. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" and the last entry; `docs/PRESENTATION_COST.md`, "Internal resolution" |
-| Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05 and again 2026-10-06: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
+| Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05 and twice on 2026-10-06, the second time against the native reference **rebuilt that day** at `688a1b2` because the three reference directories the earlier runs used had gone from the machine — `/home/hermes/incoming/phase0/reference-688a1b2/runs/native-1/trace.csv`: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 (last entry) |
 | Device row — mid-range Android, the row that decides | **not measured: there is no such device** | `docs/OPEN_QUESTIONS.md` Q9 |
 | Deploy plan | PR 1–5 landed, plus PR 6's tool (`scripts/phase0/go_no_go.py`, PR #31 — `docs/PHASE0_REPORT.md` is the row below), and `disc-chunks.json` computed; the Cloudflare side is in place and in use — the bucket holds the disc (run 37300691991, 2026-10-05), the Pages token and account ID are repository secrets and `CF_PAGES_PROJECT` is set, and the spike preview is published behind Access (run 36868675226, 2026-10-01) | `docs/PHASE0_DEPLOY_PLAN.md` section 6, "Stato al 2026-10-05" |
 | `docs/PHASE0_REPORT.md` (P0-12) | **not written**: it carries the verdict and waits on the deciding device row | `docs/PHASE0_DEPLOY_PLAN.md` section 6, step 14 |
@@ -42,6 +42,11 @@ done is step 6 — an operator decision (O1, which Android, which route). The fi
 neither a credential nor a decision is step 7: M1 and M2 on a real device, which needs hardware this
 machine does not have — a desktop Chrome with three runs, and a mid-range Android. Nothing in the
 repository blocks it: the core, the page and the local device server are in `main` and green. One
+step of that section marked `[subito]` was **redone today, and it had to be**: step 3, a native
+trace at the commit of the served core, because the machine no longer held a single one of the three
+reference directories the device plan's C5 names. The trace was rebuilt from CI at `688a1b2` (the
+commit `main`'s core is, and the one `spike-140-141` carries) and at `63511ce6` (the Pages
+preview): two runs each, `identical: 2400 retraces`, SHA-1 `c79c53b9…`. One
 core change was tried outside the plan and is closed, not in flight: patch `0013` (the FIFO word
 appended without value-initialising it) was built, gated and measured, and it is a regression: the
 two profile pairs and the withdrawal are in `docs/FIFO_WRITE_COST.md` and its row in
@@ -4582,3 +4587,77 @@ open pull requests that own its files (`gh pr list --state open` answers `#70`, 
 the root filesystem is at 100 percent, 138 MB free of 38 GB (`df -h /`).
 
 **Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in 19.769s`, `OK`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0 violation(s)`. CI decides the rest.
+
+
+## 2026-10-06 — the native reference C5 compares against had gone from the machine, and section 6 step 3 is redone at the two commits that can be served (cron, `cron/phase0-oct6i`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs
+neither a credential, a phone nor a decision except step 3 — a native trace at the commit of the core
+served — which the plan marks `[subito]` and which had been done only for the commits served on
+2026-09-30 and 2026-10-01. This session found the reason it was no longer optional: the three
+reference directories the device plan's C5 names, and the `D=` of `current.env`, do not exist on this
+machine any more, so the verdict command exited `2` before reading a single JSON.
+
+**Verified, without a build on this machine, without a Cloudflare credential, without a phone, without a tunnel and without a server.**
+
+- **The reference directories are gone.** `ls -d /home/hermes/incoming/phase0/reference-4fba3a0
+  /home/hermes/incoming/phase0/reference-4a3f537 /home/hermes/incoming/phase0/reference-63511ce`
+  answers `No such file or directory` for all three, and `python3 scripts/phase0/go_no_go.py --reference
+  /home/hermes/incoming/phase0/reference-63511ce/run-1/trace.csv --reference-commit 63511ce6c5f4e39be07b9acc9b517b2010ca01db
+  --phone /home/hermes/incoming/phase0/devices/iphone-safari/doc_*.json` prints `VERDICT: INPUT-ERROR`,
+  exit 2, with `... No such file or directory` in `reasons`. `find /home/hermes -maxdepth 6 -type d
+  -name 'reference*'` answers `reference-2026-09-30` alone. The parent directory
+  `/home/hermes/incoming/phase0` has mtime 08:55 today, after the runs the previous entry records, and
+  the root filesystem, 138 MB free there, has **16 GB** free here (`df -h /`: 20 GB of 38 GB used).
+  Who or what removed them is not recorded here; this session rebuilt what was missing instead of
+  looking for a culprit.
+- **Two references rebuilt from CI, at the two commits that can be served.** Tag
+  `phase0-native-ref-688a1b2` at `688a1b268562018e548738d46480179d770286bc` — the commit of the core
+  `main` ships and the one `spike-140-141` on the VPS carries — and tag `phase0-native-ref-63511ce` at
+  `63511ce6c5f4e39be07b9acc9b517b2010ca01db`, the Pages preview, following the
+  `phase0-native-ref-4fba3a0` precedent of 2026-09-30. `phase0-native-headless.yml` dispatched at each
+  with the typed boolean (`gh api -X POST ... -F ref=<tag> -F 'inputs[upload_binary]=true'`, the
+  `-f`-sends-a-string pitfall of `docs/AGENT_RULES.md`): runs `37444119631` and `37444995041`, both
+  `success`, 4m17s and 3m22s, artifact `melee-core-headless` 8,399,088 and 8,308,846 bytes compressed, downloaded
+  outside the checkout.
+- **Both traces measured here, twice each, on the operator's own disc.**
+  `scripts/phase0/run_checkpoints.sh <exe> /home/hermes/incoming/melee-ntsc102.iso <dir>/run-N 2400
+  upstream/melee-unlocked/port/scripts/parity_vs_onett.txt`: the disc is verified before anything runs
+  (`1459978240` bytes, SHA-1 `d4e70c06…`), 62 s wall clock per run at `688a1b2`,
+  `mode=2 state=2 match_frame=762 (retraces=2400)`, `FPSCR requests: RN=0 NI=0`, trace SHA-1
+  `c79c53b9cdf81426fa0277e7497a69e55bc5f571`; `compare_checkpoints.py run-1 run-2` → `identical: 2400
+  retraces`, exit 0. Both directories carry the layout C5 expects (`runs/native-1` linked to `run-1`).
+- **What the new trace says that was not measured before.** The native trace at `688a1b2` is identical
+  to the one at `63511ce6` and to `4fba3a0`'s, so the core changes between them — the performance
+  campaign, PR #140 and #141 — moved nothing observable in the native build.
+- **The verdict command works again and prints what the resume point says it prints.** With
+  `--reference /home/hermes/incoming/phase0/reference-688a1b2/runs/native-1/trace.csv
+  --reference-commit 688a1b268562018e548738d46480179d770286bc` on the three
+  `devices/iphone-safari/doc_*.json`: `VERDICT: DESKTOP-ONLY`, exit 3, worst repeat
+  `3.244225721784777` ms mean and `5.64` ms p99, `0` differences on 2400 rows in each of the three,
+  C3 accepted by the cross-commit rule with the annotation in `reasons` (those JSONs ran `4fba3a0…`).
+  The same command with the `63511ce6` reference prints the same verdict. Nothing else about the row
+  changed, and the eight open pull requests that own the renderer are still the eight the resume point
+  names (`gh pr list --state open`: `#70`, `#100`, `#101`, `#104`, `#112`, `#113`, `#117`, `#124`).
+
+**Changed.** `docs/PROGRESS.md`: the resume point's device row (which reference it was re-measured
+against, and why that reference had to be rebuilt) and its `Next step` paragraph (step 3 redone);
+`docs/PHASE0_DEPLOY_PLAN.md` section 6 step 3, a dated `Fatta` line; `docs/PHASE0_DEVICE_PLAN.md`
+section 2 V2, the dated update that the three directories are gone, and section 5, the rebuild with its
+table, command and output. Two tags pushed. No workflow, script, patch, renderer, simulation or
+test-semantics file: `phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull
+request pays no WASM core build.
+
+**Not done, and why.** Nothing was compiled on this machine — the two builds are the two CI dispatches —
+and no Cloudflare credential was used, no phone was touched, no tunnel was opened and no server was
+started. What is blocked, and by what, is unchanged: the verdict by the mid-range Android
+(`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists); `docs/PHASE0_REPORT.md` by that verdict; any
+deployment by O1, a legal judgement, and by O10, the Android model; the single-PUT check by the S3 keys
+of O4; Q4, Q5, Q10(b) and Q11 by the operator; the renderer by the eight open pull requests that own its
+files.
+
+**Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests
+in 20.386s`, `OK`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked,
+no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
+/home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
+violation(s)`. CI decides the rest.
