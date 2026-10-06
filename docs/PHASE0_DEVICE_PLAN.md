@@ -217,6 +217,18 @@ dichiara il commit del riferimento di sezione 5 (`63511ce6…`). **Quale commit 
 decisione dell'operatore**: questa correzione dice che una delle due strade che la riga nominava è
 già pronta, non che la scelta sia stata fatta.
 
+**Aggiornamento della stessa giornata — le tre cartelle nominate qui sopra non esistono più.** Misurato
+il 2026-10-06 alle 09:32 UTC: `ls -d /home/hermes/incoming/phase0/reference-4fba3a0
+/home/hermes/incoming/phase0/reference-4a3f537 /home/hermes/incoming/phase0/reference-63511ce`
+risponde `No such file or directory` per tutte e tre, e `scripts/phase0/go_no_go.py` con il percorso
+che la sezione 5 nomina esce `2` con `INPUT-ERROR` e `No such file or directory` senza guardare un
+solo JSON. La cartella madre `/home/hermes/incoming/phase0` ha mtime **08:55** di oggi, cioè dopo le
+corse che l'ultima entry di `docs/PROGRESS.md` registra, e nella stessa giornata il filesystem di root
+è passato da 142 MB liberi a **16 GB** liberi; chi o cosa abbia rimosso le cartelle non è registrato
+qui. Due delle tre sono state **ricostruite** il 2026-10-06 — `63511ce6…` e, per la prima volta,
+`688a1b2…` — con due corse ciascuna e traccia `c79c53b9…`: comandi, percorsi e numeri
+nell'aggiornamento di sezione 5.
+
 Il numero che il comando qui sotto si aspettava era **≈ 87,1 MB**: è la build `-O1` del 2026-09-30
 (§0), mentre dal 2026-10-02 i moduli serviti sono ≈ 15,25 MB, cioè cinque volte meno. Fa fede il file
 servito.
@@ -523,6 +535,39 @@ core servito, perché la differenza potrebbe venire dal commit e non da Safari.
 `--reference-commit 63511ce6c5f4e39be07b9acc9b517b2010ca01db` con quel file. `current.env` punta a
 quella cartella (layout `runs/native-1/` incluso). Dettagli e numeri: `docs/PROGRESS.md`, sezione
 del 2026-10-01 pomeriggio (PR #46, non ancora in `main` a questa data).
+
+**Aggiornamento 2026-10-06 — il riferimento è stato ricostruito, e serviva.** Le tre cartelle che
+questa sezione nomina non esistevano più sulla macchina (sezione 2, V2, aggiornamento della stessa
+giornata): il comando di C5 usciva `2` con `INPUT-ERROR` prima di guardare un solo JSON, quindi una
+sessione sul device lungo la strada D si sarebbe fermata al primo controllo. Il riferimento è stato
+ricostruito dalla CI e misurato qui, due corse per commit, con `scripts/phase0/run_checkpoints.sh`
+sulla stessa ISO verificata (`1459978240` byte, SHA-1 `d4e70c06…`):
+
+| cartella | commit | corse | traccia SHA-1 | scena finale |
+| --- | --- | --- | --- | --- |
+| `/home/hermes/incoming/phase0/reference-688a1b2/` | `688a1b268562018e548738d46480179d770286bc` | `run-1`, `run-2` | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | `mode=2 state=2 match_frame=762 (retraces=2400)` |
+| `/home/hermes/incoming/phase0/reference-63511ce/` | `63511ce6c5f4e39be07b9acc9b517b2010ca01db` | `run-1`, `run-2` | `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | idem |
+
+`688a1b2` è il commit del core che `main` spedisce e quello che la cartella `spike-140-141` sulla VPS
+porta (`docs/PROGRESS.md`, riga "Recompiled core": il diff dei sorgenti del modulo da lì a `main` è
+vuoto), quindi è il riferimento della strada D senza alcun dispatch; `63511ce6` è quello che
+l'anteprima Pages serve. Entrambe le cartelle hanno il layout di questa sezione — `run-1` e `run-2`,
+con `runs/native-1` collegato a `run-1` — quindi il comando qui sopra funziona con l'una o con
+l'altra. Che le due tracce siano identiche a quella di `4fba3a0` dice anche qualcosa che prima non
+era misurato: le modifiche al core fra `63511ce` e `688a1b2` (la campagna di performance, PR #140 e
+#141) non hanno spostato nulla di osservabile nel nativo. Il comando della sessione sulla strada D,
+con il `dist` che è già sulla VPS:
+
+```bash
+python3 scripts/phase0/go_no_go.py \
+  --reference /home/hermes/incoming/phase0/reference-688a1b2/runs/native-1/trace.csv \
+  --reference-commit 688a1b268562018e548738d46480179d770286bc \
+  --phone /home/hermes/incoming/phase0/devices/iphone-safari/doc_*.json
+```
+
+Eseguito il 2026-10-06 su quei tre JSON: `VERDICT: DESKTOP-ONLY`, exit 3, ripetizione peggiore
+3,2442 ms di media e 5,64 ms di p99, `0` differenze su 2400 righe, con C3 accettato dalla regola del
+cross-commit (i JSON hanno girato `4fba3a0…`). È la riga iPhone che `docs/PROGRESS.md` riporta.
 
 **Se la traccia differisce** (con riferimento dello stesso commit): è un risultato importante, non
 un guasto del test. Vuol dire che JavaScriptCore calcola qualcosa in modo diverso da V8 e dal nativo.

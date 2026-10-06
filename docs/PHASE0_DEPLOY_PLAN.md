@@ -482,6 +482,11 @@ dell'operatore; **[credenziali]** serve O2–O9; **[device]** serve l'operatore 
    mai nel checkout; `core.json` deve dire `-Oz`.
 3. **[subito]** Traccia nativa al commit del core servito, se diverso da `f0d76a28…` (regola di
    `docs/PHASE0_DEVICE_PLAN.md` §5, "Il commit del riferimento").
+   **Fatta il 2026-09-30** per il core allora servito (`4fba3a0`, tag `phase0-native-ref-4fba3a0`) e
+   **rifatta il 2026-10-06** per i due commit che si possono servire — `688a1b2`, il core di `main`
+   che la cartella `spike-140-141` porta, e `63511ce6`, l'anteprima Pages — perché quella mattina le
+   tre cartelle di riferimento non esistevano più sulla macchina e C5 non partiva affatto:
+   `docs/PHASE0_DEVICE_PLAN.md` §5, aggiornamento 2026-10-06.
 4. **[subito]** PR 2, PR 3, PR 4, PR 5 in quest'ordine, una alla volta, ciascuna con CI verde. Si
    scrivono e si testano senza credenziali (i test usano un disco sintetico; il deploy si salta
    da solo).
