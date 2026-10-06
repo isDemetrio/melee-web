@@ -18,7 +18,7 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Area | State | Evidence |
 | --- | --- | --- |
 | Disc image, `main.dol` | verified against independent public sources | `docs/OPEN_QUESTIONS.md` Q1, Q2 |
-| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,280,251 bytes web, 15,233,853 Node** on `main` at `688a1b2`, which is the tip of `main` less three documentation-only merges | `Phase 0 — WASM core`, run 37351694903 (`MELEE_PROFILING_FUNCS: OFF`, `-Oz`, `within_pages_limit: true`); the number moves with every commit — it was 15,278,604 / 15,232,193 at `fe2e06b` (run 37319576228) and 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
+| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,280,251 bytes web, 15,233,853 Node** on `main` at `688a1b2`, which is the tip of `main` less four documentation-only merges (`#142`, `#143`, `#144` and `#145`, all four under `docs/`: `git diff --stat 688a1b2 origin/main` is four files, `docs/FIFO_WRITE_COST.md`, `docs/PHASE0_DEPLOY_PLAN.md`, `docs/PORT_CHANGES.md` and `docs/PROGRESS.md`) | `Phase 0 — WASM core`, run 37351694903 (`MELEE_PROFILING_FUNCS: OFF`, `-Oz`, `within_pages_limit: true`); the number moves with every commit — it was 15,278,604 / 15,232,193 at `fe2e06b` (run 37319576228) and 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
 | Determinism | 2400/2400 checkpoints identical to the native reference, trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | re-checked 2026-10-05 with `scripts/phase0/compare_checkpoints.py` on the stored iPhone trace: `identical: 2400 retraces` |
 | Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU, and since PR #138 an internal-resolution lever (100/75/50%) for measuring how much of the lag is fill rate. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" and the last entry; `docs/PRESENTATION_COST.md`, "Internal resolution" |
 | Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
@@ -4330,3 +4330,55 @@ materialise an artifact: the root filesystem of this VPS is at 100 percent, 157 
 **Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in 17.835s`, `OK (skipped=1)`;
 `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
 /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0 violation(s)`. CI decides the rest.
+
+## 2026-10-06 — the disc's own upload path is the one thing the plan still calls unverified, and the resume point was one merge behind (cron, `cron/phase0-oct6c`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs
+neither a credential, a phone nor a decision: steps 1-5 landed, step 6 is the O1/Android/route decision,
+step 7 is M1/M2 on hardware this machine does not have, step 8 waits on 7, steps 9-13 are the Cloudflare
+credentials and the devices, and step 14, `docs/PHASE0_REPORT.md`, waits on the row that decides. So this
+session read section 6 and this file's own resume point against the repository, and found one live
+statement the repository now contradicts — the plan's own account of how the disc reached the bucket it
+already sits in — and one row of the resume point that its own merge made false.
+
+**Verified, without a build, without a Cloudflare credential and without a device.**
+
+- **The bucket holds the disc, in the run's own words.** `gh run view 37300691991 --log` (`four-player-load.yml`,
+  2026-10-05 11:05:27 UTC, `pull_request`, `success`) carries `Downloading "melee-ntsc102.iso" from
+  "melee-phase0-disc"`, then `Download complete.`, then `disc image verified: 1459978240 bytes, sha1
+  d4e70c064cc714ba8400a849cf299dbd1aa326fc`. Run `37148808325` (`CI`, 2026-10-03 19:41:39 UTC, `main`,
+  `workflow_dispatch`, `success`) is the checkpoint-replay job that reads the same object, the 27 s
+  download `docs/ATTRIBUTE_RESIDUAL.md` line 85 measures.
+- **Nothing in this repository uploads it.** `grep -rn 'r2 object' .github/workflows/*.yml` finds four
+  `r2 object get` (`ci.yml` line 310, `four-player-load.yml` line 66, `four-player-sweep.yml` line 56,
+  `texture-simd.yml` line 67) and no `put`; the only `r2 object put` in the tree is
+  `scripts/upload_assets.sh` line 131, which writes the product's asset bucket, and
+  `scripts/phase0/upload_disc.sh` — the path section 6 step 10 names — has no recorded run.
+- **`main`'s core is still the core of `688a1b2`, and the resume point was one merge behind.**
+  `git diff --stat 688a1b2 origin/main` is four files, all under `docs/`, and `git log --merges --oneline
+  688a1b2..origin/main` is four merges (`#142`, `#143`, `#144`, `#145`). The row said three, which was true
+  when it was written and stopped being true when its own pull request merged.
+
+**Changed.** `docs/PROGRESS.md`, the resume point's "Recompiled core" row (three to four, naming the four
+merges and the command that shows the count) and this entry. `docs/PHASE0_DEPLOY_PLAN.md`, section 5, PR 2's
+"Fatta" row: the sentence that gave the missing bucket (O3) as the reason the single-PUT acceptance is
+unverified now records that the bucket exists and holds the disc, that what the check would still need is
+O4's S3 keys and a session on the VPS (which section 6's dated note already made conditional on a
+re-upload), and that how the object reached the bucket is not recorded in this repository. No workflow,
+script, patch, renderer, simulation or test-semantics file: `phase0-build.yml`'s `pull_request.paths` does
+not list `docs/`, so this pull request pays no WASM core build.
+
+**Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or
+tunnelled, and no Cloudflare credential was used. What is blocked, and by what, is unchanged: the verdict by
+the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the deciding row is
+unmeasured); `docs/PHASE0_REPORT.md` by that verdict; any deployment by O1, a legal judgement, and by O10,
+the Android model; the single-PUT check by O4's S3 keys; Q4, Q5, Q10(b) and Q11 by the operator; the
+renderer by the eight open pull requests that own its files (#70, #100, #101, #104, #112, #113, #117,
+#124). One operational fact, unchanged: the root filesystem of this VPS is at 100 percent, 152 MB free of
+38 GB (`df -h /`).
+
+**Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in
+18.689s`, `OK (skipped=1)`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s)
+checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
+/home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
+violation(s)`. CI decides the rest.

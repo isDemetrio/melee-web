@@ -375,7 +375,17 @@ byte (`docs/PROGRESS.md`, riga "Recompiled core").
 `scripts/phase0/upload_disc.sh` e i suoi casi di rifiuto in `scripts/tests/test_deploy_guard.sh`
 esistono. `rclone` **non** è installato su questa VPS (`which rclone` non trova nulla), quindi il
 percorso è il fallback `curl --aws-sigv4` che `upload_disc.sh` riga 10 nomina. Che R2 accetti un PUT
-singolo da 1,46 GB resta non verificato: serve il bucket (O3).
+singolo da 1,46 GB resta non verificato, ma la ragione che questa riga dava è superata: il bucket
+(O3) **esiste e contiene il disco** — la run `37300691991` (`four-player-load.yml`, 2026-10-05 11:05 UTC,
+`success`) registra nel proprio log `Downloading "melee-ntsc102.iso" from "melee-phase0-disc"`,
+`Download complete.` e `disc image verified: 1459978240 bytes, sha1 d4e70c064cc714ba8400a849cf299dbd1aa326fc`
+— quindi ciò che manca al controllo sono le chiavi S3 (O4) e una sessione sulla VPS, non il bucket; il
+passo 10 della sezione 6 è condizionato da allora a un nuovo caricamento. **Come l'oggetto sia arrivato
+nel bucket non è registrato in questo repository**: nessuna workflow lo carica, e le quattro che lo usano
+lo leggono soltanto (`npx --yes wrangler@4 r2 object get melee-phase0-disc/melee-ntsc102.iso --remote`,
+`ci.yml` riga 310, `four-player-load.yml` riga 66, `four-player-sweep.yml` riga 56, `texture-simd.yml`
+riga 67), mentre `scripts/phase0/upload_disc.sh`, l'unico percorso che il piano nomina, non ha una run
+registrata.
 
 **PR 3 — la Function del disco**
 
