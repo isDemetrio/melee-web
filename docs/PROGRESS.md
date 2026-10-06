@@ -41,7 +41,10 @@ what each one blocks.
 done is step 6 — an operator decision (O1, which Android, which route). The first step that needs
 neither a credential nor a decision is step 7: M1 and M2 on a real device, which needs hardware this
 machine does not have — a desktop Chrome with three runs, and a mid-range Android. Nothing in the
-repository blocks it: the core, the page and the local device server are in `main` and green.
+repository blocks it: the core, the page and the local device server are in `main` and green. One
+core change is in flight outside the plan and is not part of it: patch `0013` (the FIFO word is
+appended without value-initialising it) sits on branch `perf/fifo-write-path` with its pull request,
+unmeasured, and its last section records the GitHub Actions outage of 20:22-21:51 UTC that stranded it.
 
 ### The state as it was written — 2026-09-30 06:40 UTC, branch `feat/wasm-runtime-maps`, PR #1
 
@@ -4199,4 +4202,58 @@ ever created. The verdict is still blocked by the mid-range Android (`docs/OPEN_
 `python3 scripts/check_no_game_data.py --all` → `OK: 295 tracked file(s) checked, no game data, no
 oversized files`; `python3 scripts/check_docs.py --submodule
 /home/hermes/projects/melee-web/upstream/melee-unlocked` → `210 citations in 4 documents, 0
+violation(s)`. CI decides the rest.
+
+## 2026-10-05 — the FIFO word is written once; the branch that carried it was stranded by a GitHub Actions outage (cron, `perf/fifo-write-path`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs
+neither a credential, a phone nor a decision: steps 1-5 landed, step 6 is the O1/Android/route decision,
+step 7 is M1/M2 on hardware this machine does not have, step 8 is applied by `scripts/phase0/go_no_go.py`
+to every JSON that exists, steps 9-11 are the Cloudflare credentials and the deploy, steps 12-13 are the
+Android, and step 14's `docs/PHASE0_REPORT.md` waits on the row that decides. What this session found
+instead was unfinished work in flight: branch `perf/fifo-write-path` was pushed at 20:21 UTC carrying
+`patches/0013-fifo-write-without-value-init.patch`, and it was then left with **no pull request and no row
+in `docs/PORT_CHANGES.md`** — which `docs/AGENT_RULES.md` requires *before* the change is made — because
+both of the CI dispatches that were meant to verify it died on the Actions outage recorded below.
+
+**The outage, measured.** Every `Phase 0 - WASM core` run between 20:22 and 20:44 UTC failed after about
+15 minutes with the same annotation, `The job was not acquired by Runner of type hosted even after multiple
+attempts`: runs `37369290053` (20:22) and `37371159436` (20:40) on this branch, `37369432295` (20:23) and
+`37371600015` (20:44) on `main`, and `ci.yml`'s push run `37362609178` (20:38) for the merge of #142.
+GitHub's status page reported `Actions: degraded_performance` at 21:31 UTC. It was over by 21:51: a
+`ci.yml` dispatch on this branch (run `37378661157`) acquired a runner at once and all four jobs passed in
+about two minutes. **So those five red runs are infrastructure, not code**, and `main` has had no run since
+17:52 that reached a runner and completed. `main`'s own dispatch at 22:02 UTC (run `37379827527`) then
+completed successfully in 10m18s, so `main` is green again and the window above is closed.
+
+**Changed.** `patches/0013-fifo-write-without-value-init.patch` (written by the interrupted run; unchanged
+here), `docs/PORT_CHANGES.md` — the row the rules require, plus a section stating what the change is, which
+line of the four-player profile names the cost it targets, and that **it is not measured** — and this entry.
+No file outside `patches/` and `docs/`; no upstream file; no workflow; no simulation, renderer or test
+semantics. `phase0-build.yml` lists `patches/**` in `pull_request.paths`, so the pull request does pay a
+WASM core build — correctly, because it is the series the build applies.
+
+**Not done, and why.** Nothing was built on this machine, deployed, uploaded, served or tunnelled; the
+module can only be built by GitHub Actions, and the dispatch above is a correctness check, not a
+measurement, so no speed claim is made for patch 0013. The verdict stays blocked by the mid-range Android
+(`docs/OPEN_QUESTIONS.md` Q9); `docs/PHASE0_REPORT.md` by that verdict; Q4, Q5, Q10(b) and Q11 by the
+operator; the renderer by the eight open pull requests that own its files (#70, #100, #101, #104, #112,
+#113, #117, #124). One operational fact, recorded because it can stop a *session* rather than a build: the
+VPS root filesystem is at 100 percent full — 250 MB free of 38 GB, `/home/hermes/projects` 15 GB and
+`/home/hermes/incoming` 5.3 GB — so a session that needs to materialise an artifact may not be able to.
+
+**Measured afterwards, and withdrawn.** The A/B the outage had stranded ran once Actions recovered —
+branch run `37379785602` and `main` run `37379827527`, both green. Two profile pairs at four players
+over the same 715-frame window, run in opposite order: the FIFO write-path cluster goes from 7.48% to
+9.62% of the profile in one pair and from 7.52% to 10.00% in the other (+2.14 and +2.48 points), with
+`host::gx_write` roughly doubling in absolute time while the profile total moves only 4.8%. The rewrite
+is behaviour-identical — the branch core's state trace is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`,
+the reference — but it is **slower**. `patches/0013-fifo-write-without-value-init.patch` is therefore
+removed from the series and no gain is claimed for it. The numbers and the reasoning are in
+`docs/FIFO_WRITE_COST.md`; this is a null result, stated plainly.
+
+The gates that can run here are green on the edited tree: `python3 -m unittest discover -s scripts/tests`
+gives `Ran 214 tests in 20.780s`, `OK`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300
+tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
+/home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
 violation(s)`. CI decides the rest.

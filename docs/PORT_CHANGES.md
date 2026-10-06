@@ -19,6 +19,8 @@ the CI checkout only.
 
 | `0007-gx-settings-boundary.patch` | `gx/gx_core.cpp`, `gx/pc_settings_shared.h`, new `gx/pc_settings_guest.h` | Move the guest menu observer declaration into a platform-neutral header, so FIFO decoding does not include Win32/XInput settings UI types. | CI patch series | clang run 36709850208 identified the include chain; verification pending |
 
+| `0013-fifo-write-without-value-init.patch` | `port/runtime/gx/gx_core.cpp` | `write_fifo` grew the FIFO parse buffer with `resize(at + bytes)`, which value-initialises the bytes it adds, and then overwrote every one of them with the loop below it: each byte of every FIFO word was stored twice. The word is now built in a 4-byte scratch and handed to `insert`, the call the neighbouring `write_fifo_bytes` already makes, which copies the range in for a trivially copyable element type. Same bytes, same order, same `drain_fifo()` after them. | `scripts/apply_patches.sh` (CI only) | Local `git apply --check` against the pin: `Checking patch port/runtime/gx/gx_core.cpp... Hunk #1 succeeded at 736 (offset -4 lines)`. Patch series and WASM core build: run `37379785602`, green. **Measured, and withdrawn**: the A/B is in `docs/FIFO_WRITE_COST.md`. The rewrite is behaviour-identical — the state trace is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`, unchanged — but it is **slower**: +2.14 and +2.48 points of the four-player profile in two pairs of opposite order, with `host::gx_write` roughly doubling. `patches/0013-fifo-write-without-value-init.patch` is therefore removed from the series, and no gain is claimed for it. |
+
 ## Why the FMA family goes through `wasm/compat/fma.h`
 
 The patch's Emscripten branch used to call `std::fma` directly. Emscripten's libc is
@@ -216,6 +218,36 @@ The pinned desktop consumers additionally include `gx_d3d12.cpp:1781`
 pose sampling. `passes` is read/updated to derive `current_pass` inside the
 observer. Thus “nobody reads these data” is false even though the WebGPU backend
 does not currently consume all of these fields. `?observer=off` is not supported.
+
+### 0013 — the FIFO word is appended without value-initialising it
+
+`write_fifo` (`port/runtime/gx/gx_core.cpp`) is the guest's own entry into the emulated GPU: the
+recompiled PowerPC code hands the FIFO one 32-bit word at a time. It grew `g_buf` with
+`resize(at + bytes)` and then wrote each byte with `g_buf[at + i] = (uint8_t)(value >> ...)`.
+`resize` value-initialises the bytes it adds — that is the `vector<u8>::__append` +
+`__construct_at_end` pair the four-player profile names at **262.9 ms, 3.6%** of the
+envelope-skinning subtree (`docs/SKINNING_ENVELOPE_COST.md`) — and the loop then overwrites every
+one of them, so each byte of every FIFO word is stored twice. The patch builds the word in a 4-byte
+scratch and hands the range to `insert`, which is what the neighbouring `write_fifo_bytes` already
+does (`gx_core.cpp` line 748 before the patch); for a trivially copyable element type the range is
+copied in without the second touch.
+
+Nothing else changes: the same bytes reach the parser in the same order, and `drain_fifo()` is
+still called once after them. No GX command, validation, guest write, texture version, observer
+counter or floating-point option is touched, and the patch does not add or remove a line of the
+decoder's logic.
+
+**Measured, and withdrawn.** The A/B exists now and it is in `docs/FIFO_WRITE_COST.md`: two profile
+pairs at four players over the same 715-frame window, run in opposite order. The rewrite is
+behaviour-identical — the branch core's state trace is `c79c53b9cdf81426fa0277e7497a69e55bc5f571`,
+the same as the reference — but it is **slower**: the FIFO write-path cluster goes from 7.48% to
+9.62% of the profile in one pair and from 7.52% to 10.00% in the other (+2.14 and +2.48 points),
+with `host::gx_write` roughly doubling in absolute time while the profile total moves only 4.8%. The
+`std::vector<unsigned char>` self-time that disappears has not vanished — it moved into `gx_write`
+and grew. `std::vector::insert` over an iterator range has to handle the range aliasing the vector's
+own storage and does not inline the way `resize`'s `__append` does, so removing one redundant store
+per byte cost more than the store was worth. The patch is removed from the series; no reduction
+exists on this route, and none is claimed.
 
 ### Optional live browser input (first playable)
 
