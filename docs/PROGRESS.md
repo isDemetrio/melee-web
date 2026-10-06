@@ -3,7 +3,7 @@
 Rule (`docs/AGENT_RULES.md`): a new session must be able to resume from this file
 alone. Update it at the end of every working session.
 
-## Current state — 2026-10-05
+## Current state — 2026-10-06
 
 This log is append-only: the newest entry is the **last section of the file**, and this block is the
 entry point for a session that resumes from this file alone (`docs/AGENT_RULES.md`). It is the only
@@ -18,7 +18,7 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Area | State | Evidence |
 | --- | --- | --- |
 | Disc image, `main.dol` | verified against independent public sources | `docs/OPEN_QUESTIONS.md` Q1, Q2 |
-| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,280,251 bytes web, 15,233,853 Node** on `main` at `688a1b2`, which is the tip of `main` less four documentation-only merges (`#142`, `#143`, `#144` and `#145`, all four under `docs/`: `git diff --stat 688a1b2 origin/main` is four files, `docs/FIFO_WRITE_COST.md`, `docs/PHASE0_DEPLOY_PLAN.md`, `docs/PORT_CHANGES.md` and `docs/PROGRESS.md`) | `Phase 0 — WASM core`, run 37351694903 (`MELEE_PROFILING_FUNCS: OFF`, `-Oz`, `within_pages_limit: true`); the number moves with every commit — it was 15,278,604 / 15,232,193 at `fe2e06b` (run 37319576228) and 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
+| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,280,251 bytes web, 15,233,853 Node** on `main` at `688a1b2`, which is the tip of `main` less six merges since `688a1b2` (`#142` to `#147`), five of them documentation-only and one, `#147`, under `scripts/`: `git diff --name-only 688a1b2 origin/main` is seven files — `docs/DEPLOY.md`, `docs/FIFO_WRITE_COST.md`, `docs/PHASE0_DEPLOY_PLAN.md`, `docs/PORT_CHANGES.md`, `docs/PROGRESS.md`, `scripts/deploy.sh`, `scripts/tests/test_deploy_guard.sh` — while `git diff --stat 688a1b2 origin/main -- wasm/ native/ patches/ upstream/ web/ .github/workflows/phase0-build.yml` is empty, which is what makes the core `main` ships still the core of `688a1b2` | `Phase 0 — WASM core`, run 37351694903 (`MELEE_PROFILING_FUNCS: OFF`, `-Oz`, `within_pages_limit: true`); the number moves with every commit — it was 15,278,604 / 15,232,193 at `fe2e06b` (run 37319576228) and 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
 | Determinism | 2400/2400 checkpoints identical to the native reference, trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | re-checked 2026-10-05 with `scripts/phase0/compare_checkpoints.py` on the stored iPhone trace: `identical: 2400 retraces` |
 | Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU, and since PR #138 an internal-resolution lever (100/75/50%) for measuring how much of the lag is fill rate. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" and the last entry; `docs/PRESENTATION_COST.md`, "Internal resolution" |
 | Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
@@ -4440,4 +4440,70 @@ renderer by the eight open pull requests that own its files (#70, #100, #101, #1
 hold` over 15 cases, the three new ones among them; `python3 scripts/check_no_game_data.py --all` gives
 `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py
 --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
+violation(s)`. CI decides the rest.
+
+## 2026-10-06 — the resume point described a `main` that had moved two merges past it, and the runbook quoted a core one build behind (cron, `cron/phase0-oct6f`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs
+neither a credential, a phone nor a decision: steps 1-5 landed, step 6 is the O1/Android/route decision,
+step 7 is M1/M2 on hardware this machine does not have, step 8 waits on 7, steps 9-13 are the Cloudflare
+credentials and the devices, and step 14, `docs/PHASE0_REPORT.md`, waits on the row that decides. So this
+session read that section and this file against the repository, and found two statements about where `main`
+stands that the repository now contradicts, plus one open question of the deploy plan that was re-read
+against the Cloudflare documentation and still cannot be closed before the first deploy.
+
+**Verified, without a build, without a Cloudflare credential and without a device.**
+
+- **The resume point was two merges behind, and its justification had stopped being true.**
+  `git log --merges --oneline 688a1b2..origin/main` lists six merges, `#142` to `#147`, where the row named
+  four, and `git diff --name-only 688a1b2 origin/main` is seven files, where the row said four: the five
+  under `docs/` plus `scripts/deploy.sh` and `scripts/tests/test_deploy_guard.sh`, both changed by `#147`
+  (`cron/phase0-oct6d`, merged 2026-10-06 06:32 UTC). The row said all four merges were under `docs/`, which
+  was true when the previous session wrote it and stopped being true when its own pull request merged — the
+  same drift that session had just corrected from three merges to four.
+- **The core is still the core of `688a1b2`, and the row now states that as a check instead of an
+  adjective.** `git diff --stat 688a1b2 origin/main -- wasm/ native/ patches/ upstream/ web/
+  .github/workflows/phase0-build.yml` is empty: no build input of the module changed, which is what makes
+  run `37351694903` (15,280,251 bytes web, 15,233,853 Node, `-Oz`, `within_pages_limit: true`) still the
+  number to quote for `main`. `scripts/deploy.sh` is not a build input of the module; it is the Pages deploy
+  script.
+- **The runbook quoted the core of `696ec4f`.** `docs/DEPLOY.md` section 1 said the web module is 15,278,441
+  bytes at `-Oz`, run `37263947515`, `main` at `696ec4f`. That is two core generations back: the resume
+  point carries 15,280,251 at `688a1b2`, run `37351694903`, and the empty diff above is what makes `688a1b2`
+  still the core `main` ships.
+- **The `_headers` question is still not answerable from the documentation, and it is now dated.**
+  `docs/PHASE0_DEPLOY_PLAN.md` section 3 leaves one question to the first deploy: whether a `!` detach and a
+  re-set of the same header **in the same block** are applied in order. Re-read on 2026-10-06:
+  `developers.cloudflare.com/pages/configuration/headers/` carries `Last updated Aug 25, 2026`, and
+  `developers.cloudflare.com/workers/static-assets/headers/`, the same `_headers` format in the Workers
+  manual, carries `Last updated Sep 22, 2026`. Both still state only that a header applied twice is joined
+  with a comma separator, and both still show the detach in a **separate** block from the attach. Neither
+  says anything about the order of the two kinds of line inside one block, so the question keeps the answer
+  it had: the `curl` of the first deploy.
+- **The eight open pull requests that own the renderer are still those eight.** `gh pr list --state open`
+  answers eight pull requests — `#70`, `#100`, `#101`, `#104`, `#112`, `#113`, `#117` and `#124` — which is
+  the list the resume point and the last four entries name. Checked because a list of open pull requests is
+  the kind of statement that goes stale in silence, as the two above did.
+
+**Changed.** `docs/PROGRESS.md`: the heading date of the resume point, 2026-10-05 to 2026-10-06; its
+`Recompiled core` row, now six merges, the seven changed files by name, and the empty-diff command that
+shows the core is unchanged; and this entry. `docs/DEPLOY.md` section 1, the `The game core` row: the module
+number and run of the core `main` ships, with the `696ec4f` number kept beside it as the earlier
+measurement. `docs/PHASE0_DEPLOY_PLAN.md` section 3, the `Niente cache immutabile` row: the re-read of
+2026-10-06, with both pages and both revision dates. No workflow, script, patch, renderer, simulation or
+test-semantics file: `phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull
+request pays no WASM core build.
+
+**Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or
+tunnelled, and no Cloudflare credential was used. What is blocked, and by what, is unchanged: the verdict by
+the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the deciding row is
+unmeasured); `docs/PHASE0_REPORT.md` by that verdict; any deployment by O1, a legal judgement, and by O10,
+the Android model; the single-PUT check by the S3 keys of O4; Q4, Q5, Q10(b) and Q11 by the operator; the
+renderer by the eight open pull requests that own its files. One operational fact, unchanged: the root
+filesystem of this VPS is at 100 percent, 144 MB free of 38 GB (`df -h /`).
+
+**Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in
+20.288s`, `OK`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no
+game data, no oversized files`; `python3 scripts/check_docs.py --submodule
+/home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
 violation(s)`. CI decides the rest.
