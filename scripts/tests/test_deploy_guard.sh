@@ -109,6 +109,52 @@ else
   echo "ok: deploy --dry-run prints the command without the token"
 fi
 
+# 4b. The dist does not have to be inside the repository: CI deploys $RUNNER_TEMP/spike-dist.
+#     docs/PHASE0_DEPLOY_PLAN.md section 3 asked whether anything else blocks that, and the
+#     answer is that the only checks reading the dist are `_headers` and `index.html` -- neither
+#     is about where the dist sits.
+outside="$tmp/outside-dist"
+mkdir -p "$outside"
+cp "$repo/web/dist/_headers" "$repo/web/dist/index.html" "$outside/"
+set +e
+dry_outside=$(env CLOUDFLARE_API_TOKEN=dummy CLOUDFLARE_ACCOUNT_ID=dummy CF_PAGES_PROJECT=melee-web \
+  "${deploy[@]}" --dry-run --repo-dir "$repo" --dist-dir "$outside" 2>&1)
+outside_status=$?
+set -e
+if [ "$outside_status" -ne 0 ]; then
+  fail "deploy --dry-run refused a dist outside the repository (exit $outside_status)"
+  awk '{print "    " $0}' <<<"$dry_outside" >&2
+else
+  grep -q "$outside" <<<"$dry_outside" || fail "deploy --dry-run does not name the dist it was given"
+  echo "ok: deploy --dry-run accepts a dist outside the repository"
+fi
+
+# 4c. A linked worktree is a checkout. Its `.git` is a *file*, and the guard used to answer
+#     "is this a checkout?" with the filesystem, so it refused a clean worktree as
+#     "not a git checkout" while accepting a clone. This repository is worked in worktrees.
+worktree="$tmp/worktree"
+git -C "$repo" worktree add -q "$worktree" -b guard-worktree
+[ -f "$worktree/.git" ] || fail "the fixture worktree does not have a .git file"
+mkdir -p "$worktree/web/dist"
+cp "$repo/web/dist/_headers" "$repo/web/dist/index.html" "$worktree/web/dist/"
+set +e
+dry_worktree=$(env CLOUDFLARE_API_TOKEN=dummy CLOUDFLARE_ACCOUNT_ID=dummy CF_PAGES_PROJECT=melee-web \
+  "${deploy[@]}" --dry-run --repo-dir "$worktree" --dist-dir "$worktree/web/dist" 2>&1)
+worktree_status=$?
+set -e
+if [ "$worktree_status" -ne 0 ]; then
+  fail "deploy --dry-run refused a linked worktree (exit $worktree_status)"
+  awk '{print "    " $0}' <<<"$dry_worktree" >&2
+else
+  echo "ok: deploy --dry-run accepts a linked worktree"
+fi
+
+# 4d. A directory that is not a checkout at all is still refused: the guard keeps failing closed.
+mkdir -p "$tmp/not-a-checkout"
+expect_refusal "deploy from a directory that is not a checkout" 3 "is not a git checkout" \
+  env CLOUDFLARE_API_TOKEN=dummy CLOUDFLARE_ACCOUNT_ID=dummy CF_PAGES_PROJECT=melee-web \
+  "${deploy[@]}" --repo-dir "$tmp/not-a-checkout" --dist-dir "$repo/web/dist"
+
 # 5. Asset upload without credentials.
 expect_refusal "upload --apply without credentials" 2 "CLOUDFLARE_API_TOKEN" \
   env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID \

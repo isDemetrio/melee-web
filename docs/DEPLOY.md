@@ -284,8 +284,11 @@ a request without a token never reaches the Function that returned the 403.
       scripts/deploy.sh --dry-run --branch phase0-spike --dist-dir /home/hermes/incoming/phase0/spike-dist
 
 prints the command it would run and exits 0, so a dist outside `web/dist` is accepted — the
-open question `docs/PHASE0_DEPLOY_PLAN.md` section 5 left to the first dispatch. One caveat
-found while doing it: `scripts/deploy.sh` tests `[ -d "$repo_dir/.git" ]`, and in a git
-**worktree** `.git` is a file, so a dry run from a worktree is refused with
-`not a git checkout`. In CI (`actions/checkout`) `.git` is a directory and the check passes;
-locally, pass `--repo-dir` pointing at the main checkout.
+open question `docs/PHASE0_DEPLOY_PLAN.md` section 3 left to the first dispatch. Re-measured
+2026-10-06 on a copy of the dist the workflow builds, with `--repo-dir` a clean checkout: exit 0,
+and the command it prints names the dist it was given. The only checks that read the dist are
+`_headers` and `index.html`, so where it sits is not one of them. The caveat found on 2026-09-30
+— `scripts/deploy.sh` tested `[ -d "$repo_dir/.git" ]`, and a git **worktree** has a `.git`
+*file*, so a dry run from a worktree was refused with `not a git checkout` — is fixed: the guard
+now asks git (`git -C "$repo_dir" rev-parse --git-dir`), and both cases are covered by
+`scripts/tests/test_deploy_guard.sh`.

@@ -58,17 +58,19 @@ if ((${#missing[@]})); then
 fi
 
 # 2. Working tree. A deploy has to correspond to a commit, otherwise the published shell
-#    cannot be reproduced or rolled back to.
-if [ -d "$repo_dir/.git" ]; then
-  dirty=$(git -C "$repo_dir" status --porcelain)
-  if [ -n "$dirty" ]; then
-    echo "deploy refused: $repo_dir has uncommitted changes" >&2
-    echo "$dirty" >&2
-    echo "  Commit or stash them first: the deployed shell must be a commit." >&2
-    exit 3
-  fi
-else
+#    cannot be reproduced or rolled back to. The question is put to git rather than to the
+#    filesystem: in a linked worktree -- and this repository is worked in worktrees -- `.git`
+#    is a file, not a directory, so `[ -d "$repo_dir/.git" ]` refused a clean worktree with
+#    "is not a git checkout", while accepting a clone. `git -C` answers for both.
+if ! git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
   refuse "$repo_dir is not a git checkout" 3
+fi
+dirty=$(git -C "$repo_dir" status --porcelain)
+if [ -n "$dirty" ]; then
+  echo "deploy refused: $repo_dir has uncommitted changes" >&2
+  echo "$dirty" >&2
+  echo "  Commit or stash them first: the deployed shell must be a commit." >&2
+  exit 3
 fi
 
 # 3. The artifact itself. web/dist without _headers would deploy a shell that cannot use
