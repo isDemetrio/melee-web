@@ -42,9 +42,11 @@ done is step 6 — an operator decision (O1, which Android, which route). The fi
 neither a credential nor a decision is step 7: M1 and M2 on a real device, which needs hardware this
 machine does not have — a desktop Chrome with three runs, and a mid-range Android. Nothing in the
 repository blocks it: the core, the page and the local device server are in `main` and green. One
-core change is in flight outside the plan and is not part of it: patch `0013` (the FIFO word is
-appended without value-initialising it) sits on branch `perf/fifo-write-path` with its pull request,
-unmeasured, and its last section records the GitHub Actions outage of 20:22-21:51 UTC that stranded it.
+core change was tried outside the plan and is closed, not in flight: patch `0013` (the FIFO word
+appended without value-initialising it) was built, gated and measured, and it is a regression: the
+two profile pairs and the withdrawal are in `docs/FIFO_WRITE_COST.md` and its row in
+`docs/PORT_CHANGES.md`, so `patches/0013` is not part of the series and no core change is in
+flight (PR #143, merged 2026-10-06).
 
 ### The state as it was written — 2026-09-30 06:40 UTC, branch `feat/wasm-runtime-maps`, PR #1
 
@@ -4257,3 +4259,15 @@ gives `Ran 214 tests in 20.780s`, `OK`; `python3 scripts/check_no_game_data.py -
 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
 /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
 violation(s)`. CI decides the rest.
+
+## 2026-10-06 — the FIFO null result reaches `main`, and the resume point that called it in flight is corrected (cron, `cron/phase0-oct6a`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs neither a credential, a phone nor a decision: steps 1-5 landed, step 6 is the O1/Android/route decision, step 7 is M1/M2 on hardware this machine does not have, step 8 waits on 7, steps 9-13 are the Cloudflare credentials and the devices, and step 14 waits on the row that decides. What this session found instead was one pull request left open by the previous session with its checks already green: PR #143 (`perf/fifo-write-path`, four commits, `mergeStateStatus` CLEAN, every job of `ci.yml` passed, `gh pr checks 143`). It is merged, so the FIFO null result is in `main` (merge commit `39f6a4f`, 2026-10-06 01:16 UTC), and the resume point is corrected: it said patch `0013` was on branch `perf/fifo-write-path` with its pull request and **unmeasured**, while the last section of the same file says the patch was measured and withdrawn.
+
+**Verified before the merge, without a build and without touching a file of the pull requests the operator has in flight.** The branch carries documentation only: `git diff --stat origin/main...origin/perf/fifo-write-path` gives `docs/FIFO_WRITE_COST.md`, `docs/PORT_CHANGES.md` and `docs/PROGRESS.md`, 191 insertions and one deletion. `patches/0013-fifo-write-without-value-init.patch` is in neither tree (`git ls-tree -r --name-only origin/main -- patches/` lists 0001 to 0012). The commit author is the agent, not the operator. The heavy job was already green on that branch (`Phase 0 — WASM core`, run `37381441529`, 8m25s).
+
+**Changed.** `docs/PROGRESS.md` only: the resume point sentence that described an in-flight core change which is now closed and withdrawn, and this entry. No workflow, script, patch, renderer, simulation or test-semantics file, and `phase0-build.yml` does not list `docs/` in its `pull_request.paths`, so this pull request pays no WASM core build.
+
+**Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or tunnelled, and no Cloudflare credential was used. What is blocked, and by what, is unchanged: the verdict by the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the deciding row is unmeasured); `docs/PHASE0_REPORT.md` by that verdict; any deployment by O1, which is a legal judgement, and by O10, the Android model; Q4, Q5, Q10(b) and Q11 by the operator; the renderer by the open pull requests that own its files. One operational fact, measured here and worth knowing before a session plans to materialise an artifact: the root filesystem of this VPS is at 100 percent, 159 MB free of 38 GB (`df -h /`), with `/home/hermes/projects` at 15 GB and `/home/hermes/incoming` at 5.3 GB.
+
+**Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in 18.450s`, `OK (skipped=1)`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0 violation(s)`. CI decides the rest.
