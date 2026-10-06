@@ -7,7 +7,7 @@
 // headless run it always was; the reason is reported, never thrown.
 import { decoderCostReport, type DecoderCostMode } from './decoder-cost.js';
 import { timerResolutionMs } from './clock.js';
-import { fillTarget, mark, observeGpuEvents, openGpu, probe, readPixel, renderProgress, type Diagnostic, type SpikeGpu } from './gpu.js';
+import { fillTarget, mark, observeGpuEvents, openGpu, probe, readCells, readPixel, renderProgress, type Diagnostic, type ShaderMode, type SpikeGpu } from './gpu.js';
 import { heartbeatSender } from './heartbeat.js';
 
 interface CoreFS {
@@ -53,12 +53,18 @@ interface RunRequest {
   iso?: File;
   frames?: number;
   decoderCost?: DecoderCostMode;
+  /** Which shaders the backend draws with (gpu.ts, `shaderMode`); absent, the one shader. */
+  shaderMode?: ShaderMode;
   canvas?: OffscreenCanvas;
   /**
    * The render test (web/tests/spike/render.spec.ts): feed the decoder `copies` clearing XFB copies.
    * `target: 'texture'` renders into an offscreen texture instead of a canvas (gpu.ts says why).
    */
-  selftest?: { argb: number; copies: number; repeats: number; geometry: number; sampleX: number; target?: 'canvas' | 'texture'; resolution?: number };
+  selftest?: { argb: number; copies: number; repeats: number; geometry: number; sampleX: number; target?: 'canvas' | 'texture'; resolution?: number;
+    /** The older name of the run's `shaderMode: 'specialized'`. */
+    specializedShaders?: boolean;
+    /** Also read back a hash of every 80x80 cell of the frame (gpu.ts, `readCells`). */
+    cells?: boolean };
 }
 
 /** What the renderer did, reported in the result; `null` when no canvas was handed in. */
@@ -71,8 +77,12 @@ interface RenderReport {
   lastClearArgb: number | null;
   /** What the backend copied into: the canvas, or an offscreen texture. */
   target: 'canvas' | 'texture' | null;
+  /** The shaders the backend was asked to draw with (gpu.ts, `shaderMode`). */
+  shaderMode: ShaderMode | null;
   /** RGBA of the target's pixel (0, 0), read back off the GPU after the run; null if it failed. */
   readback: number[] | null;
+  /** With `selftest.cells`: a hash per 80x80 cell, and how many cells differ from the clear colour. */
+  cells?: { cells: string[]; drawn: number } | null;
   failure: string | null;
   errors: string[];
   resources: SpikeGpu['resources'] | null;
@@ -112,6 +122,7 @@ async function report(core: MeleeCore, gpu: SpikeGpu | null, attached: { attache
     textureUploads: gpu?.textureUploads ?? 0,
     lastClearArgb: gpu?.lastClearArgb ?? null,
     target: gpu ? (gpu.xfb ? 'texture' : 'canvas') : null,
+    shaderMode: gpu ? gpu.shaderMode ?? 'uber' : null,
     readback,
     resources: gpu?.resources ?? null,
     firstFailure: gpu?.firstFailure ?? null,
@@ -133,6 +144,7 @@ const SENTINEL = [255, 0, 255, 255];
 
 scope.onmessage = async (event: MessageEvent<RunRequest>) => {
   const { iso, frames, canvas, selftest, decoderCost = 'off' } = event.data;
+  const shaderMode = event.data.shaderMode ?? (selftest?.specializedShaders ? 'specialized' : undefined);
   try {
     const head = await fetch(`${CORE}melee_core_web.js`, { method: 'HEAD' });
     const type = head.headers.get('content-type') ?? '';
@@ -158,6 +170,7 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
     // The internal resolution (play/resolution.ts): set before the attach, which is when the
     // backend sizes its render target from it. 100 (or absent) is the full-resolution path.
     if (gpu) gpu.scale = Math.min(1, Math.max(0.01, (selftest?.resolution ?? 100) / 100));
+    if (gpu && shaderMode) gpu.shaderMode = shaderMode;
     const attached = opening ? attach(core, gpu, opening.reason) : null;
     if (gpu) mark(gpu, `attach returned ${attached?.attached}`);
     if (selftest) {
@@ -174,10 +187,13 @@ scope.onmessage = async (event: MessageEvent<RunRequest>) => {
       }
       if (gpu) mark(gpu, `selftest returned ${presented}`);
       const pixel = gpu && attached?.attached ? readPixel(gpu, selftest.geometry ? selftest.sampleX : 0, selftest.geometry ? 240 : 0) : null;
+      // The selftest's clear colour, as RGBA bytes.
+      const clear = [(selftest.argb >>> 16) & 255, (selftest.argb >>> 8) & 255, selftest.argb & 255, selftest.argb >>> 24];
+      const cells = gpu && attached?.attached && selftest.cells ? readCells(gpu, clear) : null;
       // Started in the same task as the readback, on a buffer that never touches the canvas.
       const sameTask = gpu ? probe(gpu, 'same task as the readback') : null;
       if (sameTask) await sameTask;
-      const render = attached ? await report(core, gpu, attached, pixel) : null;
+      const render = attached ? { ...(await report(core, gpu, attached, pixel)), ...(cells ? { cells: await cells } : {}) } : null;
       scope.postMessage({ type: 'selftest', presented, sentinel: SENTINEL, render });
       return;
     }

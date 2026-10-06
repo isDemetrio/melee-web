@@ -36,7 +36,18 @@
 //
 // Geometry 49 is not a value: it draws 48 pseudo-random register states per call (192 here), and
 // passes when none of the shaders they generate is rejected. A WGSL generator that emits invalid code
-// for some combination of stages, inputs, compares, swaps, texgens, fog or lit channels fails it.
+// for some combination of stages, inputs, compares, swaps, texgens, fog or lit channels fails it. It runs with
+// `shaders=specialized`: the backend draws with one shader for every state (gx_wgsl.cpp,
+// generate_uber_wgsl), and the generated shaders are what 49 is about.
+//
+// Geometry 52-55 compare the shaders. The backend draws with one shader that reads each draw's state
+// from uniforms, so that a new draw state is not a new shader compile (on the operator's iPhone each
+// one blocked the GPU process for ~450 ms); `shaders=stages` draws with that shader cut to each TEV
+// stage count (16 shaders, all compiled when the backend attaches); the generated shader of each state
+// (`shaders=specialized`) is the reference of both. Each geometry draws 48 pseudo-random states, each
+// in its own 80x80 cell, once with every mode; every cell must hash as the generated shaders' does,
+// and enough cells must be drawn for the comparison to mean something. The other probes run with the
+// one shader, so their values hold for it too.
 //
 // usage: SPIKE_DIST=<built spike dist> node wasm/render/pixel_pipeline_check.mjs
 import { spawn } from 'node:child_process';
@@ -66,13 +77,18 @@ const PROBES = [
   { geometry: 47, name: 'two stages: unclamped C1, swap, scale, subtract, compares', expected: [23, 0, 0, 223] },
   // MODULATE (128,64,32,192), then (c * 128 + fog * 128) >> 8 with fog colour (40,240,80).
   { geometry: 48, name: 'linear fog of density 0.5, C sign at bit 19', expected: [84, 152, 56, 192] },
-  { geometry: 49, name: '192 pseudo-random pixel pipeline states compile', repeats: 4, expected: null },
+  { geometry: 49, name: '192 pseudo-random pixel pipeline states compile', repeats: 4, expected: null, shaders: 'specialized' },
   // The copied 4x4 of the green triangle, not the RGBA8 snapshot (128,64,32,192) at that address.
   { geometry: 50, name: 'EFB copy to a texture, sampled by a later draw at its address', expected: [0, 255, 0, 255] },
   { geometry: 51, name: 'a triangle 2^-23 beyond the near plane is drawn (Dolphin 1 - 1e-7)', expected: [0, 255, 0, 255] },
   // Ambient 50 + light 100 facing the normal = 150; material 200 * (150 + 1) >> 8 = 117. Unlit: 200.
   { geometry: 56, name: 'a lit colour channel: ambient plus a light facing the normal, times the material', expected: [117, 117, 117, 255] },
+  ...[52, 53, 54, 55].map((geometry) => ({ geometry, name: '48 pseudo-random states: the one shader and the per-stage-count ones draw what the generated ones draw', differential: true })),
 ];
+// A differential probe fails if fewer cells than this are drawn: most of the 48 states draw something.
+const MIN_DRAWN_CELLS = 24;
+// The shaders a differential probe compares with the generated ones (`shaders=specialized`).
+const COMPARED = [{ label: 'one shader', shaders: null }, { label: 'stages', shaders: 'stages' }];
 
 const server = spawn(process.execPath, [`${web}scripts/serve.mjs`, '--dir', dist, '--port', String(PORT)],
   { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -85,21 +101,51 @@ let failures = 0;
 const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu'] });
 try {
   const page = await browser.newPage();
-  for (const probe of PROBES) {
+  // One page load: the selftest's JSON answer and the problems every probe checks.
+  const run = async (probe, shaders) => {
     const repeats = probe.repeats ?? 1;
-    await page.goto(`http://127.0.0.1:${PORT}/spike.html?gx-selftest=ff2080c0&copies=2&target=texture&geometry=${probe.geometry}&sample-x=320&repeats=${repeats}`);
+    await page.goto(`http://127.0.0.1:${PORT}/spike.html?gx-selftest=ff2080c0&copies=2&target=texture&geometry=${probe.geometry}&sample-x=320&repeats=${repeats}` +
+      `${shaders ? `&shaders=${shaders}` : ''}${probe.differential ? '&cells' : ''}`);
     // Empty, then "running", then the answer: only the answer is JSON.
     // The sweep compiles a shader per state on SwiftShader, so it may take minutes, not seconds.
     const text = await page.locator('#render').filter({ hasText: /^\{/ }).innerText({ timeout: probe.expected ? 110_000 : 420_000 });
     const result = JSON.parse(text);
     const render = result.render ?? {};
-    const pixel = render.readback;
     const problems = [];
     if (result.error !== undefined) problems.push(`error ${result.error}`);
     if (render.attached !== true) problems.push(`not attached (${render.reason})`);
     if (render.failure !== null) problems.push(`backend failure ${render.failure}`);
     if (!Array.isArray(render.errors) || render.errors.length) problems.push(`WebGPU errors ${JSON.stringify(render.errors)}`);
     if (result.presented !== 3 * repeats) problems.push(`presented ${result.presented}, want ${3 * repeats}`);
+    return { render, problems };
+  };
+  for (const probe of PROBES) {
+    if (probe.differential) {
+      const generated = await run(probe, 'specialized');
+      const problems = generated.problems.map((p) => `generated: ${p}`);
+      const b = generated.render.cells;
+      const valid = Boolean(b) && b.cells.length === 48;
+      if (!valid) problems.push(`generated: cells ${JSON.stringify(b)}`);
+      else if (b.drawn < MIN_DRAWN_CELLS) problems.push(`generated: only ${b.drawn} cells drawn, want >= ${MIN_DRAWN_CELLS}`);
+      const identical = [];
+      for (const { label, shaders } of COMPARED) {
+        const other = await run(probe, shaders);
+        problems.push(...other.problems.map((p) => `${label}: ${p}`));
+        const a = other.render.cells;
+        if (!a || a.cells.length !== 48) { problems.push(`${label}: cells ${JSON.stringify(a)}`); continue; }
+        if (!valid) continue;
+        const differ = a.cells.flatMap((h, k) => (h === b.cells[k] ? [] : [k]));
+        identical.push(`${label} ${48 - differ.length}/48`);
+        if (differ.length) problems.push(`${label}: cells ${differ.join(', ')} differ`);
+      }
+      const summary = valid ? `cells identical: ${identical.join(', ') || 'none compared'}; ${b.drawn} drawn` : 'no cells';
+      console.log(`${problems.length ? 'FAIL' : 'ok  '} geometry ${probe.geometry} ${probe.name}: ${summary}`);
+      for (const problem of problems) console.log(`       ${problem}`);
+      failures += problems.length ? 1 : 0;
+      continue;
+    }
+    const { render, problems } = await run(probe, probe.shaders ?? null);
+    const pixel = render.readback;
     const tolerance = probe.tolerance ?? 0;
     if (probe.expected && (!Array.isArray(pixel) || pixel.length !== 4 || pixel.some((v, i) => Math.abs(v - probe.expected[i]) > tolerance))) {
       problems.push(`pixel ${JSON.stringify(pixel)}, want ${JSON.stringify(probe.expected)}${tolerance ? ` +-${tolerance}` : ''}`);

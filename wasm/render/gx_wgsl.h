@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <tuple>
 
 namespace gxw {
 
@@ -22,12 +23,16 @@ namespace gxw {
 //            vertex's own index: the decoder gives every vertex the CP default when the stream has
 //            none (gx_core.cpp, decode_vertices), so that index is always the one GX uses.
 //   146+5i   light i (XF 0x600 + 16i), as upstream's fill_vs_constants: colour (0-255), cosine
-//            attenuation, distance attenuation, position, normalised direction. Written, uploaded
-//            and declared for a draw with a lit colour channel only (uniform_rows): the shader of an
-//            unlit draw declares the 146 rows before them, so its text is the one it was without lights.
+//            attenuation, distance attenuation, position, normalised direction. Written for a draw
+//            with a lit colour channel only; a generated shader declares and is given them only when
+//            lit (uniform_rows): the shader of an unlit draw declares the 146 rows before them, so its
+//            text is the one it was without lights.
+//   186-204  the draw's ShaderUid, word k in row 186 + k / 4, lane k % 4, as an exact float (every
+//            word is below 2^24): what the one shader (generate_uber_wgsl) reads its state from. Last,
+//            so that the generated shaders' rows are where they were; the one shader is given every row.
 constexpr int ROW_TEV_COLORS = 106, ROW_KCOLORS = 110, ROW_MATERIALS = 114, ROW_FOG = 118, ROW_TEXGEN = 122;
 constexpr int ROW_LIGHTS = ROW_TEXGEN + 3 * 8;
-constexpr int MAX_ROWS = ROW_LIGHTS + 5 * 8;
+constexpr int ROW_UID = ROW_LIGHTS + 5 * 8;
 
 // Everything the generated WGSL depends on, with unused state masked out (upstream's VSUid and
 // PSUid, gx_shader.cpp:163-205): equal uids are equal shaders.
@@ -43,11 +48,26 @@ struct ShaderUidHash {
   }
 };
 
+constexpr int MAX_ROWS = ROW_UID + int(std::tuple_size<decltype(ShaderUid::w)>::value + 3) / 4;
+static_assert(MAX_ROWS == 205, "uid rows: rows 186-204");
+
 ShaderUid make_uid(const gx::DrawCall& dc);
-// Rows this uid's shader reads: everything up to its last texgen block.
+// Rows this uid's generated shader reads: everything up to its last texgen block, or to its last
+// light when a colour channel is lit. Never the uid rows (the one shader reads all MAX_ROWS).
 int uniform_rows(const ShaderUid& uid);
+// The TEV stages this uid's shader runs, 1-16 (generate_uber_wgsl's `stages`).
+int tev_stages(const ShaderUid& uid);
+// The WGSL generated for one uid: its state is constant in the code.
 std::string generate_wgsl(const ShaderUid& uid);
-// Rows 106 and up of `u` (MAX_ROWS x vec4f), the lights' included when a colour channel is lit.
+// One WGSL for every uid: the same arithmetic, with the uid read from rows 186-204 (fill_uid_rows).
+// The backend draws with it, so that a new draw state is new uniform values and not a new shader:
+// on WebKit every new WGSL text is a Metal compile that blocks the GPU process (gx_webgpu.cpp).
+// `stages` 1-16: the same WGSL for the uids of that many TEV stages only, with exactly that many
+// stage blocks and no guard or loop; 0: every uid (16 guarded blocks).
+std::string generate_uber_wgsl(int stages = 0);
+// Rows 186-204 of `u` (MAX_ROWS x vec4f).
+void fill_uid_rows(const ShaderUid& uid, float (*u)[4]);
+// Rows 106-185 of `u` (MAX_ROWS x vec4f), the lights' included when a colour channel is lit.
 void fill_tev_rows(const gx::DrawCall& dc, float (*u)[4]);
 
 }  // namespace gxw
