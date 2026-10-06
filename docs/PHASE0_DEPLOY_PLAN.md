@@ -240,8 +240,18 @@ Solo `.github/workflows/phase0-build.yml` costruisce il core e il `dist` della p
 - pubblica con lo script esistente: `scripts/deploy.sh --branch phase0-spike --dist-dir
   "$RUNNER_TEMP/spike-dist"`. Lo script esegue `wrangler pages deploy … --project-name
   "$CF_PAGES_PROJECT" --branch …` (`scripts/deploy.sh` righe 90–91) dalla radice del repository,
-  quindi pubblica anche `functions/`. Che accetti un `dist` fuori da `web/dist` senza altri
-  controlli che lo blocchino è **da verificare** con `--dry-run` nel primo giro.
+  quindi pubblica anche `functions/`. Che accetti un `dist` fuori da `web/dist` è
+  **verificato**, due volte: il 2026-09-30 sul `dist` della spike sulla VPS (`docs/DEPLOY.md` §5)
+  e il 2026-10-06 su una copia del `dist` che questa workflow costruisce —
+  `scripts/deploy.sh --dry-run --branch phase0-spike --repo-dir <un checkout pulito> --dist-dir
+  <dist>` esce 0 e stampa il comando con quel percorso. Gli unici controlli che leggono il `dist`
+  sono due file, `_headers` e `index.html` (`scripts/deploy.sh` righe 79 e 82), e la sua posizione
+  non è fra loro. Il `--dry-run` del 2026-10-06 ha però trovato un difetto, corretto nella stessa
+  PR: il controllo dell'albero usava `[ -d "$repo_dir/.git" ]`, e in un **worktree** `.git` è un
+  file, quindi un `--dry-run` da un worktree pulito era rifiutato con `is not a git checkout`
+  (exit 3) mentre un clone era accettato; ora la domanda è posta a git
+  (`git -C "$repo_dir" rev-parse --git-dir`) e i tre casi nuovi sono in
+  `scripts/tests/test_deploy_guard.sh`.
 
 Il disco **non** passa dalla CI: sta sulla VPS e da lì va su R2 una volta sola (sezione 6).
 

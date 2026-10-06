@@ -4382,3 +4382,62 @@ renderer by the eight open pull requests that own its files (#70, #100, #101, #1
 checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
 /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
 violation(s)`. CI decides the rest.
+
+## 2026-10-06 — the deploy step's own guard: the `--dry-run` the plan asked for, and the clean worktree it refused (cron, `cron/phase0-oct6d`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs
+neither a credential, a phone nor a decision: steps 1-5 landed, step 6 is the O1/Android/route decision,
+step 7 is M1/M2 on hardware this machine does not have, step 8 waits on 7, steps 9-13 are the Cloudflare
+credentials and the devices, and step 14, `docs/PHASE0_REPORT.md`, waits on the row that decides. What
+section 3 still carried is a "**da verificare**" with its own prescribed method — whether the deploy step
+accepts a `dist` outside `web/dist`, "da verificare con `--dry-run` nel primo giro" — and `docs/DEPLOY.md`
+section 5 had answered it on 2026-09-30 without the plan being told.
+
+**Verified, without a build, without a Cloudflare credential and without a device.** The dist the CI deploy
+step hands to the script was reconstructed on this machine: a copy of
+`/home/hermes/incoming/phase0/spike-dist` (the artifact `docs/PHASE0_DEPLOY_PLAN.md` section 1 measures),
+with `sw.js` removed and the `/spike-core/*` rule appended, which is what
+`.github/workflows/phase0-build.yml` lines 329-336 does. `scripts/deploy.sh --dry-run --branch phase0-spike
+--repo-dir /home/hermes/projects/melee-web --dist-dir <that copy>`, with only dummy values in
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `CF_PAGES_PROJECT`, prints `npx --yes
+--package=wrangler@4 wrangler pages deploy <that copy> --project-name melee-web --branch phase0-spike` and
+exits 0: the location of the dist is not one of the guards. The guards that do read it are two files,
+`_headers` and `index.html` (`scripts/deploy.sh` lines 79 and 82). The credential check only asks whether the
+variables are set and the dry run never invokes `npx`, so no account was touched. The same command with the
+dist left where the plan measures it (`/home/hermes/incoming/phase0/spike-dist`) exits 0 too.
+
+**The dry run found a defect, and it is about this repository's own way of working.** The tree guard was
+`[ -d "$repo_dir/.git" ]`, and in a **linked worktree** `.git` is a file, so a dry run from a clean worktree
+was refused with `deploy refused: /home/hermes/worktrees/melee-cron-oct6d is not a git checkout` (exit 3)
+while a clone was accepted — measured side by side, the pre-change file out of `git show
+HEAD:scripts/deploy.sh` against the changed one on the same worktree. The refusal was about the shape of a
+directory, not about whether the tree is a commit. `scripts/deploy.sh` now asks git
+(`git -C "$repo_dir" rev-parse --git-dir`), and on that same worktree it reports `has uncommitted changes`
+instead — the next guard, which is the correct answer for a tree with edits in it.
+
+**Changed.** `scripts/deploy.sh`, the tree guard, with its comment; `scripts/tests/test_deploy_guard.sh`,
+three cases — a dist outside the repository is accepted in a dry run, a linked worktree is accepted, a
+directory that is not a checkout is still refused with exit 3 (the file had no case for that refusal
+before, and the external dist is the question the plan asked); `docs/PHASE0_DEPLOY_PLAN.md` section 3, the
+"**da verificare**" replaced by the two measurements, by the two files that are the only checks on the
+dist, and by the defect; `docs/DEPLOY.md` section 5, the 2026-09-30 paragraph extended with the
+re-measurement, its citation corrected from section 5 to section 3 (the question is in section 3), and its
+worktree caveat replaced by the fix; and this entry. No workflow, patch, renderer, simulation or
+test-semantics file: `phase0-build.yml`'s `pull_request.paths` lists neither `docs/` nor `scripts/tests/`,
+so this pull request pays no WASM core build.
+
+**Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or
+tunnelled, and no Cloudflare credential was used. What is blocked, and by what, is unchanged: the verdict
+by the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the deciding row is
+unmeasured); `docs/PHASE0_REPORT.md` by that verdict; any deployment by O1, a legal judgement, and by O10,
+the Android model; the single-PUT check by O4's S3 keys; Q4, Q5, Q10(b) and Q11 by the operator; the
+renderer by the eight open pull requests that own its files (#70, #100, #101, #104, #112, #113, #117,
+#124). One operational fact, unchanged: the root filesystem of this VPS is at 100 percent, 148 MB free of
+38 GB (`df -h /`).
+
+**Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in
+17.105s`, `OK (skipped=1)`; `bash scripts/tests/test_deploy_guard.sh` gives `all deploy and upload guards
+hold` over 15 cases, the three new ones among them; `python3 scripts/check_no_game_data.py --all` gives
+`OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py
+--submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0
+violation(s)`. CI decides the rest.
