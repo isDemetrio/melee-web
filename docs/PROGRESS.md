@@ -18,7 +18,7 @@ credentials and O1's legal judgement, a mid-range Android, and the decisions Q4,
 | Area | State | Evidence |
 | --- | --- | --- |
 | Disc image, `main.dol` | verified against independent public sources | `docs/OPEN_QUESTIONS.md` Q1, Q2 |
-| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,278,604 bytes web, 15,232,193 Node** on `main` at `fe2e06b` | `Phase 0 — WASM core`, run 37319576228; the number moves with every commit — it was 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
+| Recompiled core | builds and links in CI at `-Oz` and is then post-processed with `wasm-opt`: **15,280,251 bytes web, 15,233,853 Node** on `main` at `688a1b2`, which is the tip of `main` less three documentation-only merges | `Phase 0 — WASM core`, run 37351694903 (`MELEE_PROFILING_FUNCS: OFF`, `-Oz`, `within_pages_limit: true`); the number moves with every commit — it was 15,278,604 / 15,232,193 at `fe2e06b` (run 37319576228) and 15,278,441 web at `696ec4f` (run 37263947515) — so the 16,323,255 / 16,323,657 of `docs/OPEN_QUESTIONS.md` Q8 and `docs/PHASE0_DEPLOY_PLAN.md` section 0.3 are the build before that step, of 2026-09-30 |
 | Determinism | 2400/2400 checkpoints identical to the native reference, trace SHA-1 `c79c53b9cdf81426fa0277e7497a69e55bc5f571` | re-checked 2026-10-05 with `scripts/phase0/compare_checkpoints.py` on the stored iPhone trace: `identical: 2400 retraces` |
 | Playable page | the game runs in the browser: the game's own menus, one pad (keyboard/gamepad/touch), WebGPU, and since PR #138 an internal-resolution lever (100/75/50%) for measuring how much of the lag is fill rate. No audio, no online match | `docs/PROGRESS.md`, "First playable integration" and the last entry; `docs/PRESENTATION_COST.md`, "Internal resolution" |
 | Device row — iPhone 16 Pro, Safari | worst repeat **3.2442 ms** mean and **5.64 ms** p99: the specification's **"desktop only"** band, not GO, not NO-GO, not provisional | re-checked 2026-10-05: `scripts/phase0/go_no_go.py` prints `VERDICT: DESKTOP-ONLY`, exit 3 |
@@ -4271,3 +4271,62 @@ violation(s)`. CI decides the rest.
 **Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or tunnelled, and no Cloudflare credential was used. What is blocked, and by what, is unchanged: the verdict by the mid-range Android (`docs/OPEN_QUESTIONS.md` Q9 — only an iPhone exists, so the deciding row is unmeasured); `docs/PHASE0_REPORT.md` by that verdict; any deployment by O1, which is a legal judgement, and by O10, the Android model; Q4, Q5, Q10(b) and Q11 by the operator; the renderer by the open pull requests that own its files. One operational fact, measured here and worth knowing before a session plans to materialise an artifact: the root filesystem of this VPS is at 100 percent, 159 MB free of 38 GB (`df -h /`), with `/home/hermes/projects` at 15 GB and `/home/hermes/incoming` at 5.3 GB.
 
 **Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in 18.450s`, `OK (skipped=1)`; `python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule /home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0 violation(s)`. CI decides the rest.
+
+## 2026-10-06 — the records PR #140 left behind: the register gains patches 0010, 0011 and 0012, and the resume point stops quoting the pre-#140 module (cron, `cron/phase0-oct6b`)
+
+**Why this and not something else.** `docs/PHASE0_DEPLOY_PLAN.md` section 6 has no step left that needs
+neither a credential, a phone nor a decision: steps 1-5 landed, step 6 is the O1/Android/route decision,
+step 7 is M1/M2 on hardware this machine does not have, step 8 waits on 7, steps 9-13 are the Cloudflare
+credentials and the devices, and step 14, `docs/PHASE0_REPORT.md`, waits on the row that decides. What this
+session found instead was that the three core commits of PR #140 (`b6b1cf7`, `d103254`, `fb8aa14`, merged
+2026-10-05 17:50 UTC) landed without the two records of that work following them: a branch written to close
+the first gap, `docs/port-changes-0010-0012` (commit `78a36d3`, 2026-10-05 18:20 UTC, author the agent),
+was pushed and left with **no pull request**, and the resume point of this file still quoted the module of
+`fe2e06b`.
+
+**The first gap is a rule, not a preference.** `docs/AGENT_RULES.md` rule 4 requires every port change to be
+recorded in `docs/PORT_CHANGES.md`, and `scripts/apply_patches.sh` applies `patches/*.patch` wholesale, so
+the series `main` builds is twelve patches. The register on `main` had rows for `0001`-`0007` and for
+`0013`, and none for `0010`, `0011` and `0012`.
+
+**Verified, without a build, without a Cloudflare credential and without a device.**
+`git ls-tree -r --name-only origin/main -- patches/` lists `0010-ppc-inline-entry-hook.patch`,
+`0011-texture-capture-counters.patch` and `0012-texture-compare-words.patch`, and
+`git show origin/main:docs/PORT_CHANGES.md` names none of them (the only hits for those strings in the file
+are inside its NaN worked example). The upstream files each patch touches were read out of the patch itself
+and match the rows: `port/runtime/ppc/ppc.h` and `port/runtime/ppc/ppc_runtime.cpp` for `0010`, and
+`port/runtime/gx/texture_snapshot.h` for `0011` and `0012`. Every run the rows cite exists and is green —
+`37254956043` (`measure/trace-enter-base`), `37254957951` (`measure/trace-enter-patch`), `37332382628`
+(`perf/texture-memcmp` at `b6b1cf7`) and `37333242492` (`perf/texture-memcmp` at `d103254`), all four
+`Phase 0 — WASM core`, all four `success` — and both pull requests they name are merged (`#127` at
+`0adafcf`, `#140` at `688a1b2`); `docs/TEXTURE_COMPARE.md`, which `0011` and `0012` cite, is in `main`.
+For the second gap: `git diff --stat 688a1b2 origin/main` is four files, all under `docs/`, so the core
+`main` ships today is the core of `688a1b2`, and the run that measured it is `37351694903`
+(`Phase 0 — WASM core`, 2026-10-05 17:52 UTC, `success`, `MELEE_PROFILING_FUNCS: OFF`, `-Oz`):
+`wasm-opt: melee_core_node.wasm 15238929 -> 15233853 bytes` and `wasm-opt: melee_core_web.wasm 15285310 ->
+15280251 bytes`, `within_pages_limit: true`, `core.json`
+`{"commit":"688a1b268562018e548738d46480179d770286bc","opt":"-Oz"}`. The `16,365,162` web bytes of run
+`37379827527` are not a size to quote: that dispatch ran with `profiling_funcs=true` (its own cmake line
+carries `-DMELEE_PROFILING_FUNCS=ON`), which is the measurement build, not the shipped one.
+
+**Changed.** `docs/PORT_CHANGES.md`: the three rows, placed where the file already keeps the series (after
+`0007`, before `0013`), with the upstream files each patch touches, its reason, `scripts/apply_patches.sh`
+as the applier and its evidence. They are the text of the stranded branch, unedited; that branch predates
+the `0013` row, so the rows were written into `main` instead of merging the branch as it stood, and the
+branch is deleted after this merge because this pull request carries all of its content. `docs/PROGRESS.md`:
+the resume point row "Recompiled core" now carries `15,280,251` web and `15,233,853` Node at `688a1b2` with
+run `37351694903`, and the `fe2e06b` numbers are kept beside it as the earlier measurement they are; and
+this entry. No workflow, script, patch, renderer, simulation or test-semantics file: `phase0-build.yml`
+does not list `docs/` in its `pull_request.paths`, so this pull request pays no WASM core build.
+
+**Not done, and why.** Nothing was built on this machine, dispatched, deployed, uploaded, served or
+tunnelled, and no Cloudflare credential was used. The verdict stays blocked by the mid-range Android
+(`docs/OPEN_QUESTIONS.md` Q9); `docs/PHASE0_REPORT.md` by that verdict; Q4, Q5, Q10(b) and Q11 by the
+operator; the renderer by the eight open pull requests that own its files (#70, #100, #101, #104, #112,
+#113, #117, #124). One operational fact, unchanged and worth repeating before a session plans to
+materialise an artifact: the root filesystem of this VPS is at 100 percent, 157 MB free of 38 GB
+(`df -h /`).
+
+**Gates green on the edited tree.** `python3 -m unittest discover -s scripts/tests` gives `Ran 214 tests in 17.835s`, `OK (skipped=1)`;
+`python3 scripts/check_no_game_data.py --all` gives `OK: 300 tracked file(s) checked, no game data, no oversized files`; `python3 scripts/check_docs.py --submodule
+/home/hermes/projects/melee-web/upstream/melee-unlocked` gives `210 citations in 4 documents, 0 violation(s)`. CI decides the rest.
